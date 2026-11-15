@@ -2,11 +2,16 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/andrew-bierman/lambe/internal/config"
+	"github.com/andrew-bierman/lambe/internal/daemon"
 	"github.com/andrew-bierman/lambe/internal/logging"
 )
 
@@ -17,32 +22,89 @@ var (
 	date    = "unknown"
 )
 
+const usage = `lambe is the supervisor daemon for autonomous coding agents.
+
+usage:
+  lambe run     [-config FILE] run the supervisor daemon until SIGTERM/SIGINT
+  lambe status  [-config FILE] print the morning report
+  lambe version print build information
+`
+
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "version" {
+	args := os.Args[1:]
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, usage)
+		os.Exit(2)
+	}
+	switch args[0] {
+	case "version":
 		fmt.Printf("lambe %s (commit %s, built %s)\n", version, commit, date)
-		return
+	case "run":
+		if err := runDaemon(args[1:]); err != nil {
+			logging.Default().Error("lambe run failed", "error", err.Error())
+			os.Exit(exitCodeFor(err))
+		}
+	case "status":
+		if err := runStatus(args[1:]); err != nil {
+			logging.Default().Error("lambe status failed", "error", err.Error())
+			os.Exit(1)
+		}
+	default:
+		fmt.Fprint(os.Stderr, usage)
+		os.Exit(2)
 	}
+}
 
-	fs := flag.NewFlagSet("lambe", flag.ExitOnError)
+// parseCommon loads configuration from the shared -config flag.
+func parseCommon(args []string) (*config.Config, string) {
+	fs := flag.NewFlagSet("lambe", flag.ContinueOnError)
 	configFile := fs.String("config", "", "path to a lambe config file")
-	tickSeconds := fs.Int("supervisor.tick_seconds", 0, "supervisor tick in seconds (overrides file and env)")
-	_ = fs.Parse(os.Args[1:])
-
-	flags := map[string]string{}
-	if *tickSeconds != 0 {
-		flags["supervisor.tick_seconds"] = fmt.Sprintf("%d", *tickSeconds)
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprint(os.Stderr, usage)
+		os.Exit(2)
 	}
-
-	log := logging.Default()
-
-	cfg, err := config.Load(config.Options{File: *configFile, Flags: flags})
+	cfg, err := config.Load(config.Options{File: *configFile})
 	if err != nil {
-		log.Error("configuration invalid", "error", err.Error())
+		logging.Default().Error("configuration invalid", "error", err.Error())
 		os.Exit(1)
 	}
+	return cfg, *configFile
+}
 
-	log.Info("lambe starting",
-		"version", version,
-		"config", cfg.Summary(),
-	)
+// runDaemon assembles and runs the daemon until a terminating signal.
+func runDaemon(args []string) error {
+	cfg, configPath := parseCommon(args)
+	log := logging.Default()
+
+	d, err := daemon.New(daemon.Options{
+		Config:       cfg,
+		ConfigPath:   configPath,
+		StateDir:     daemon.DefaultStateDir(),
+		Machine:      daemon.DefaultMachine(),
+		WorkflowPath: "WORKFLOW.md",
+		Log:          log,
+		Wire:         daemon.DefaultWire(cfg, "", daemon.DefaultMachine()),
+	})
+	if err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	return d.Run(ctx)
+}
+
+// runStatus prints the morning report from the local tracker.
+func runStatus(args []string) error {
+	cfg, _ := parseCommon(args)
+	return daemon.Status(os.Stdout, cfg, daemon.DefaultMachine())
+}
+
+// exitCodeFor maps daemon errors to process exit codes: lock contention is
+// an immediate, clean exit so service managers do not restart-loop.
+func exitCodeFor(err error) int {
+	if errors.Is(err, daemon.ErrLockHeld) {
+		return 3
+	}
+	return 1
 }

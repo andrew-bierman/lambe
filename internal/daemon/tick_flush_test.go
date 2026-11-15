@@ -1,0 +1,210 @@
+package daemon
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/andrew-bierman/lambe/internal/tracker"
+)
+
+// flushCountingTracker counts FlushWrites calls alongside the fake tracker.
+type flushCountingTracker struct {
+	*fakeTracker
+	mu      sync.Mutex
+	flushes int
+}
+
+func (f *flushCountingTracker) FlushWrites(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.flushes++
+	return nil
+}
+
+// flushCount returns the number of flushes so far.
+func (f *flushCountingTracker) flushCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.flushes
+}
+
+func TestRunTicksFlushesBatchThenPushes(t *testing.T) {
+	t.Parallel()
+	tr := &flushCountingTracker{fakeTracker: newFakeTracker()}
+	sync := &orderedSyncer{}
+	after := make(chan struct{}, 16)
+	afterTick := func(context.Context) { after <- struct{}{} }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		RunTicks(ctx, TickOptions{
+			Interval:  2 * time.Millisecond,
+			Sync:      sync,
+			Flush:     tr,
+			AfterTick: afterTick,
+		})
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for tr.flushCount() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	if tr.flushCount() < 2 {
+		t.Fatalf("flushes = %d, want at least two", tr.flushCount())
+	}
+	if sync.pulls < 2 || sync.pushes < 2 {
+		t.Errorf("pulls = %d pushes = %d, want at least two each", sync.pulls, sync.pushes)
+	}
+	// Every tick's op sequence must be pull before push.
+	for i, op := range sync.ops {
+		want := "pull"
+		if i%2 == 1 {
+			want = "push"
+		}
+		if op != want {
+			t.Fatalf("ops = %v, want alternating pull/push", sync.ops)
+		}
+	}
+	select {
+	case <-after:
+	default:
+		t.Error("AfterTick never ran")
+	}
+}
+
+// orderedSyncer records pull/push order.
+type orderedSyncer struct {
+	mu     sync.Mutex
+	ops    []string
+	pulls  int
+	pushes int
+}
+
+func (o *orderedSyncer) Pull(context.Context) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.pulls++
+	o.ops = append(o.ops, "pull")
+	return nil
+}
+
+func (o *orderedSyncer) Push(context.Context) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.pushes++
+	o.ops = append(o.ops, "push")
+	return nil
+}
+
+// bdBin returns the bd binary path, or "" when unavailable. It honors
+// LAMBE_TEST_BD both as a path and as the CI gate value "1" (bd on PATH),
+// matching test/faultsuite semantics.
+func bdBin() string {
+	if v := os.Getenv("LAMBE_TEST_BD"); v != "" && v != "1" {
+		return v
+	}
+	if v := os.Getenv("LAMBE_TEST_BD"); v == "1" {
+		if p, err := exec.LookPath("bd"); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+func TestStatusAgainstBdTracker(t *testing.T) {
+	bin := bdBin()
+	if bin == "" {
+		t.Skip("bd binary not found; set LAMBE_TEST_BD=1 with bd on PATH to run")
+	}
+
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	local, err := tracker.NewLocal(bin, dir, "lambe@testbox")
+	if err != nil {
+		t.Fatalf("new local: %v", err)
+	}
+	if err := local.Init(ctx); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	runIssue, err := local.EnsureIssue(ctx, "bd-run-1", tracker.IssueSpec{Title: "run", Priority: 2})
+	if err != nil {
+		t.Fatalf("ensure run issue: %v", err)
+	}
+	if err := local.PutAttempt(ctx, tracker.Attempt{SessionID: runIssue.ID, Number: 1}); err != nil {
+		t.Fatalf("put attempt: %v", err)
+	}
+	if err := local.PutAttempt(ctx, tracker.Attempt{SessionID: runIssue.ID, Number: 2, PGID: 1234567}); err != nil {
+		t.Fatalf("put attempt: %v", err)
+	}
+	blocked, err := local.EnsureIssue(ctx, "bd-stuck-1", tracker.IssueSpec{
+		Title: "stuck", Priority: 2,
+		Metadata: map[string]string{"lambe_last_gate_output": "tests failed\nlog follows"},
+	})
+	if err != nil {
+		t.Fatalf("ensure blocked issue: %v", err)
+	}
+	_ = blocked
+
+	// The run issue must be in_progress with our assignee to count active.
+	if _, err := local.Claim(ctx, runIssue.ID); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	// Deferred: an open issue whose newest attempt carries a future wake
+	// time — the representation the recovery and defer paths persist.
+	deferred, err := local.EnsureIssue(ctx, "bd-later-1", tracker.IssueSpec{Title: "later", Priority: 2})
+	if err != nil {
+		t.Fatalf("ensure deferred issue: %v", err)
+	}
+	if err := local.PutAttempt(ctx, tracker.Attempt{
+		SessionID: deferred.ID, Number: 1,
+		WakeAt: time.Now().Add(time.Hour).UTC().Truncate(time.Second),
+	}); err != nil {
+		t.Fatalf("put deferred attempt: %v", err)
+	}
+
+	rep, err := BuildReport(ctx, local)
+	if err != nil {
+		t.Fatalf("build report: %v", err)
+	}
+	if len(rep.Active) != 1 || rep.Active[0].Issue != runIssue.ID {
+		t.Errorf("active = %+v, want one run on %s", rep.Active, runIssue.ID)
+	}
+	if rep.Active[0].Attempt != 2 {
+		t.Errorf("active attempt = %d, want 2 (newest attempt record)", rep.Active[0].Attempt)
+	}
+	if len(rep.Deferred) != 1 || rep.Deferred[0].Issue != deferred.ID {
+		t.Errorf("deferred = %+v, want one item on %s", rep.Deferred, deferred.ID)
+	}
+	// Internal attempt beads are blocked by design and must not surface as
+	// needs-human even though the blocked scan sees them.
+	for _, nh := range rep.NeedsHuman {
+		if strings.Contains(nh.Issue, "-att-") {
+			t.Errorf("internal attempt record %q leaked into needs-human", nh.Issue)
+		}
+	}
+	var b strings.Builder
+	if err := RenderReport(&b, rep); err != nil {
+		t.Fatalf("render report: %v", err)
+	}
+	out := b.String()
+	for _, want := range []string{runIssue.ID, deferred.ID} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report missing %q; got:\n%s", want, out)
+		}
+	}
+}
