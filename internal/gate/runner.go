@@ -202,7 +202,6 @@ func NewRunner(dir string, hub Hub, esc *Escalator, actor string, log *slog.Logg
 		Esc:            esc,
 		Actor:          actor,
 		GateRetryDelay: DefaultGateRetryDelay,
-		Gh:             &GhCLI{},
 		Exec:           OsExec,
 		Log:            log,
 		pins:           map[symphony.Revision][]Spec{},

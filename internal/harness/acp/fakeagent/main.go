@@ -11,6 +11,8 @@
 //	                then end_turn; honors cancel
 //	ignore-interrupt streams past a session/cancel and still ends the turn
 //	silent          accepts the prompt and never answers; ignores cancel
+//	stop-die        answers the prompt with end_turn, then exits at once:
+//	                the stop response races the process exit
 package main
 
 import (
@@ -145,6 +147,14 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.
 	case "silent":
 		<-make(chan struct{}) // never answer; only the watchdog ends this
 		return acpsdk.PromptResponse{}, nil
+	case "stop-die":
+		// Answer the turn, then exit while the response is still in
+		// flight on the driver side: the stop must race the exit.
+		go func() {
+			time.Sleep(30 * time.Millisecond)
+			os.Exit(0)
+		}()
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
 	default:
 		return acpsdk.PromptResponse{}, acpsdk.NewInvalidParams(map[string]string{"behavior": behavior})
 	}

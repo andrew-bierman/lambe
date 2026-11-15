@@ -15,7 +15,7 @@ import (
 // Issue statuses lambe writes.
 const (
 	// StatusClosed is bd's terminal closed status.
-	StatusClosed = "closed"
+	StatusClosed = tracker.StatusClosed
 	// StatusNeedsHuman parks an issue for human attention. bd requires
 	// custom statuses to be configured; see BdHub.EnsureNeedsHumanStatus.
 	StatusNeedsHuman = "needs-human"
@@ -61,12 +61,9 @@ type BdHub struct {
 // NewBdHub returns a hub over the bd binary at bin (empty means PATH
 // lookup) operating on dir and writing as actor.
 func NewBdHub(bin, dir, actor string) (*BdHub, error) {
-	if bin == "" {
-		found, err := exec.LookPath("bd")
-		if err != nil {
-			return nil, fmt.Errorf("find bd binary: %w", err)
-		}
-		bin = found
+	bin, err := tracker.ResolveBdBin(bin)
+	if err != nil {
+		return nil, err
 	}
 	return &BdHub{bin: bin, dir: dir, actor: actor, tr: tracker.NewShellTransport(bin, dir, actor)}, nil
 }
@@ -225,17 +222,8 @@ func isGuardMismatch(err error) bool {
 	if errors.Is(err, tracker.ErrLostRace) {
 		return true
 	}
-	text := strings.ToLower(exitBody(err))
+	text := strings.ToLower(tracker.ExitOutput(err))
 	return strings.Contains(text, "guard_mismatch") || strings.Contains(text, "assignee mismatch")
-}
-
-// exitBody extracts a bd ExitError's output for message classification.
-func exitBody(err error) string {
-	var exitErr *tracker.ExitError
-	if errors.As(err, &exitErr) {
-		return exitErr.Stdout + exitErr.Stderr
-	}
-	return err.Error()
 }
 
 // unmarshalStrict decodes JSON after trimming surrounding noise.

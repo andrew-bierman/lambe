@@ -13,6 +13,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/andrew-bierman/lambe/internal/logging"
 	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
@@ -61,7 +62,7 @@ type TurnResult struct {
 	Output   string
 	Settled  bool
 	// WakeAt is the earliest re-dispatch time for TurnDeferred turns;
-	// zero defers to the tracker's own default horizon.
+	// zero substitutes DefaultDeferHorizon.
 	WakeAt time.Time
 }
 
@@ -247,7 +248,7 @@ func NewLoop(tr tracker.Tracker, loader *Loader, runner AgentRunner, gates GateE
 		Runner:            runner,
 		Gates:             gates,
 		Spaces:            spaces,
-		DispatchStatuses:  []string{"ready"},
+		DispatchStatuses:  []string{tracker.StatusReady},
 		RetryCap:          DefaultRetryBackoff,
 		ContinuationDelay: ContinuationRetry,
 		FailureDelay:      nil,
@@ -316,11 +317,7 @@ func (l *Loop) serviceRetries(ctx context.Context) error {
 			l.terminal(ctx, s, "retry found terminal state")
 			continue
 		}
-		if r.Kind == RetryFailure {
-			l.runAttempt(ctx, s, true)
-			continue
-		}
-		l.runAttempt(ctx, s, false)
+		l.runAttempt(ctx, s, r.Kind == RetryFailure)
 	}
 	return nil
 }
@@ -356,7 +353,7 @@ func (l *Loop) dispatch(ctx context.Context) error {
 // number; a continuation reuses it) as a bounded turn loop: prompt, turn,
 // reconcile-or-gate, continuation guidance on the same thread.
 func (l *Loop) runAttempt(ctx context.Context, s *session, nextAttempt bool) {
-	log := l.Log.With(slog.String("issue", s.issue.ID))
+	log := logging.WithIssue(l.Log, s.issue.ID)
 	if nextAttempt {
 		s.attempt++
 		s.turn = 0
@@ -365,8 +362,6 @@ func (l *Loop) runAttempt(ctx context.Context, s *session, nextAttempt bool) {
 
 	ws, err := l.Spaces.Ensure(ctx, s.key, wf.Hooks)
 	if err != nil {
-		// after_create failure is fatal to creation: never invoke the
-		// runner, retry creation later under the failure backoff.
 		log.Error("workspace creation failed, retrying later", "error", err)
 		l.schedule(s, RetryFailure, l.failureDelay(s.attempt))
 		return
@@ -393,7 +388,6 @@ func (l *Loop) runAttempt(ctx context.Context, s *session, nextAttempt bool) {
 		}
 	}
 
-	// Turn cap reached without settling: treat as a failed attempt.
 	l.schedule(s, RetryFailure, l.failureDelay(s.attempt))
 }
 
@@ -428,7 +422,7 @@ func (l *Loop) runTurn(ctx context.Context, s *session, ws *Workspace, log *slog
 	if res.Exit == TurnDeferred {
 		until := res.WakeAt
 		if until.IsZero() {
-			until = time.Now().Add(5 * time.Minute)
+			until = time.Now().Add(DefaultDeferHorizon)
 		}
 		if err := l.Tracker.Defer(ctx, s.issue.ID, until, "runner deferred turn: "+res.Output); err != nil {
 			log.Error("defer failed, falling back to failure retry", "error", err)
@@ -469,9 +463,6 @@ func (l *Loop) runTurn(ctx context.Context, s *session, ws *Workspace, log *slog
 		return true
 	}
 
-	// Normal exit without settling: refresh the issue by ID; if it is
-	// still active, continuation guidance goes out on the same live
-	// thread on the next tick.
 	stop, err := Reconcile(ctx, l.Tracker, []string{s.issue.ID})
 	if err != nil {
 		log.Error("mid-run reconcile failed", "error", err)
@@ -508,7 +499,7 @@ func (l *Loop) turnPrompt(s *session) (string, error) {
 // release, session teardown. Closing the bead itself belongs to the gate
 // layer.
 func (l *Loop) terminal(ctx context.Context, s *session, reason string) {
-	log := l.Log.With(slog.String("issue", s.issue.ID))
+	log := logging.WithIssue(l.Log, s.issue.ID)
 	log.Info("run terminal", "reason", reason)
 	if err := l.Spaces.Remove(ctx, s.key, s.wf.Hooks); err != nil {
 		log.Error("terminal workspace cleanup failed", "error", err)

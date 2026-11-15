@@ -259,3 +259,40 @@ type Driver interface {
 	// period, then the group kill ladder.
 	Close(ctx context.Context) error
 }
+
+// RunError maps an outcome onto Driver.Run's error return: only outright
+// failure and an unclean exit are errors; retryable supervision outcomes
+// are values, not errors.
+func (o Outcome) RunError() error {
+	switch o.Kind {
+	case OutcomeFailed:
+		return o.Err
+	case OutcomeProcessExited:
+		if !o.ExitClean {
+			return o.Err
+		}
+	}
+	return nil
+}
+
+// Emit delivers one typed event on the stream unless closed closes first,
+// so a driver shutting down never blocks on an unconsumed event stream.
+func Emit(ch chan<- Event, ev Event, closed <-chan struct{}) {
+	select {
+	case ch <- ev:
+	case <-closed:
+	}
+}
+
+// DeliverResult hands one outcome to the active Run's result channel, if
+// any; it is a no-op when no run is active (nil channel) and drops the
+// outcome when one was already delivered.
+func DeliverResult(ch chan<- Outcome, out Outcome) {
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- out:
+	default:
+	}
+}

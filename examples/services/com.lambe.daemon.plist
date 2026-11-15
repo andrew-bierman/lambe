@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- lambe supervisor daemon — launchd user agent example.
+     KeepAlive restarts the daemon whenever it exits for any reason other
+     than an unload; the flock state lock makes a doubled start harmless. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.lambe.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/lambe</string>
+        <string>run</string>
+        <string>-config</string>
+        <string>/usr/local/etc/lambe/lambe.toml</string>
+    </array>
+
+    <!-- Always keep the supervisor alive: crash, clean exit, reboot. -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- SIGTERM runs the bounded kill ladder against supervised agents,
+         then the daemon exits 0. -->
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/lambe-daemon.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/lambe-daemon.err.log</string>
+
+    <!-- Reload configuration without restarting the daemon. -->
+    <key>SIGHUP</key>
+    <false/>
+</dict>
+</plist>

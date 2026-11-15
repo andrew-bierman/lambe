@@ -68,7 +68,7 @@ const gateOutputMeta = "lambe_last_gate_output"
 func BuildReport(ctx context.Context, tr tracker.Tracker) (Report, error) {
 	rep := Report{}
 
-	issues, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{"in_progress"}})
+	issues, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}})
 	if err != nil {
 		return rep, fmt.Errorf("read active runs: %w", err)
 	}
@@ -87,7 +87,7 @@ func BuildReport(ctx context.Context, tr tracker.Tracker) (Report, error) {
 	// front. "ready" is a bd pseudo-status only valid as a sole filter, so
 	// the multi-status read must not include it; a deferred run's issue
 	// stays open until its wake fires.
-	deferred, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{"open", "deferred"}})
+	deferred, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusOpen, tracker.StatusDeferred}})
 	if err == nil {
 		now := time.Now()
 		seen := map[string]bool{}
@@ -106,11 +106,9 @@ func BuildReport(ctx context.Context, tr tracker.Tracker) (Report, error) {
 		sort.Slice(rep.Deferred, func(i, j int) bool { return rep.Deferred[i].WakeAt.Before(rep.Deferred[j].WakeAt) })
 	}
 
-	blocked, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{"blocked"}})
+	blocked, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusBlocked}})
 	if err == nil {
 		for _, issue := range blocked {
-			// Skip lambe's own operational records (attempt bindings):
-			// they are blocked by design and never need a human.
 			if issue.Metadata[tracker.MetaKind] != "" {
 				continue
 			}

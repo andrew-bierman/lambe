@@ -420,7 +420,6 @@ func (l *Loader) Watch(ctx context.Context) error {
 		case <-debounce.C:
 			pending = false
 			if err := l.Reload(); err != nil {
-				// Already logged; the last-good copy keeps serving.
 				continue
 			}
 		}

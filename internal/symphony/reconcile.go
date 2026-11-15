@@ -12,7 +12,7 @@ import (
 // stops the run and triggers terminal workspace cleanup.
 func StatusActive(status string) bool {
 	switch status {
-	case "", "open", "ready", "in_progress":
+	case "", tracker.StatusOpen, tracker.StatusReady, tracker.StatusInProgress:
 		return true
 	default:
 		return false

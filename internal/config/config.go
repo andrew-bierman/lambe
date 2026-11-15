@@ -151,7 +151,7 @@ func defaultsProvider() *confmap.Confmap {
 // envProvider reads "KEY=VALUE" strings through the flattening rule
 // documented in the package comment.
 func envProvider(vars []string) koanf.Provider {
-	m := make(map[string]any)
+	m := make(map[string]string)
 	for _, kv := range vars {
 		key, value, ok := strings.Cut(kv, "=")
 		if !ok || !strings.HasPrefix(key, EnvPrefix) {
@@ -161,19 +161,9 @@ func envProvider(vars []string) koanf.Provider {
 		if confKey == "" {
 			continue
 		}
-		nested := m
-		parts := strings.Split(confKey, ".")
-		for _, part := range parts[:len(parts)-1] {
-			next, ok := nested[part].(map[string]any)
-			if !ok {
-				next = map[string]any{}
-				nested[part] = next
-			}
-			nested = next
-		}
-		nested[parts[len(parts)-1]] = value
+		m[confKey] = value
 	}
-	return confmap.Provider(m, ".")
+	return confmap.Provider(dotify(m), ".")
 }
 
 // envKeyToConfigKey implements the documented flattening rule: drop the
@@ -191,7 +181,7 @@ func flagProvider(flags map[string]string) koanf.Provider {
 	return confmap.Provider(dotify(flags), ".")
 }
 
-// dotify converts dotted flag keys into a nested map.
+// dotify converts dotted keys into a nested map.
 func dotify(flags map[string]string) map[string]any {
 	root := map[string]any{}
 	for key, value := range flags {

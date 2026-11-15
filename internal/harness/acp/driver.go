@@ -320,10 +320,14 @@ func (d *Driver) Run(ctx context.Context, promptText string) (harness.Outcome, e
 	err = d.submitTurn(ctx, client, sessionID, promptText)
 	if err != nil {
 		// The watchdog may have killed the process while the prompt was
-		// in flight; its outcome wins over the transport error.
+		// in flight; its outcome wins over the transport error. (Kept as
+		// a comment, unencoded: submitTurn submits on a background
+		// goroutine and never fails in flight, so this race cannot be
+		// reproduced through the real protocol; the branch guards the
+		// transport-error path only.)
 		if out, found := d.takeResult(0); found {
 			d.finishRun(false)
-			return out, runError(out)
+			return out, out.RunError()
 		}
 		d.finishRun(false)
 		out := harness.Outcome{Kind: harness.OutcomeFailed, Err: err}
@@ -333,9 +337,8 @@ func (d *Driver) Run(ctx context.Context, promptText string) (harness.Outcome, e
 	select {
 	case out := <-d.result:
 		d.finishRun(false)
-		return out, runError(out)
+		return out, out.RunError()
 	case <-ctx.Done():
-		// The kill ladder must outlive the cancelled run context.
 		go d.kill(client, "run context cancelled") //nolint:gosec // G118: deliberate; the kill ladder must outlive the cancelled run context.
 		out := harness.Outcome{
 			Kind:            harness.OutcomeFailed,
@@ -345,12 +348,9 @@ func (d *Driver) Run(ctx context.Context, promptText string) (harness.Outcome, e
 		}
 		return out, ctx.Err()
 	case <-client.Done():
-		// Prefer an already-delivered outcome; a stop that raced the
-		// process exit gets a short flush window before concluding the
-		// process exited unsettled.
 		if out, found := d.takeResult(DefaultStopFlush); found {
 			d.finishRun(false)
-			return out, runError(out)
+			return out, out.RunError()
 		}
 		waitErr := client.WaitErr()
 		clean := waitErr == nil
@@ -365,7 +365,7 @@ func (d *Driver) Run(ctx context.Context, promptText string) (harness.Outcome, e
 			AttemptConsumed: true,
 			Err:             outErr,
 		}
-		return out, runError(out)
+		return out, out.RunError()
 	}
 }
 
@@ -581,10 +581,7 @@ func (d *Driver) flushMessage() {
 
 // emit delivers one typed event, aborting when the driver closes.
 func (d *Driver) emit(ev harness.Event) {
-	select {
-	case d.events <- ev:
-	case <-d.closed:
-	}
+	harness.Emit(d.events, ev, d.closed)
 }
 
 // setStreaming updates the tracked streaming state.
@@ -631,13 +628,7 @@ func (d *Driver) deliverResult(out harness.Outcome) {
 	d.mu.Lock()
 	ch := d.result
 	d.mu.Unlock()
-	if ch == nil {
-		return
-	}
-	select {
-	case ch <- out:
-	default:
-	}
+	harness.DeliverResult(ch, out)
 }
 
 // armWatchdog arms the silence/deadline watchdog for one run. Silence means
@@ -730,19 +721,4 @@ func (d *Driver) shutdown(ctx context.Context) error {
 		return nil
 	}
 	return client.Close(ctx, d.opts.TerminateGrace)
-}
-
-// runError maps an outcome onto Run's error return: only outright failure
-// and an unclean exit are errors; retryable supervision outcomes are values,
-// not errors.
-func runError(out harness.Outcome) error {
-	switch out.Kind {
-	case harness.OutcomeFailed:
-		return out.Err
-	case harness.OutcomeProcessExited:
-		if !out.ExitClean {
-			return out.Err
-		}
-	}
-	return nil
 }

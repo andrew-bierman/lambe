@@ -93,7 +93,6 @@ func (a *ControlAdapter) CancelRun(_ context.Context, handle mcp.RunHandle) (mcp
 		return mcp.CancelResult{}, fmt.Errorf("unknown run %q", handle.String())
 	}
 	if !runLive(run.State) {
-		// Already finished; report the terminal state untouched.
 		return mcp.CancelResult{State: run.State, Outcome: run.Outcome}, nil
 	}
 	if err := a.Registry.TerminateGroup(handle.String(), cancelGrace); err != nil {
@@ -113,7 +112,7 @@ func (a *ControlAdapter) ListRuns(context.Context) ([]mcp.RunInfo, error) {
 	out := make([]mcp.RunInfo, 0, len(runs))
 	for _, run := range runs {
 		out = append(out, mcp.RunInfo{
-			Handle:  mcp.NewRunHandle(run.Handle),
+			Handle:  mcp.NewRunHandle(run.IssueID),
 			IssueID: run.IssueID,
 			Status: mcp.RunStatus{
 				State:       run.State,

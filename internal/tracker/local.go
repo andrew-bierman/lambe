@@ -18,16 +18,27 @@ type Local struct {
 	dir   string
 }
 
+// ResolveBdBin resolves the bd binary path: a non-empty bin is taken as-is
+// (caller-configured path); an empty bin means PATH lookup, and a failed
+// lookup is wrapped with what was attempted.
+func ResolveBdBin(bin string) (string, error) {
+	if bin != "" {
+		return bin, nil
+	}
+	found, err := exec.LookPath("bd")
+	if err != nil {
+		return "", fmt.Errorf("find bd binary: %w", err)
+	}
+	return found, nil
+}
+
 // NewLocal returns an embedded tracker over the bd binary at bin (empty
 // means PATH lookup) operating on dir and writing as actor. The journal is
 // enabled for every invocation this tracker makes.
 func NewLocal(bin, dir, actor string) (*Local, error) {
-	if bin == "" {
-		found, err := exec.LookPath("bd")
-		if err != nil {
-			return nil, fmt.Errorf("find bd binary: %w", err)
-		}
-		bin = found
+	bin, err := ResolveBdBin(bin)
+	if err != nil {
+		return nil, err
 	}
 	shell := &ShellTransport{Bin: bin, Dir: dir, Actor: actor, Env: []string{"BD_EVENTS_JOURNAL=1"}}
 	return &Local{Beads: NewBeads(shell, actor), shell: shell, bin: bin, dir: dir}, nil

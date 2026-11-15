@@ -237,6 +237,26 @@ func TestAcquireStateLockContention(t *testing.T) {
 	_ = third.Release()
 }
 
+func TestAcquireStateLockForeignPidHintDoesNotBlock(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "lambe.lock")
+	// A stale hint naming some other live pid must not arbitrate: the
+	// flock alone decides.
+	if err := os.WriteFile(path+".pid", []byte("1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := AcquireStateLock(path)
+	if err != nil {
+		t.Fatalf("acquire over foreign pid hint: %v", err)
+	}
+	if got := lock.PidHint(); got != os.Getpid() {
+		t.Errorf("pid hint = %d, want rewritten to %d", got, os.Getpid())
+	}
+	if err := lock.Release(); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+}
+
 func TestRecover(t *testing.T) {
 	const actor = "lambe@test"
 	newCase := func(t *testing.T) (*fakeTracker, *proc.Child) {
@@ -586,6 +606,66 @@ func TestBuildAndRenderReport(t *testing.T) {
 	}
 }
 
+// TestDaemonRunKeepsStartingWhenRecoveryReadFails encodes the degradation
+// contract: a recovery read failure is logged and the daemon continues its
+// life instead of aborting startup.
+func TestDaemonRunKeepsStartingWhenRecoveryReadFails(t *testing.T) {
+	stateDir := t.TempDir()
+	tr := newFakeTracker()
+	tr.dispatchErr = errors.New("bd unreachable")
+
+	d, err := New(Options{
+		Config: &config.Config{Supervisor: config.Supervisor{
+			TickSeconds:       10,
+			SilenceTimeout:    time.Minute,
+			TurnTimeout:       2 * time.Minute,
+			HeartbeatInterval: time.Hour,
+		}},
+		StateDir: stateDir,
+		Machine:  "testbox",
+		Actor:    "lambe@test",
+		Wire: func(a *Assembly) error {
+			a.Trackers = []tracker.Tracker{tr}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("new daemon: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() { runDone <- d.Run(ctx) }()
+
+	// The lock being held proves the daemon got past the failing recovery
+	// read and settled into its run loop.
+	lockPath := filepath.Join(stateDir, "lambe.lock")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		probe, perr := AcquireStateLock(lockPath)
+		if errors.Is(perr, ErrLockHeld) {
+			break
+		}
+		if probe != nil {
+			_ = probe.Release()
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("daemon never took the state lock after recovery read failure")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("daemon run after recovery failure: %v", err)
+		}
+	case <-time.After(ShutdownBound + 5*time.Second):
+		t.Fatal("daemon did not exit within the shutdown bound")
+	}
+}
+
 func TestHeartbeatLoopBeatsHeldClaims(t *testing.T) {
 	t.Parallel()
 	tr := newFakeTracker()
@@ -613,5 +693,65 @@ func TestHeartbeatLoopBeatsHeldClaims(t *testing.T) {
 	}
 	if len(tr.heartbeatLog()) < 3 {
 		t.Errorf("heartbeats = %v, want at least three beats on the held claim", tr.heartbeatLog())
+	}
+}
+
+// slowHeartbeatTracker records the peak number of concurrent Heartbeat
+// calls while each call blocks briefly.
+type slowHeartbeatTracker struct {
+	*fakeTracker
+	mu       sync.Mutex
+	inFlight int
+	peak     int
+}
+
+func (s *slowHeartbeatTracker) Heartbeat(ctx context.Context, id string) error {
+	s.mu.Lock()
+	s.inFlight++
+	if s.inFlight > s.peak {
+		s.peak = s.inFlight
+	}
+	s.mu.Unlock()
+	time.Sleep(25 * time.Millisecond)
+	s.mu.Lock()
+	s.inFlight--
+	s.mu.Unlock()
+	return s.fakeTracker.Heartbeat(ctx, id)
+}
+
+func (s *slowHeartbeatTracker) peakInFlight() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.peak
+}
+
+func TestHeartbeatLoopBoundsBeatConcurrency(t *testing.T) {
+	t.Parallel()
+	tr := &slowHeartbeatTracker{fakeTracker: newFakeTracker()}
+	const claims = heartbeatConcurrency * 2
+	for i := range claims {
+		id := fmt.Sprintf("mine-%d", i)
+		tr.issues[id] = tracker.Issue{ID: id, Status: "in_progress", Assignee: "lambe@test"}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		HeartbeatLoop(ctx, tr, "lambe@test", func() time.Duration { return 5 * time.Millisecond }, nil)
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for len(tr.heartbeatLog()) < claims && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	if got := len(tr.heartbeatLog()); got < claims {
+		t.Fatalf("heartbeats = %d, want every one of %d claims beaten", got, claims)
+	}
+	if peak := tr.peakInFlight(); peak > heartbeatConcurrency {
+		t.Errorf("peak concurrent beats = %d, want at most %d", peak, heartbeatConcurrency)
 	}
 }

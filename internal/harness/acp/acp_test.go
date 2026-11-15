@@ -362,6 +362,69 @@ func TestSilentAgentWatchdogKills(t *testing.T) {
 	t.Fatal("process group survived the kill ladder")
 }
 
+// TestRunCancelStillKillsGroup covers the cancelled-run path: Run returns
+// on ctx cancellation, and the kill ladder — run on a background context —
+// still takes down the agent process group after the run context is dead.
+func TestRunCancelStillKillsGroup(t *testing.T) {
+	var pgidOf sync.Map
+	drv, _ := newDriver(t, "silent", func(o *acp.Options) {
+		o.SilenceAfter = 10 * time.Second // only the cancel path may kill
+		o.Persist = func(pgid int, _ string) { pgidOf.Store(pgid, true) }
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runDone := make(chan harness.Outcome, 1)
+	go func() {
+		out, _ := drv.Run(ctx, "will be cancelled")
+		runDone <- out
+	}()
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	select {
+	case out := <-runDone:
+		if out.Kind != harness.OutcomeFailed || !errors.Is(out.Err, context.Canceled) {
+			t.Fatalf("outcome = %+v, want failed with context.Canceled", out)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run never returned after cancellation")
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		alive := false
+		pgidOf.Range(func(k, _ any) bool {
+			if pid, ok := k.(int); ok && groupAlive(pid) {
+				alive = true
+			}
+			return true
+		})
+		if !alive {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("process group survived the kill ladder after run-context cancel")
+}
+
+// TestStopRacingExitStillSettles covers the exit race: a stop response
+// written immediately before process exit must still settle the run inside
+// the flush window, not conclude as an unsettled process exit.
+func TestStopRacingExitStillSettles(t *testing.T) {
+	drv, _ := newDriver(t, "stop-die", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	out, err := drv.Run(ctx, "answer then die")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if out.Kind != harness.OutcomeSettled {
+		t.Fatalf("outcome kind = %s, want settled", out.Kind)
+	}
+}
+
 // TestMatrix drives every fake-agent behavior through Run and checks the
 // typed outcome; it is the regression net over the mappings documented in
 // the package comment.

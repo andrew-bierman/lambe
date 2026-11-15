@@ -2,22 +2,26 @@ package daemon
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
-// flushCountingTracker counts FlushWrites calls alongside the fake tracker.
+// flushCountingTracker counts FlushWrites calls alongside the fake tracker
+// and reports a settable queued-write count.
 type flushCountingTracker struct {
 	*fakeTracker
-	mu      sync.Mutex
-	flushes int
+	mu       sync.Mutex
+	flushes  int
+	buffered int
 }
 
 func (f *flushCountingTracker) FlushWrites(context.Context) error {
@@ -34,52 +38,140 @@ func (f *flushCountingTracker) flushCount() int {
 	return f.flushes
 }
 
-func TestRunTicksFlushesBatchThenPushes(t *testing.T) {
-	t.Parallel()
-	tr := &flushCountingTracker{fakeTracker: newFakeTracker()}
-	sync := &orderedSyncer{}
-	after := make(chan struct{}, 16)
-	afterTick := func(context.Context) { after <- struct{}{} }
+// setBuffered sets the reported queued-write count.
+func (f *flushCountingTracker) setBuffered(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.buffered = n
+}
 
+// BufferedWrites implements WriteCounter.
+func (f *flushCountingTracker) BufferedWrites() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.buffered
+}
+
+// newCycleDaemon builds a Daemon wired for direct cycle tests: fake
+// tracker, recording syncer, and a report cache.
+func newCycleDaemon(tr *flushCountingTracker, sync *orderedSyncer) *Daemon {
+	d := &Daemon{
+		asm:     Assembly{Sync: sync, Reports: &ReportCache{}},
+		log:     slog.Default(),
+		primary: tr,
+	}
+	d.flusher = tr
+	return d
+}
+
+func TestRunTicksRunsCyclesUntilCancel(t *testing.T) {
+	t.Parallel()
+	var cycles atomic.Int64
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		RunTicks(ctx, TickOptions{
-			Interval:  2 * time.Millisecond,
-			Sync:      sync,
-			Flush:     tr,
-			AfterTick: afterTick,
-		})
+		RunTicks(ctx, time.Millisecond, func(context.Context) { cycles.Add(1) })
 	}()
 
 	deadline := time.Now().Add(2 * time.Second)
-	for tr.flushCount() < 2 && time.Now().Before(deadline) {
+	for cycles.Load() < 2 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 	cancel()
 	<-done
 
-	if tr.flushCount() < 2 {
-		t.Fatalf("flushes = %d, want at least two", tr.flushCount())
+	if cycles.Load() < 2 {
+		t.Fatalf("cycles = %d, want at least two", cycles.Load())
 	}
-	if sync.pulls < 2 || sync.pushes < 2 {
-		t.Errorf("pulls = %d pushes = %d, want at least two each", sync.pulls, sync.pushes)
+}
+
+func TestDaemonCycleFlushesThenPushes(t *testing.T) {
+	t.Parallel()
+	tr := &flushCountingTracker{fakeTracker: newFakeTracker()}
+	sync := &orderedSyncer{}
+	d := newCycleDaemon(tr, sync)
+	tr.setBuffered(2)
+
+	d.cycle(context.Background(), "tick", false)
+
+	if tr.flushCount() != 1 {
+		t.Errorf("flushes = %d, want one", tr.flushCount())
 	}
-	// Every tick's op sequence must be pull before push.
-	for i, op := range sync.ops {
-		want := "pull"
-		if i%2 == 1 {
-			want = "push"
-		}
-		if op != want {
-			t.Fatalf("ops = %v, want alternating pull/push", sync.ops)
-		}
+	if len(sync.ops) != 2 || sync.ops[0] != "pull" || sync.ops[1] != "push" {
+		t.Errorf("ops = %v, want pull then push", sync.ops)
 	}
-	select {
-	case <-after:
-	default:
-		t.Error("AfterTick never ran")
+}
+
+func TestDaemonCycleSkipsIdlePush(t *testing.T) {
+	t.Parallel()
+	tr := &flushCountingTracker{fakeTracker: newFakeTracker()}
+	sync := &orderedSyncer{}
+	d := newCycleDaemon(tr, sync)
+	tr.setBuffered(0)
+
+	d.cycle(context.Background(), "tick", false)
+
+	if tr.flushCount() != 0 {
+		t.Errorf("flushes = %d, want none for a write-free tick", tr.flushCount())
+	}
+	if len(sync.ops) != 1 || sync.ops[0] != "pull" {
+		t.Errorf("ops = %v, want only the pull", sync.ops)
+	}
+}
+
+func TestDaemonCyclePokePushesUnconditionally(t *testing.T) {
+	t.Parallel()
+	tr := &flushCountingTracker{fakeTracker: newFakeTracker()}
+	sync := &orderedSyncer{}
+	d := newCycleDaemon(tr, sync)
+	tr.setBuffered(0)
+
+	d.cycle(context.Background(), "poke", true)
+
+	if len(sync.ops) != 2 || sync.ops[0] != "pull" || sync.ops[1] != "push" {
+		t.Errorf("ops = %v, want pull then push on poke", sync.ops)
+	}
+}
+
+// countingDispatch counts dispatch reads so the report refresh cadence is
+// observable: each refresh issues three reads.
+type countingDispatch struct {
+	*fakeTracker
+	calls atomic.Int64
+}
+
+func (c *countingDispatch) Dispatchable(ctx context.Context, q tracker.DispatchQuery) ([]tracker.Issue, error) {
+	c.calls.Add(1)
+	return c.fakeTracker.Dispatchable(ctx, q)
+}
+
+func TestDaemonCycleReportRefreshCadence(t *testing.T) {
+	t.Parallel()
+	tr := &countingDispatch{fakeTracker: newFakeTracker()}
+	sync := &orderedSyncer{}
+	d := &Daemon{
+		asm:     Assembly{Sync: sync, Reports: &ReportCache{}},
+		log:     slog.Default(),
+		primary: tr,
+	}
+
+	for range reportRefreshTicks {
+		d.cycle(context.Background(), "tick", false)
+	}
+	if got := tr.calls.Load(); got != 3 {
+		t.Fatalf("dispatch reads after first %d ticks = %d, want one refresh (3 reads)", reportRefreshTicks, got)
+	}
+	d.cycle(context.Background(), "tick", false)
+	if got := tr.calls.Load(); got != 6 {
+		t.Fatalf("dispatch reads after tick %d = %d, want two refreshes (6 reads)", reportRefreshTicks+1, got)
+	}
+
+	// The poke path always refreshes regardless of cadence.
+	before := tr.calls.Load()
+	d.cycle(context.Background(), "poke", true)
+	if got := tr.calls.Load(); got != before+3 {
+		t.Fatalf("dispatch reads after poke = %d, want %d (immediate refresh)", got, before+3)
 	}
 }
 

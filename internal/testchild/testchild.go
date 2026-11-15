@@ -42,18 +42,6 @@ const (
 	BehaviorStreamingThenSettled = "streaming-then-settled"
 )
 
-// Behaviors lists every behavior name the dispatcher accepts.
-var Behaviors = []string{
-	BehaviorHang,
-	BehaviorSilent,
-	BehaviorExit0,
-	BehaviorSpam,
-	BehaviorIgnoreSIGTERM,
-	BehaviorGrandchildHoldsPipe,
-	BehaviorLimitError,
-	BehaviorStreamingThenSettled,
-}
-
 // Main is the TestMain hook: it re-execs as the fake agent when EnvVar is set
 // and otherwise runs the test suite.
 func Main(m *testing.M) {

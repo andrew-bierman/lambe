@@ -166,7 +166,6 @@ func (s *Server) spawn(ctx context.Context, _ *mcp.CallToolRequest, args spawnAr
 	}
 	st, err := s.control.RunStatus(ctx, handle)
 	if err != nil {
-		// The run exists; report it pending rather than failing the call.
 		st = RunStatus{State: StatePending}
 	}
 	out := spawnResult{Handle: handle.String(), IssueID: args.IssueID, Status: st.State.String()}

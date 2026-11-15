@@ -117,6 +117,9 @@ type Daemon struct {
 	loop    Ticker
 	flusher Flusher
 	poking  atomic.Bool
+	// tickCount counts completed non-immediate cycles and drives the
+	// report-cache refresh cadence.
+	tickCount atomic.Int64
 }
 
 // Registry returns the daemon's live run registry. Wired runners record
@@ -158,33 +161,31 @@ func New(opts Options) (*Daemon, error) {
 	}
 
 	asm := Assembly{
-		Runner:   placeholderRunner{},
-		Gates:    placeholderGates{},
-		Sync:     NopSyncer{},
-		Children: NewChildSet(),
-		Registry: NewRunRegistry(nil, log),
-		Reports:  &ReportCache{},
+		Runner: placeholderRunner{},
+		Gates:  placeholderGates{},
 	}
-	asm.Supervisor = asm.Children
 	if opts.Wire != nil {
 		if err := opts.Wire(&asm); err != nil {
 			return nil, fmt.Errorf("wire assembly: %w", err)
 		}
 	}
+	// The single defaults site: whatever Wire left unset gets the local
+	// default, with the Supervisor = Children alias applied last so a Wire
+	// that fills only one of them still yields a consistent pair.
 	if asm.Sync == nil {
 		asm.Sync = NopSyncer{}
 	}
 	if asm.Children == nil {
 		asm.Children = NewChildSet()
 	}
-	if asm.Supervisor == nil {
-		asm.Supervisor = asm.Children
-	}
 	if asm.Registry == nil {
 		asm.Registry = NewRunRegistry(nil, log)
 	}
 	if asm.Reports == nil {
 		asm.Reports = &ReportCache{}
+	}
+	if asm.Supervisor == nil {
+		asm.Supervisor = asm.Children
 	}
 	if asm.Surface == nil {
 		av := rex.Detector{Env: os.Getenv, Runner: execCommand}.Detect(context.Background())
@@ -258,8 +259,6 @@ func (d *Daemon) Run(ctx context.Context) error {
 	adopted, err := Recover(runCtx, TrackerOrphans{Tracker: primary}, primary, d.opts.Actor,
 		ShutdownBound, d.log)
 	if err != nil {
-		// Recovery read failure degrades: log and keep starting, never
-		// kill on unverified ownership.
 		d.log.Error("startup recovery incomplete, continuing without adoption",
 			"category", ErrorCategory(err), "error", err)
 	}
@@ -303,14 +302,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 	ticksDone := make(chan struct{})
 	go func() {
 		defer close(ticksDone)
-		RunTicks(runCtx, TickOptions{
-			Interval:  time.Duration(d.opts.Config.Supervisor.TickSeconds) * time.Second,
-			Sync:      d.asm.Sync,
-			Loop:      loop,
-			Flush:     d.flusher,
-			AfterTick: d.afterTick,
-			Log:       d.log,
-		})
+		RunTicks(runCtx, time.Duration(d.opts.Config.Supervisor.TickSeconds)*time.Second,
+			d.tickCycle)
 	}()
 
 	for {
@@ -365,6 +358,11 @@ func (d *Daemon) shutdown(ticksDone <-chan struct{}) error {
 	case <-time.After(2 * time.Second):
 		d.log.Warn("tick goroutine did not stop within grace")
 	}
+	// The cached report is refreshed on the way out so the final snapshot
+	// reflects the daemon's last writes.
+	rctx, rcancel := context.WithTimeout(context.Background(), ShutdownBound)
+	d.refreshReport(rctx)
+	rcancel()
 	ctx, cancel := context.WithTimeout(context.Background(), ShutdownBound)
 	defer cancel()
 	done := make(chan error, 1)
@@ -381,9 +379,62 @@ func (d *Daemon) shutdown(ticksDone <-chan struct{}) error {
 	return nil
 }
 
-// afterTick refreshes the report cache after every tick so the HTTP state
-// surface serves tracker-derived sections without per-request tracker reads.
-func (d *Daemon) afterTick(ctx context.Context) {
+// reportRefreshTicks is the report-cache refresh cadence, in ticks: with
+// the default 10s tick the cache refreshes about once a minute. Pokes and
+// shutdown always refresh immediately through the cycle's immediate path.
+const reportRefreshTicks = 6
+
+// tickCycle is the tick loop's body: one non-immediate cycle. The report
+// refresh cadence is applied inside the cycle from the tick counter.
+func (d *Daemon) tickCycle(ctx context.Context) {
+	d.cycle(ctx, "tick", false)
+}
+
+// cycle runs one pull → tick → flush → push → report sequence; it is the
+// shared body of the tick loop and the poke path, with prefix ("tick" or
+// "poke") labeling its log lines. immediate marks the poke path: its push
+// and report refresh run unconditionally, while the tick path skips the
+// hub push when the tick queued no writes and refreshes the report cache
+// only on the reportRefreshTicks cadence. Every failure is logged with its
+// category and the daemon keeps running.
+func (d *Daemon) cycle(ctx context.Context, prefix string, immediate bool) {
+	if err := d.asm.Sync.Pull(ctx); err != nil {
+		d.log.Warn(prefix+": hub pull failed, continuing on local state",
+			"category", ErrorCategory(err), "error", err)
+	}
+	if d.loop != nil {
+		if err := d.loop.Tick(ctx); err != nil {
+			d.log.Warn(prefix+": tick failed, continuing",
+				"category", ErrorCategory(err), "error", err)
+		}
+	}
+	hasWrites := immediate
+	if !immediate {
+		if c, ok := d.flusher.(WriteCounter); !ok || c.BufferedWrites() > 0 {
+			hasWrites = true
+		}
+	}
+	if hasWrites && d.flusher != nil {
+		if err := d.flusher.FlushWrites(ctx); err != nil {
+			d.log.Warn(prefix+": write batch flush failed, writes stay queued",
+				"category", ErrorCategory(err), "error", err)
+		}
+	}
+	if hasWrites {
+		if err := PushAfterWrites(ctx, d.asm.Sync); err != nil {
+			d.log.Warn(prefix+": hub push failed, local writes stay ahead",
+				"category", ErrorCategory(err), "error", err)
+		}
+	}
+	if immediate || d.tickCount.Add(1)%reportRefreshTicks == 1 {
+		d.refreshReport(ctx)
+	}
+}
+
+// refreshReport rebuilds the morning report from the primary tracker into
+// the report cache so the HTTP state surface serves tracker-derived
+// sections without per-request tracker reads.
+func (d *Daemon) refreshReport(ctx context.Context) {
 	if d.primary == nil {
 		return
 	}
@@ -406,23 +457,7 @@ func (d *Daemon) poke() {
 		defer d.poking.Store(false)
 		ctx, cancel := context.WithTimeout(context.Background(), ShutdownBound)
 		defer cancel()
-		if err := d.asm.Sync.Pull(ctx); err != nil {
-			d.log.Warn("poke: hub pull failed", "category", ErrorCategory(err), "error", err)
-		}
-		if d.loop != nil {
-			if err := d.loop.Tick(ctx); err != nil {
-				d.log.Warn("poke: tick failed", "category", ErrorCategory(err), "error", err)
-			}
-		}
-		if d.flusher != nil {
-			if err := d.flusher.FlushWrites(ctx); err != nil {
-				d.log.Warn("poke: write batch flush failed", "category", ErrorCategory(err), "error", err)
-			}
-		}
-		if err := PushAfterWrites(ctx, d.asm.Sync); err != nil {
-			d.log.Warn("poke: hub push failed", "category", ErrorCategory(err), "error", err)
-		}
-		d.afterTick(ctx)
+		d.cycle(ctx, "poke", true)
 	}()
 }
 

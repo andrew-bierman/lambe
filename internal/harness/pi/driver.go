@@ -295,8 +295,6 @@ func (d *Driver) Run(ctx context.Context, promptText string) (harness.Outcome, e
 
 	ackRec, err := d.submitPrompt(ctx, client, promptText)
 	if err != nil {
-		// The watchdog may have killed the process while the prompt was
-		// in flight; its outcome wins over the transport error.
 		select {
 		case out := <-d.result:
 			return out, out.Err
@@ -319,9 +317,8 @@ func (d *Driver) Run(ctx context.Context, promptText string) (harness.Outcome, e
 
 	select {
 	case out := <-d.result:
-		return out, runError(out)
+		return out, out.RunError()
 	case <-ctx.Done():
-		// The kill ladder must outlive the cancelled run context.
 		go d.kill(client, "run context cancelled") //nolint:gosec // G118: deliberate; ctx is the thing being cancelled.
 		out := harness.Outcome{
 			Kind:            harness.OutcomeFailed,
@@ -331,11 +328,8 @@ func (d *Driver) Run(ctx context.Context, promptText string) (harness.Outcome, e
 		}
 		return out, ctx.Err()
 	case <-client.Done():
-		// Prefer an already-delivered outcome; a settle that raced the
-		// process exit gets a short flush window before concluding the
-		// process exited unsettled.
 		if out, found := d.takeResult(250 * time.Millisecond); found {
-			return out, runError(out)
+			return out, out.RunError()
 		}
 		waitErr := client.WaitErr()
 		clean := waitErr == nil
@@ -350,23 +344,8 @@ func (d *Driver) Run(ctx context.Context, promptText string) (harness.Outcome, e
 			AttemptConsumed: true,
 			Err:             outErr,
 		}
-		return out, runError(out)
+		return out, out.RunError()
 	}
-}
-
-// runError maps an outcome onto Run's error return: only outright failure
-// and an unclean exit are errors; retryable supervision outcomes are
-// values, not errors.
-func runError(out harness.Outcome) error {
-	switch out.Kind {
-	case harness.OutcomeFailed:
-		return out.Err
-	case harness.OutcomeProcessExited:
-		if !out.ExitClean {
-			return out.Err
-		}
-	}
-	return nil
 }
 
 // Close shuts the agent down — orderly stdin close, a grace period, then
@@ -465,8 +444,6 @@ func (d *Driver) handleRecord(client *Client, rec Record) bool {
 		d.setStreaming(true)
 		d.emit(harness.AgentStartedEvent{})
 	case EventAgentEnd:
-		// One low-level run ended; retries or queued work may follow.
-		// This is deliberately NOT completion.
 		d.setStreaming(false)
 		d.emit(harness.AgentEndedEvent{WillRetry: rec.WillRetry})
 	case EventAgentSettled:
@@ -525,10 +502,7 @@ func (d *Driver) handleRecord(client *Client, rec Record) bool {
 
 // emit delivers one typed event, aborting when the driver closes.
 func (d *Driver) emit(ev harness.Event) {
-	select {
-	case d.events <- ev:
-	case <-d.closed:
-	}
+	harness.Emit(d.events, ev, d.closed)
 }
 
 // setStreaming updates the tracked streaming state.
@@ -647,13 +621,7 @@ func (d *Driver) deliverResult(out harness.Outcome) {
 	d.mu.Lock()
 	ch := d.result
 	d.mu.Unlock()
-	if ch == nil {
-		return
-	}
-	select {
-	case ch <- out:
-	default:
-	}
+	harness.DeliverResult(ch, out)
 }
 
 // armWatchdog arms the silence/deadline watchdog for one run. When

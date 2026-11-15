@@ -63,6 +63,25 @@ func (e *TruncatedError) Error() string {
 // Unwrap makes errors.Is(err, ErrJournalTruncated) true.
 func (e *TruncatedError) Unwrap() error { return ErrJournalTruncated }
 
+// The issue statuses lambe reads and writes. bd's "ready" is a
+// pseudo-status (the dispatchable front), not a stored value.
+const (
+	// StatusReady is bd's pseudo-status selecting the dispatchable front.
+	StatusReady = "ready"
+	// StatusOpen is the open pool a claim is released back to.
+	StatusOpen = "open"
+	// StatusInProgress marks a claimed issue under active work.
+	StatusInProgress = "in_progress"
+	// StatusBlocked hides an issue from the dispatch front while keeping it
+	// readable through metadata queries.
+	StatusBlocked = "blocked"
+	// StatusClosed is bd's terminal status.
+	// StatusDeferred is bd's snoozed state; it returns to open lazily
+	// on the next dispatch-front read once the defer time passes.
+	StatusDeferred = "deferred"
+	StatusClosed   = "closed"
+)
+
 // Issue is a single bead as lambe sees it.
 type Issue struct {
 	ID       string

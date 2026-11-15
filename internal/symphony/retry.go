@@ -14,6 +14,10 @@ const (
 	DefaultRetryBackoff = 10 * time.Minute
 )
 
+// DefaultDeferHorizon is the parking duration used for TurnDeferred turns
+// whose TurnResult.WakeAt is zero.
+const DefaultDeferHorizon = 5 * time.Minute
+
 // FailureBackoff returns the failure-retry delay for the given attempt
 // number: min(10000ms · 2^(attempt-1), cap). Attempt numbers below 1 are
 // treated as 1.

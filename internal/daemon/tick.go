@@ -93,8 +93,10 @@ func (m MetadataLabelSource) Labels(ctx context.Context, issueID string) ([]stri
 
 // FilteredTracker wraps a tracker and enforces the fixed label-skip rule on
 // every dispatch read: issues labeled for another machine are never
-// dispatched here. A label read failure is logged and the issue is kept —
-// an unreadable affinity never silently drops work.
+// dispatched here. Labels are read from the "labels" metadata key already
+// present on each dispatch result; the LabelSource fallback runs only for
+// issues that carry no such key, and its failure is logged with the issue
+// kept — an unreadable affinity never silently drops work.
 type FilteredTracker struct {
 	tracker.Tracker
 	Machine string
@@ -110,14 +112,18 @@ func (f *FilteredTracker) Dispatchable(ctx context.Context, q tracker.DispatchQu
 	}
 	out := issues[:0]
 	for _, issue := range issues {
-		labels, lerr := f.Labels.Labels(ctx, issue.ID)
-		if lerr != nil {
-			if f.Log != nil {
-				f.Log.Warn("label read failed, keeping issue dispatchable",
-					"issue", issue.ID, "category", ErrorCategory(lerr), "error", lerr)
+		labels := labelsOf(issue)
+		if _, stamped := issue.Metadata["labels"]; !stamped && f.Labels != nil {
+			fallback, lerr := f.Labels.Labels(ctx, issue.ID)
+			if lerr != nil {
+				if f.Log != nil {
+					f.Log.Warn("label read failed, keeping issue dispatchable",
+						"issue", issue.ID, "category", ErrorCategory(lerr), "error", lerr)
+				}
+				out = append(out, issue)
+				continue
 			}
-			out = append(out, issue)
-			continue
+			labels = fallback
 		}
 		if SkipsMachine(labels, f.Machine) {
 			if f.Log != nil {
@@ -130,35 +136,19 @@ func (f *FilteredTracker) Dispatchable(ctx context.Context, q tracker.DispatchQu
 	return out, nil
 }
 
+// labelsOf splits an issue's comma-separated "labels" metadata value; an
+// absent key yields nil, an empty value yields no labels.
+func labelsOf(issue tracker.Issue) []string {
+	raw := issue.Metadata["labels"]
+	if raw == "" {
+		return nil
+	}
+	return strings.Split(raw, ",")
+}
+
 // Ticker is one tick of the symphony loop; *symphony.Loop satisfies it.
 type Ticker interface {
 	Tick(ctx context.Context) error
-}
-
-// nopTicker keeps the daemon's tick cadence when no loop is wired.
-type nopTicker struct{}
-
-// Tick implements Ticker as a no-op.
-func (nopTicker) Tick(context.Context) error { return nil }
-
-// TickOptions configures the tick loop.
-type TickOptions struct {
-	// Interval is the cadence between ticks.
-	Interval time.Duration
-	// Sync runs the hub pull/push cycle: pull before the tick, push after.
-	Sync Syncer
-	// Loop is the symphony tick.
-	Loop Ticker
-	// Flush applies the tracker's queued write batch after the tick and
-	// before the push; nil skips flushing. The primary tracker qualifies
-	// when it implements FlushWrites.
-	Flush Flusher
-	// AfterTick runs after every tick's writes are flushed (success or
-	// not); the daemon refreshes its report cache here. Errors are the
-	// callback's business; the loop only invokes it.
-	AfterTick func(ctx context.Context)
-	// Log receives tick outcomes; nil discards them.
-	Log *slog.Logger
 }
 
 // Flusher applies a tracker's queued batched writes in one transaction.
@@ -167,46 +157,34 @@ type Flusher interface {
 	FlushWrites(ctx context.Context) error
 }
 
-// RunTicks drives the daemon's cadence until ctx is done: pull, tick, push.
-// A failing sync or tick is logged with its category and never stops the
-// daemon — degradation keeps agents running on last-known state.
-func RunTicks(ctx context.Context, opts TickOptions) {
-	log := opts.Log
-	if log == nil {
-		log = slog.Default()
+// heartbeatConcurrency bounds how many lease beats are extended at once
+// per beat round; the rest of a large claim set waits for the next beats.
+const heartbeatConcurrency = 4
+
+// WriteCounter reports how many writes are queued awaiting the next
+// flush. *tracker.Local satisfies it through its embedded Beads; the tick
+// cycle uses it to skip the hub push after a write-free tick.
+type WriteCounter interface {
+	BufferedWrites() int
+}
+
+// RunTicks drives the daemon's cadence until ctx is done: every interval it
+// runs one cycle — pull, tick, flush, push, report — through the supplied
+// body. A failing step is logged with its category inside the cycle and
+// never stops the daemon — degradation keeps agents running on last-known
+// state.
+func RunTicks(ctx context.Context, interval time.Duration, cycle func(context.Context)) {
+	if cycle == nil {
+		cycle = func(context.Context) {}
 	}
-	loop := opts.Loop
-	if loop == nil {
-		loop = nopTicker{}
-	}
-	ticker := time.NewTicker(opts.Interval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := opts.Sync.Pull(ctx); err != nil {
-				log.Warn("hub pull failed, continuing on local state",
-					"category", ErrorCategory(err), "error", err)
-			}
-			if err := loop.Tick(ctx); err != nil {
-				log.Warn("tick failed, continuing",
-					"category", ErrorCategory(err), "error", err)
-			}
-			if opts.Flush != nil {
-				if err := opts.Flush.FlushWrites(ctx); err != nil {
-					log.Warn("write batch flush failed, writes stay queued",
-						"category", ErrorCategory(err), "error", err)
-				}
-			}
-			if err := PushAfterWrites(ctx, opts.Sync); err != nil {
-				log.Warn("hub push failed, local writes stay ahead",
-					"category", ErrorCategory(err), "error", err)
-			}
-			if opts.AfterTick != nil {
-				opts.AfterTick(ctx)
-			}
+			cycle(ctx)
 		}
 	}
 }
@@ -237,25 +215,37 @@ func HeartbeatLoop(ctx context.Context, tr tracker.Tracker, actor string, interv
 				tick = next
 				ticker.Reset(tick)
 			}
-			issues, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{"in_progress"}})
+			issues, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}})
 			if err != nil {
 				log.Warn("heartbeat dispatch read failed",
 					"category", ErrorCategory(err), "error", err)
 				continue
 			}
+			// Beats run concurrently under a bounded semaphore so a
+			// large claim set does not stretch one round across many
+			// serial shell-outs.
+			sem := make(chan struct{}, heartbeatConcurrency)
+			var wg sync.WaitGroup
 			for _, issue := range issues {
 				if issue.Assignee != actor {
 					continue
 				}
-				if err := tr.Heartbeat(ctx, issue.ID); err != nil {
-					if errors.Is(err, tracker.ErrNotOwner) {
-						log.Info("heartbeat lost claim", "issue", issue.ID, "category", CategoryLease)
-						continue
+				wg.Add(1)
+				sem <- struct{}{}
+				go func(id string) {
+					defer wg.Done()
+					defer func() { <-sem }()
+					if err := tr.Heartbeat(ctx, id); err != nil {
+						if errors.Is(err, tracker.ErrNotOwner) {
+							log.Info("heartbeat lost claim", "issue", id, "category", CategoryLease)
+							return
+						}
+						log.Warn("heartbeat failed", "issue", id,
+							"category", ErrorCategory(err), "error", err)
 					}
-					log.Warn("heartbeat failed", "issue", issue.ID,
-						"category", ErrorCategory(err), "error", err)
-				}
+				}(issue.ID)
 			}
+			wg.Wait()
 		}
 	}
 }

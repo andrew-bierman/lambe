@@ -28,6 +28,8 @@ const (
 	scriptStreaming  = "streaming"
 	scriptLimit      = "limit"
 	scriptSilentAck  = "silent-after-ack"
+	scriptSlowAck    = "slow-ack"
+	scriptSettleExit = "settle-exit"
 	scriptGrandkid   = "grandchild"
 	scriptGrandSleep = "grandchild-sleep"
 )
@@ -125,6 +127,11 @@ func runFake(script string) {
 				respond(cmd.ID, false, "agent is streaming: prompt requires streamingBehavior", nil)
 				continue
 			}
+			if script == scriptSlowAck {
+				// Hold the prompt call in flight long enough for the
+				// watchdog ladder to fire underneath it.
+				time.Sleep(700 * time.Millisecond)
+			}
 			respond(cmd.ID, true, "", map[string]any{"disposition": "started"})
 			go scriptEvents(script)
 		case "steer", "follow_up":
@@ -210,6 +217,11 @@ func scriptEvents(script string) {
 	case scriptSilentAck:
 		// Acked the prompt above, then goes silent forever.
 		blockForever()
+	case scriptSettleExit:
+		// Settle and die immediately: the settle record must still be
+		// observed within the driver's flush window after process exit.
+		event("agent_settled", map[string]any{"aborted": false})
+		os.Exit(0)
 	case scriptGrandkid:
 		event("agent_start", nil)
 		event("agent_settled", map[string]any{"aborted": false})

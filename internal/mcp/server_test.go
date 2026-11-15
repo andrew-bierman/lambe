@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -22,6 +23,8 @@ type fakeControl struct {
 	spawnDelay time.Duration
 	// spawnErr, when non-nil, is returned by SpawnRun.
 	spawnErr error
+	// statusErr, when non-nil, is returned by RunStatus.
+	statusErr error
 
 	runs     map[string]*fakeRun
 	nextID   int
@@ -65,6 +68,9 @@ func (f *fakeControl) SpawnRun(_ context.Context, spec RunSpec) (RunHandle, erro
 func (f *fakeControl) RunStatus(_ context.Context, handle RunHandle) (RunStatus, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.statusErr != nil {
+		return RunStatus{}, f.statusErr
+	}
 	r, ok := f.runs[handle.String()]
 	if !ok {
 		return RunStatus{}, fmt.Errorf("unknown run %q", handle)
@@ -187,6 +193,27 @@ func TestSpawnReturnsFast(t *testing.T) {
 	}
 	if out.Handle == "" || out.IssueID != "iss-1" || out.Status != StateRunning.String() {
 		t.Errorf("spawn result = %+v; want handle, issue id, and initial status", out)
+	}
+}
+
+// TestSpawnStatusErrorReportsPending: when the run registers successfully
+// but the immediate status read fails, lambe_spawn still succeeds and
+// reports the run as pending.
+func TestSpawnStatusErrorReportsPending(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.fc.statusErr = errors.New("status backend down")
+
+	var out spawnResult
+	res := h.call("lambe_spawn", spawnArgs{IssueID: "iss-1", Prompt: "do the thing", Workspace: "/tmp/w"}, &out)
+
+	if res.IsError {
+		t.Fatalf("lambe_spawn errored: %v", res.Content)
+	}
+	if out.Handle == "" || out.IssueID != "iss-1" {
+		t.Errorf("spawn result = %+v; want handle and issue id", out)
+	}
+	if out.Status != StatePending.String() {
+		t.Errorf("spawn status = %q; want %q", out.Status, StatePending.String())
 	}
 }
 

@@ -17,11 +17,11 @@ const maxRunTail = 4096
 
 // Run is one supervised run's live state. It is the daemon-side record the
 // Control and StateSource adapters read; run execution itself belongs to the
-// symphony loop and its wired runner.
+// symphony loop and its wired runner. The run's identifier is the issue id:
+// one run per issue at a time.
 type Run struct {
-	// Handle is the run's daemon-issued identifier (the issue id).
-	Handle string
-	// IssueID is the tracker issue the run works on.
+	// IssueID is the tracker issue the run works on; it doubles as the
+	// run's handle on the wire surface.
 	IssueID string
 	// Session is the harness session identifier once one exists.
 	Session string
@@ -87,7 +87,6 @@ func (r *RunRegistry) SetSurface(surface *rex.Adapter, log *slog.Logger) {
 func (r *RunRegistry) Register(issueID, agent, prompt, workspace string, depth int) Run {
 	now := time.Now()
 	run := &Run{
-		Handle:      issueID,
 		IssueID:     issueID,
 		Agent:       agent,
 		Prompt:      prompt,
@@ -274,7 +273,6 @@ func (r *RunRegistry) emit(handle, agent string, state mcp.RunState) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if agent != "" && state == mcp.StateRunning {
-			// A run starting is the one event that names the agent.
 			if err := adapter.Handle(ctx, rex.RunStartedEvent{Agent: agent}); err != nil {
 				r.log.Warn("rex surface: run started", "run", handle, "error", err)
 			}

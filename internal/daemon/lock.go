@@ -7,6 +7,7 @@ package daemon
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -50,11 +51,11 @@ func AcquireStateLock(path string) (*StateLock, error) {
 
 	lock := &StateLock{file: file, path: path, pidPath: path + ".pid"}
 	// The PID file is a diagnostic hint for humans; it is never consulted
-	// as an arbiter of instance uniqueness.
+	// as an arbiter of instance uniqueness, so a failure to write it is
+	// logged and the lock stands.
 	if err := os.WriteFile(lock.pidPath, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
-		// A missing hint must not stop the daemon.
-		_ = lock.Release()
-		return nil, fmt.Errorf("write pid hint: %w", err)
+		slog.Default().Warn("pid hint write failed, continuing without it",
+			"path", lock.pidPath, "error", err)
 	}
 	return lock, nil
 }

@@ -1,0 +1,21 @@
+# lambe supervisor daemon — systemd user unit example.
+# The flock state lock (~/.local/state/lambe/lambe.lock) makes a doubled
+# start harmless: the second instance exits 3 immediately, so an aggressive
+# restart policy cannot wedge anything.
+[Unit]
+Description=lambe supervisor daemon
+Documentation=file:///usr/local/share/doc/lambe/README.md
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/lambe run --config %h/.config/lambe/lambe.toml
+Restart=on-failure
+RestartSec=5
+# SIGTERM triggers the bounded child kill ladder (SIGTERM -> grace -> SIGKILL)
+# bounded by the daemon itself; systemd gives it room to finish.
+TimeoutStopSec=45
+# Exit code 3 means another instance holds the lock: nothing to restart.
+SuccessExitStatus=3
+
+[Install]
+WantedBy=default.target

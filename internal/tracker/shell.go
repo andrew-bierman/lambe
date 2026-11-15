@@ -123,7 +123,7 @@ func (t *ShellTransport) List(ctx context.Context, q DispatchQuery) (Result, err
 	if len(q.IDs) > 0 {
 		args = append(args, "--id", strings.Join(q.IDs, ","))
 	}
-	if len(q.Statuses) == 1 && q.Statuses[0] == "ready" {
+	if len(q.Statuses) == 1 && q.Statuses[0] == StatusReady {
 		args = append(args, "--ready")
 	} else if len(q.Statuses) > 0 {
 		args = append(args, "--status", strings.Join(q.Statuses, ","))

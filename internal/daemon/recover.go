@@ -116,7 +116,7 @@ type TrackerOrphans struct {
 
 // Orphans implements OrphanSource.
 func (t TrackerOrphans) Orphans(ctx context.Context) ([]Orphan, error) {
-	issues, err := t.Tracker.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{"in_progress"}})
+	issues, err := t.Tracker.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}})
 	if err != nil {
 		return nil, fmt.Errorf("read in-progress sessions: %w", err)
 	}

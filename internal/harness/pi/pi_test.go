@@ -1,6 +1,8 @@
 package pi_test
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -403,6 +405,78 @@ func TestGrandchildHoldsPipeCleanExit(t *testing.T) {
 	}
 	_, pgid, _ := persist.snapshot()
 	waitGroupGone(t, pgid, 5*time.Second)
+}
+
+// TestWatchdogKillDuringPromptSubmission covers the race where the watchdog
+// ladder kills the process while the prompt call is still in flight: the
+// watchdog-kill outcome must win over the resulting transport error.
+func TestWatchdogKillDuringPromptSubmission(t *testing.T) {
+	opts, _ := testEnv(t, scriptSlowAck, func(o *pi.Options) {
+		o.SilenceAfter = 100 * time.Millisecond
+		o.ProbeWindow = 100 * time.Millisecond
+		o.TerminateGrace = 300 * time.Millisecond
+	})
+	d := pi.New(opts)
+	defer func() { _ = d.Close(t.Context()) }()
+
+	out, err := d.Run(t.Context(), "slow to ack")
+	if out.Kind != harness.OutcomeWatchdogKilled {
+		t.Fatalf("outcome kind = %v (err %v), want watchdog_killed", out.Kind, err)
+	}
+	if !out.Retryable {
+		t.Fatal("watchdog kill must be retryable")
+	}
+}
+
+// TestRunCancelStillKillsGroup covers the cancelled-run path: Run returns
+// on ctx cancellation, and the kill ladder — run on a background context —
+// still takes down the child process group after the run context is dead.
+func TestRunCancelStillKillsGroup(t *testing.T) {
+	persist := &persistCapture{}
+	opts, _ := testEnv(t, scriptSilentAck, func(o *pi.Options) {
+		o.SilenceAfter = 30 * time.Second // only the cancel path may kill
+		o.TerminateGrace = 300 * time.Millisecond
+		o.Persist = persist.capture
+	})
+	d := pi.New(opts)
+	defer func() { _ = d.Close(t.Context()) }()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	runDone := make(chan harness.Outcome, 1)
+	go func() {
+		out, _ := d.Run(ctx, "will be cancelled")
+		runDone <- out
+	}()
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	select {
+	case out := <-runDone:
+		if out.Kind != harness.OutcomeFailed || !errors.Is(out.Err, context.Canceled) {
+			t.Fatalf("outcome = %+v, want failed with context.Canceled", out)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run never returned after cancellation")
+	}
+	_, pgid, _ := persist.snapshot()
+	waitGroupGone(t, pgid, 5*time.Second)
+}
+
+// TestSettleRacingExitStillObserved covers the exit race: a settle record
+// written immediately before process exit must still produce a settled
+// outcome inside the flush window, not an unsettled process-exited one.
+func TestSettleRacingExitStillObserved(t *testing.T) {
+	opts, _ := testEnv(t, scriptSettleExit, nil)
+	d := pi.New(opts)
+	defer func() { _ = d.Close(t.Context()) }()
+
+	out, err := d.Run(t.Context(), "settle then die")
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if out.Kind != harness.OutcomeSettled {
+		t.Fatalf("outcome kind = %v, want settled", out.Kind)
+	}
 }
 
 // TestLivePi spawns the real pi binary in a temp directory. It is skipped

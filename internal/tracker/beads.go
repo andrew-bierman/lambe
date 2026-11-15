@@ -1,12 +1,12 @@
 package tracker
 
 import (
-	"math"
 	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -81,7 +81,7 @@ func metadataString(v any) string {
 // the error carries no recognized code, leaving the original error in play.
 func classifyExit(err error) error {
 	var exitErr *ExitError
-	if !errorAs(err, &exitErr) {
+	if !errors.As(err, &exitErr) {
 		return nil
 	}
 	switch exitErr.Code {
@@ -93,9 +93,6 @@ func classifyExit(err error) error {
 		return nil
 	}
 }
-
-// errorAs is a thin alias for errors.As kept for call-site brevity.
-func errorAs(err error, target any) bool { return errors.As(err, target) }
 
 // Capabilities implements Tracker by parsing the backend version: the
 // journal-watch, tombstone, and HTTP-lease features all landed after
@@ -180,7 +177,7 @@ func (b *Beads) Claim(ctx context.Context, id string) (Issue, error) {
 // exit code.
 func claimsRace(err error) bool {
 	var exitErr *ExitError
-	return errorAs(err, &exitErr) && strings.Contains(exitErr.Stderr+exitErr.Stdout, "already claimed by")
+	return errors.As(err, &exitErr) && strings.Contains(exitErr.Stderr+exitErr.Stdout, "already claimed by")
 }
 
 // Release implements Tracker. The release is guarded by our own identity so
@@ -296,7 +293,7 @@ func (b *Beads) Events(ctx context.Context, since int64) ([]Event, error) {
 // the retained window.
 func asTruncated(err error) *TruncatedError {
 	var exitErr *ExitError
-	if !errorAs(err, &exitErr) {
+	if !errors.As(err, &exitErr) {
 		return nil
 	}
 	var env struct {
@@ -381,8 +378,15 @@ const (
 	metaAttempt = "lambe_attempt"
 	metaPGID    = "lambe_pgid"
 	metaWakeAt  = "lambe_wake_at"
-	kindAttempt = "attempt"
 )
+
+// MetaKind is the exported name of the metadata key marking lambe's own
+// operational records (attempt bindings). Surfaces reading the dispatch
+// front use it to hide internal beads from human-facing views.
+const MetaKind = metaKind
+
+// kindAttempt is the lambe_kind value of attempt records.
+const kindAttempt = "attempt"
 
 // attemptKey builds the pinned-id key for one attempt record.
 func attemptKey(sessionID string, number int) string {
@@ -399,42 +403,38 @@ func (b *Beads) PutAttempt(ctx context.Context, a Attempt) error {
 		metaKind:    kindAttempt,
 		metaSession: a.SessionID,
 		metaAttempt: strconv.Itoa(a.Number),
+		metaPGID:    strconv.Itoa(a.PGID),
 	}
-	if _, err := b.EnsureIssue(ctx, attemptKey(a.SessionID, a.Number), IssueSpec{
+	if !a.WakeAt.IsZero() {
+		meta[metaWakeAt] = a.WakeAt.UTC().Format(time.RFC3339)
+	}
+	issue, err := b.EnsureIssue(ctx, attemptKey(a.SessionID, a.Number), IssueSpec{
 		Title:    fmt.Sprintf("attempt %d of session %s", a.Number, a.SessionID),
 		Priority: 2,
 		Labels:   []string{"lambe", kindAttempt},
 		Metadata: meta,
-	}); err != nil {
+	})
+	if err != nil {
 		return err
 	}
-	update := map[string]string{metaPGID: strconv.Itoa(a.PGID)}
-	wake := ""
-	if !a.WakeAt.IsZero() {
-		wake = a.WakeAt.UTC().Format(time.RFC3339)
-	}
-	update[metaWakeAt] = wake
 	// Operational records stay off the ready dispatch front: an open attempt
 	// bead would be dispatched as work by the loop's own two-read within the
 	// same tick that wrote it. "blocked" keeps it readable via metadata query
-	// while invisible to Dispatchable.
-	if _, err := b.t.Update(ctx, UpdateRequest{ID: b.mustPrefix(ctx) + "-" + attemptKey(a.SessionID, a.Number), Status: "blocked", Metadata: update}); err != nil {
+	// while invisible to Dispatchable. The create cannot carry a status, and
+	// a re-put finds the issue already existing (whose create metadata was
+	// not applied), so the pgid/wake fields ride on this update as well —
+	// using the id EnsureIssue returned rather than recomposing it.
+	update := map[string]string{metaPGID: strconv.Itoa(a.PGID), metaWakeAt: ""}
+	if !a.WakeAt.IsZero() {
+		update[metaWakeAt] = a.WakeAt.UTC().Format(time.RFC3339)
+	}
+	if _, err := b.t.Update(ctx, UpdateRequest{ID: issue.ID, Status: StatusBlocked, Metadata: update}); err != nil {
 		if typed := classifyExit(err); typed != nil {
 			return fmt.Errorf("put attempt: %w", typed)
 		}
 		return fmt.Errorf("put attempt: %w", err)
 	}
 	return nil
-}
-
-// mustPrefix re-reads the cached prefix without failing the caller, which
-// already validated it via EnsureIssue.
-func (b *Beads) mustPrefix(ctx context.Context) string {
-	p, err := b.issuePrefix(ctx)
-	if err != nil {
-		return ""
-	}
-	return p
 }
 
 // Attempts implements Tracker: exact-match metadata query, ordered by
@@ -472,10 +472,9 @@ func (b *Beads) Attempts(ctx context.Context, sessionID string) ([]Attempt, erro
 	return attempts, nil
 }
 
-// QueueClose buffers a terminal close whose comment rides as the close
-// reason. The write is applied by the next FlushWrites.
-func (b *Beads) QueueClose(id, comment string) error {
-	op := BatchClose(id, comment)
+// queue validates op against the batch grammar and buffers it for the next
+// FlushWrites.
+func (b *Beads) queue(op BatchOp) error {
 	if _, err := op.Render(); err != nil {
 		return err
 	}
@@ -483,6 +482,12 @@ func (b *Beads) QueueClose(id, comment string) error {
 	defer b.mu.Unlock()
 	b.pending = append(b.pending, op)
 	return nil
+}
+
+// QueueClose buffers a terminal close whose comment rides as the close
+// reason. The write is applied by the next FlushWrites.
+func (b *Beads) QueueClose(id, comment string) error {
+	return b.queue(BatchClose(id, comment))
 }
 
 // QueueUpdate buffers a grammar-legal field update (status, priority,
@@ -490,51 +495,23 @@ func (b *Beads) QueueClose(id, comment string) error {
 // grammar, so metadata writes — attempt re-puts included — must keep using
 // the single-op Update path. The write is applied by the next FlushWrites.
 func (b *Beads) QueueUpdate(id string, f BatchFields) error {
-	op := BatchUpdate(id, f)
-	if _, err := op.Render(); err != nil {
-		return err
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.pending = append(b.pending, op)
-	return nil
+	return b.queue(BatchUpdate(id, f))
 }
 
 // QueueCreate buffers a grammar-legal create (type, priority, title only;
 // no pinned id, labels, or metadata — those need the single-op path).
 func (b *Beads) QueueCreate(typ string, priority int, title string) error {
-	op := BatchCreate(typ, priority, title)
-	if _, err := op.Render(); err != nil {
-		return err
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.pending = append(b.pending, op)
-	return nil
+	return b.queue(BatchCreate(typ, priority, title))
 }
 
 // QueueDepAdd buffers a dependency add. An empty depType is bd's default.
 func (b *Beads) QueueDepAdd(fromID, toID, depType string) error {
-	op := BatchDepAdd(fromID, toID, depType)
-	if _, err := op.Render(); err != nil {
-		return err
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.pending = append(b.pending, op)
-	return nil
+	return b.queue(BatchDepAdd(fromID, toID, depType))
 }
 
 // QueueDepRemove buffers a dependency removal.
 func (b *Beads) QueueDepRemove(fromID, toID string) error {
-	op := BatchDepRemove(fromID, toID)
-	if _, err := op.Render(); err != nil {
-		return err
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.pending = append(b.pending, op)
-	return nil
+	return b.queue(BatchDepRemove(fromID, toID))
 }
 
 // FlushWrites applies every queued write in one bd batch transaction: one
@@ -599,10 +576,17 @@ func decodeOneIssue(data json.RawMessage) (Issue, error) {
 // classification.
 func exitText(err error) string {
 	var exitErr *ExitError
-	if !errorAs(err, &exitErr) {
+	if !errors.As(err, &exitErr) {
 		return err.Error()
 	}
 	return exitErr.Stdout + exitErr.Stderr
+}
+
+// ExitOutput returns a failed bd command's combined output for
+// message-based classification. Non-exit errors render as their message
+// text.
+func ExitOutput(err error) string {
+	return exitText(err)
 }
 
 // compile-time interface check.
