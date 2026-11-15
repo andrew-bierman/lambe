@@ -161,6 +161,11 @@ type Flusher interface {
 // per beat round; the rest of a large claim set waits for the next beats.
 const heartbeatConcurrency = 4
 
+// heartbeatRoundBound is the wall-clock bound of one whole beat round: the
+// dispatch read plus every bounded-concurrency beat. A hung tracker call
+// fails the round instead of stretching it across beat intervals.
+const heartbeatRoundBound = 30 * time.Second
+
 // WriteCounter reports how many writes are queued awaiting the next
 // flush. *tracker.Local satisfies it through its embedded Beads; the tick
 // cycle uses it to skip the hub push after a write-free tick.
@@ -215,8 +220,12 @@ func HeartbeatLoop(ctx context.Context, tr tracker.Tracker, actor string, interv
 				tick = next
 				ticker.Reset(tick)
 			}
-			issues, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}})
+			// One round, wall-clock bounded: a hung tracker call fails
+			// the round and the next beat retries it.
+			roundCtx, roundCancel := context.WithTimeout(ctx, heartbeatRoundBound)
+			issues, err := tr.Dispatchable(roundCtx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}})
 			if err != nil {
+				roundCancel()
 				log.Warn("heartbeat dispatch read failed",
 					"category", ErrorCategory(err), "error", err)
 				continue
@@ -235,7 +244,7 @@ func HeartbeatLoop(ctx context.Context, tr tracker.Tracker, actor string, interv
 				go func(id string) {
 					defer wg.Done()
 					defer func() { <-sem }()
-					if err := tr.Heartbeat(ctx, id); err != nil {
+					if err := tr.Heartbeat(roundCtx, id); err != nil {
 						if errors.Is(err, tracker.ErrNotOwner) {
 							log.Info("heartbeat lost claim", "issue", id, "category", CategoryLease)
 							return
@@ -246,6 +255,7 @@ func HeartbeatLoop(ctx context.Context, tr tracker.Tracker, actor string, interv
 				}(issue.ID)
 			}
 			wg.Wait()
+			roundCancel()
 		}
 	}
 }

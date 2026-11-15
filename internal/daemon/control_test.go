@@ -20,7 +20,7 @@ func TestControlAdapterSpawnRegistersRun(t *testing.T) {
 	ctl := &ControlAdapter{Registry: reg, Tracker: tr}
 
 	h, err := ctl.SpawnRun(context.Background(), mcp.RunSpec{
-		IssueID: "feat-1", Prompt: "do the thing\nmore context", Depth: 1,
+		IssueID: "feat-1", Prompt: "do the thing\nmore context", Depth: 0,
 	})
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
@@ -33,6 +33,10 @@ func TestControlAdapterSpawnRegistersRun(t *testing.T) {
 	if !ok || run.State != mcp.StatePending {
 		t.Fatalf("run after spawn = %+v, ok=%v", run, ok)
 	}
+	// Depth authority: the daemon derives run depth = caller depth + 1.
+	if run.Depth != 1 {
+		t.Errorf("registered depth = %d, want daemon-derived 1", run.Depth)
+	}
 	if _, ok := tr.issues["feat-1"]; !ok {
 		t.Error("spawn must ensure the tracker issue exists")
 	}
@@ -43,6 +47,37 @@ func TestControlAdapterSpawnRegistersRun(t *testing.T) {
 	}
 	if st.State != mcp.StatePending || st.Attempt != 1 {
 		t.Errorf("status = %+v, want pending attempt 1", st)
+	}
+}
+
+func TestControlAdapterRefusesOverDepthSpawn(t *testing.T) {
+	t.Parallel()
+	reg := NewRunRegistry(nil, nil)
+	ctl := &ControlAdapter{Registry: reg, Tracker: newFakeTracker()}
+
+	// Default max depth is 1: a caller already at depth 1 cannot spawn.
+	_, err := ctl.SpawnRun(context.Background(), mcp.RunSpec{IssueID: "deep", Prompt: "p", Depth: 1})
+	if err == nil {
+		t.Fatal("spawn from a depth-1 context must be refused")
+	}
+	var depthErr *mcp.DepthError
+	if !errors.As(err, &depthErr) || depthErr.CallerDepth != 1 || depthErr.MaxDepth != mcp.DefaultMaxDepth {
+		t.Errorf("refusal = %v, want *mcp.DepthError{caller 1, max %d}", err, mcp.DefaultMaxDepth)
+	}
+	if _, ok := reg.Lookup("deep"); ok {
+		t.Error("refused spawn must not register a run")
+	}
+
+	// An explicit ceiling raises the bar symmetrically.
+	ctl.MaxDepth = 3
+	if _, err := ctl.SpawnRun(context.Background(), mcp.RunSpec{IssueID: "ok", Prompt: "p", Depth: 2}); err != nil {
+		t.Fatalf("spawn at caller depth 2 under max 3: %v", err)
+	}
+	if run, _ := reg.Lookup("ok"); run.Depth != 3 {
+		t.Errorf("registered depth = %d, want 3", run.Depth)
+	}
+	if _, err := ctl.SpawnRun(context.Background(), mcp.RunSpec{IssueID: "toodeep", Prompt: "p", Depth: 3}); err == nil {
+		t.Fatal("spawn from a context at the max depth must be refused")
 	}
 }
 

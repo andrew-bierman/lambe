@@ -13,50 +13,50 @@ func TestDetect(t *testing.T) {
 		exitCode  int
 		runErr    error
 		wantAvail bool
-		wantWhy   string
+		wantWhy   Reason
 	}{
 		{
 			name:      "rex session env present",
 			env:       map[string]string{"REX_SESSION": "s-1"},
 			wantAvail: true,
-			wantWhy:   "env",
+			wantWhy:   ReasonEnv,
 		},
 		{
 			name:      "rex server env present",
 			env:       map[string]string{"REX_SERVER": "sock"},
 			wantAvail: true,
-			wantWhy:   "env",
+			wantWhy:   ReasonEnv,
 		},
 		{
 			name:      "probe exit 0",
 			exitCode:  0,
 			wantAvail: true,
-			wantWhy:   "probe",
+			wantWhy:   ReasonProbe,
 		},
 		{
 			name:      "probe exit 4 means rex absent",
 			exitCode:  4,
 			wantAvail: false,
-			wantWhy:   "absent",
+			wantWhy:   ReasonAbsent,
 		},
 		{
 			name:      "probe other exit is inconclusive unavailable",
 			exitCode:  2,
 			wantAvail: false,
-			wantWhy:   "probe failed",
+			wantWhy:   ReasonProbeFailed,
 		},
 		{
 			name:      "probe exec error",
 			runErr:    errors.New("no such file"),
 			wantAvail: false,
-			wantWhy:   "probe failed",
+			wantWhy:   ReasonProbeFailed,
 		},
 		{
 			name:      "env wins without probe",
 			env:       map[string]string{"REX_SESSION": "s-1"},
 			exitCode:  4,
 			wantAvail: true,
-			wantWhy:   "env",
+			wantWhy:   ReasonEnv,
 		},
 	}
 	for _, tt := range tests {

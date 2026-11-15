@@ -79,9 +79,9 @@ func (e *Escalator) RecordGateError(ctx context.Context, issue string) (bool, er
 }
 
 // RecordDeferral increments the consecutive gate-deferral counter and
-// reports whether the threshold was reached.
+// reports whether the deferral threshold was reached.
 func (e *Escalator) RecordDeferral(ctx context.Context, issue string) (bool, error) {
-	return e.record(ctx, issue, MetaGateDeferrals, e.threshold())
+	return e.record(ctx, issue, MetaGateDeferrals, e.deferralThreshold())
 }
 
 // ResetCounters zeroes both counters after a decided gate.
@@ -97,10 +97,21 @@ func (e *Escalator) ResetCounters(ctx context.Context, issue string) error {
 	return nil
 }
 
-// threshold resolves the configured escalation threshold with its default.
+// threshold resolves the configured gate-error threshold with its
+// default.
 func (e *Escalator) threshold() int {
 	if e.ErrorThreshold > 0 {
 		return e.ErrorThreshold
+	}
+	return DefaultEscalationThreshold
+}
+
+// deferralThreshold resolves the configured deferral threshold with its
+// default. It is consulted independently of ErrorThreshold so the two
+// streaks can escalate at different points.
+func (e *Escalator) deferralThreshold() int {
+	if e.DeferThreshold > 0 {
+		return e.DeferThreshold
 	}
 	return DefaultEscalationThreshold
 }

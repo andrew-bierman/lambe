@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -117,6 +118,10 @@ type Daemon struct {
 	loop    Ticker
 	flusher Flusher
 	poking  atomic.Bool
+	// cycleMu serializes cycles: the Symphony loop requires one tick at a
+	// time, so the poke path must never interleave with (or run beside) a
+	// tick cycle.
+	cycleMu sync.Mutex
 	// tickCount counts completed non-immediate cycles and drives the
 	// report-cache refresh cadence.
 	tickCount atomic.Int64
@@ -131,6 +136,27 @@ func (d *Daemon) Registry() *RunRegistry { return d.asm.Registry }
 // for the MCP server surface to proxy tool calls into.
 func (d *Daemon) Control() mcp.Control {
 	return &ControlAdapter{Registry: d.asm.Registry, Tracker: d.primary, Log: d.log}
+}
+
+// OpenControl assembles the control stack without a daemon life: it opens
+// the configured trackers, takes no state lock, and starts no tick loop or
+// heartbeats. It is the constructor behind `lambe mcp` — an MCP server
+// process proxies tool calls into the returned control, whose spawns
+// register runs in the registry the running daemon's next tick dispatches.
+// The returned release func drops the assembled stack; trackers are
+// shell-transport locals that need no explicit close today.
+func OpenControl(ctx context.Context, opts Options) (mcp.Control, func(), error) {
+	opts.WorkflowPath = "" // no loop, no workflow
+	d, err := New(opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	trackers, err := d.trackers(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	control := &ControlAdapter{Registry: d.asm.Registry, Tracker: trackers[0], Log: d.log}
+	return control, func() {}, nil
 }
 
 // StateSource returns the httpstate.StateSource adapter over the daemon's
@@ -395,9 +421,16 @@ func (d *Daemon) tickCycle(ctx context.Context) {
 // "poke") labeling its log lines. immediate marks the poke path: its push
 // and report refresh run unconditionally, while the tick path skips the
 // hub push when the tick queued no writes and refreshes the report cache
-// only on the reportRefreshTicks cadence. Every failure is logged with its
-// category and the daemon keeps running.
+// only on the reportRefreshTicks cadence. Cycles are serialized (the loop
+// requires non-interleaved ticks) and wall-clock bounded by cycleBound so a
+// hung tracker call cannot wedge the cadence. Every failure is logged with
+// its category and the daemon keeps running.
 func (d *Daemon) cycle(ctx context.Context, prefix string, immediate bool) {
+	d.cycleMu.Lock()
+	defer d.cycleMu.Unlock()
+	cctx, cancel := context.WithTimeout(ctx, d.cycleBound())
+	defer cancel()
+	ctx = cctx
 	if err := d.asm.Sync.Pull(ctx); err != nil {
 		d.log.Warn(prefix+": hub pull failed, continuing on local state",
 			"category", ErrorCategory(err), "error", err)
@@ -429,6 +462,21 @@ func (d *Daemon) cycle(ctx context.Context, prefix string, immediate bool) {
 	if immediate || d.tickCount.Add(1)%reportRefreshTicks == 1 {
 		d.refreshReport(ctx)
 	}
+}
+
+// cycleBound is the wall-clock bound of one daemon cycle: half the silence
+// timeout, never below a minute, so a hung tracker or hub call fails the
+// cycle instead of wedging the tick cadence. A daemon without a resolved
+// config uses the minute floor.
+func (d *Daemon) cycleBound() time.Duration {
+	bound := time.Duration(0)
+	if d.opts.Config != nil {
+		bound = d.opts.Config.Supervisor.SilenceTimeout / 2
+	}
+	if bound < time.Minute {
+		bound = time.Minute
+	}
+	return bound
 }
 
 // refreshReport rebuilds the morning report from the primary tracker into

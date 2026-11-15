@@ -117,6 +117,9 @@ func New(source StateSource, ln net.Listener) *Server {
 	mux.HandleFunc("GET /api/v1/state", s.handleState)
 	mux.HandleFunc("GET /api/v1/{issue}", s.handleIssue)
 	mux.HandleFunc("POST /api/v1/refresh", s.handleRefresh)
+	mux.HandleFunc("GET /api/v1/refresh", s.methodNotAllowed)
+	mux.HandleFunc("POST /api/v1/state", s.methodNotAllowed)
+	mux.HandleFunc("/", s.jsonNotFound)
 	s.http = &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -227,6 +230,26 @@ func (s *Server) handleRefresh(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusAccepted, RefreshResponse{
 		SchemaVersion: SchemaVersion,
 		Accepted:      true,
+	})
+}
+
+// methodNotAllowed answers a known endpoint reached with the wrong method,
+// so the error still uses the ErrorResponse DTO.
+func (s *Server) methodNotAllowed(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusMethodNotAllowed, ErrorResponse{
+		SchemaVersion: SchemaVersion,
+		Error:         "method_not_allowed",
+		Message:       "wrong method for this endpoint",
+	})
+}
+
+// jsonNotFound is the catch-all: every unmatched route gets the
+// ErrorResponse DTO rather than the net/http plaintext 404.
+func (s *Server) jsonNotFound(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusNotFound, ErrorResponse{
+		SchemaVersion: SchemaVersion,
+		Error:         "not_found",
+		Message:       "unknown route",
 	})
 }
 

@@ -8,8 +8,8 @@
 # Anatomy (what lambe actually parses):
 #   [trigger] command — run under `sh -lc` with the formula's directory as
 #     cwd; a NON-ZERO exit means the trigger fired. Exit 0 = all quiet.
-#   [gate] type/ref — the verified-completion gate judged on a settled turn.
-#     type "gh:run" requires `ref` (a workflow ref, run id, or branch);
+#   [gate] type/pr — the verified-completion gate judged on a settled turn.
+#     type "gh:pr" requires `pr` (a pull-request number, url, or branch);
 #     the CI status of the PR head is what counts.
 #
 # Parameterize per repo by exporting LAMBE_GH_REPO (default: this repo's
@@ -36,13 +36,15 @@ run = 'gh run list --repo "${LAMBE_GH_REPO:-.}" --branch "${LAMBE_CI_BRANCH:-mai
 run = "git checkout -b fix/ci-${LAMBE_CI_BRANCH:-main}-$$ && commit-fix && gh pr create --fill"
 
 [gate]
-# Verified completion: the GitHub Actions run on the PR head must conclude
-# successfully. Judging CI on the pushed head — not on the agent's word or
-# its local test run — is what prevents same-commit gaming: the check runs
-# on GitHub's machines against the exact merge candidate.
+# Verified completion: the GitHub Actions checks on the PR head must
+# conclude successfully. Judging CI on the pushed head — not on the agent's
+# word or its local test run — is what prevents same-commit gaming: the
+# check runs on GitHub's machines against the exact merge candidate.
 #
 # NOTE: unlike the trigger (which runs under sh -lc and so expands $VAR),
-# the gate ref is passed verbatim to `gh run view <ref>`. Use a literal
-# branch name here — no environment parameterization.
-type = "gh:run"
-ref = "main"
+# the gate pr is passed verbatim to `gh pr view`. Use a literal branch
+# name here — no environment parameterization. This default points at the
+# repo's working branch; set it to the branch (or number/url) of the PR
+# the fix attempt actually opens.
+type = "gh:pr"
+pr = "feat/lambe-slice-one"

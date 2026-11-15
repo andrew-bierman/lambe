@@ -29,6 +29,18 @@ type ShellTransport struct {
 	// Env carries extra environment entries (KEY=VALUE) appended after the
 	// transport's own BD_JSON_ENVELOPE and BEADS_ACTOR.
 	Env []string
+	// CommandTimeout bounds each bd invocation; zero or negative means
+	// DefaultCommandTimeout. A call whose bd subprocess outlives the bound
+	// fails with (an error wrapping) context.DeadlineExceeded.
+	CommandTimeout time.Duration
+}
+
+// commandTimeout resolves the effective per-call bound.
+func (t *ShellTransport) commandTimeout() time.Duration {
+	if t.CommandTimeout > 0 {
+		return t.CommandTimeout
+	}
+	return DefaultCommandTimeout
 }
 
 // NewShellTransport returns a subprocess transport for the bd binary at bin
@@ -37,9 +49,18 @@ func NewShellTransport(bin, dir, actor string) *ShellTransport {
 	return &ShellTransport{Bin: bin, Dir: dir, Actor: actor}
 }
 
-// run executes one bd invocation and splits success from exit failure.
+// run executes one bd invocation under the per-call timeout bound and
+// splits success from exit failure. A subprocess killed by the bound
+// surfaces as an error wrapping context.DeadlineExceeded so callers can
+// classify it (the daemon maps it to CategoryUnavailable).
 func (t *ShellTransport) run(ctx context.Context, args []string, extraEnv ...string) (Result, error) {
-	cmd := exec.CommandContext(ctx, t.Bin, args...) // #nosec G204 -- args are constructed in this package from typed requests, never user input
+	callCtx, cancel := context.WithTimeout(ctx, t.commandTimeout())
+	defer cancel()
+	cmd := exec.CommandContext(callCtx, t.Bin, args...) // #nosec G204 -- args are constructed in this package from typed requests, never user input
+	// A killed bd's orphaned descendants can inherit the stdout pipe and
+	// hold it open; WaitDelay stops Wait from blocking on them after the
+	// process (or the deadline) is gone.
+	cmd.WaitDelay = time.Second
 	cmd.Dir = t.Dir
 	env := append([]string{"BD_JSON_ENVELOPE=1"}, t.Env...)
 	env = append(env, extraEnv...)
@@ -52,6 +73,9 @@ func (t *ShellTransport) run(ctx context.Context, args []string, extraEnv ...str
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	if err != nil {
+		if cerr := callCtx.Err(); cerr != nil {
+			return Result{}, fmt.Errorf("run bd %s: %w", strings.Join(args, " "), cerr)
+		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			return Result{}, &ExitError{Code: exitErr.ExitCode(), Stdout: stdout.String(), Stderr: stderr.String()}

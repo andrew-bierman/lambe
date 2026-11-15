@@ -13,6 +13,7 @@ import (
 	"github.com/andrew-bierman/lambe/internal/config"
 	"github.com/andrew-bierman/lambe/internal/daemon"
 	"github.com/andrew-bierman/lambe/internal/logging"
+	"github.com/andrew-bierman/lambe/internal/mcp"
 )
 
 // Build information, overridable at link time via -ldflags.
@@ -27,6 +28,7 @@ const usage = `lambe is the supervisor daemon for autonomous coding agents.
 usage:
   lambe run     [-config FILE] run the supervisor daemon until SIGTERM/SIGINT
   lambe status  [-config FILE] print the morning report
+  lambe mcp     [-config FILE] serve lambe's MCP tools over stdio
   lambe version print build information
 `
 
@@ -47,6 +49,11 @@ func main() {
 	case "status":
 		if err := runStatus(args[1:]); err != nil {
 			logging.Default().Error("lambe status failed", "error", err.Error())
+			os.Exit(1)
+		}
+	case "mcp":
+		if err := runMCP(args[1:]); err != nil {
+			logging.Default().Error("lambe mcp failed", "error", err.Error())
 			os.Exit(1)
 		}
 	default:
@@ -98,6 +105,27 @@ func runDaemon(args []string) error {
 func runStatus(args []string) error {
 	cfg, _ := parseCommon(args)
 	return daemon.Status(os.Stdout, cfg, daemon.DefaultMachine())
+}
+
+// runMCP serves lambe's MCP tools over stdio: it assembles the daemon's
+// control stack (trackers plus the live-run registry) without starting the
+// tick loop, then proxies tool calls into it. The daemon proper may be
+// running separately; spawns register runs its next tick dispatches.
+func runMCP(args []string) error {
+	cfg, _ := parseCommon(args)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	control, release, err := daemon.OpenControl(ctx, daemon.Options{
+		Config:   cfg,
+		StateDir: daemon.DefaultStateDir(),
+		Machine:  daemon.DefaultMachine(),
+		Log:      logging.Default(),
+	})
+	if err != nil {
+		return err
+	}
+	defer release()
+	return mcp.New(control, mcp.Options{Env: os.Environ()}).ServeStdio(ctx, os.Stdin, os.Stdout)
 }
 
 // exitCodeFor maps daemon errors to process exit codes: lock contention is

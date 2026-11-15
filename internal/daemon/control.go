@@ -25,6 +25,9 @@ type ControlAdapter struct {
 	Registry *RunRegistry
 	// Tracker is the primary tracker; spawns ensure their issue exists.
 	Tracker tracker.Tracker
+	// MaxDepth is the highest supervision depth a spawned run may run at;
+	// zero or negative means mcp.DefaultMaxDepth.
+	MaxDepth int
 	// Log receives cancel outcomes; nil uses the default logger.
 	Log *slog.Logger
 }
@@ -35,12 +38,29 @@ var _ mcp.Control = (*ControlAdapter)(nil)
 // SpawnRun registers a new supervised run: the issue is ensured in the
 // tracker (idempotent) and a pending run is recorded under the issue id as
 // its handle. The next tick dispatches it. It returns immediately.
+//
+// Depth authority lives here, not in the client: spec.Depth is the calling
+// context's depth, and the run's effective depth is derived as spec.Depth+1
+// against the configured maximum — a spawn requested from a context at or
+// over the maximum is refused with an *mcp.DepthError rather than
+// registered. The derived depth is recorded on the registered Run (run.Depth)
+// and is the value the harness env assembly must export to the child as
+// mcp.DepthEnvVar (LAMBE_DEPTH); the client-supplied value is never used
+// as the run's depth.
 func (a *ControlAdapter) SpawnRun(ctx context.Context, spec mcp.RunSpec) (mcp.RunHandle, error) {
 	if a.Registry == nil || a.Tracker == nil {
 		return mcp.RunHandle{}, errors.New("daemon control: registry and tracker are required")
 	}
 	if spec.IssueID == "" {
 		return mcp.RunHandle{}, errors.New("daemon control: issue id is required")
+	}
+	maxDepth := a.MaxDepth
+	if maxDepth < 1 {
+		maxDepth = mcp.DefaultMaxDepth
+	}
+	runDepth := spec.Depth + 1
+	if runDepth > maxDepth {
+		return mcp.RunHandle{}, &mcp.DepthError{CallerDepth: spec.Depth, MaxDepth: maxDepth}
 	}
 	title := spec.Prompt
 	if title == "" {
@@ -49,11 +69,11 @@ func (a *ControlAdapter) SpawnRun(ctx context.Context, spec mcp.RunSpec) (mcp.Ru
 	if _, err := a.Tracker.EnsureIssue(ctx, spec.IssueID, tracker.IssueSpec{
 		Title:    firstLine(title),
 		Priority: 2,
-		Metadata: map[string]string{"lambe_spawn_depth": fmt.Sprintf("%d", spec.Depth)},
+		Metadata: map[string]string{"lambe_spawn_depth": fmt.Sprintf("%d", runDepth)},
 	}); err != nil {
 		return mcp.RunHandle{}, fmt.Errorf("ensure issue %s: %w", spec.IssueID, err)
 	}
-	a.Registry.Register(spec.IssueID, "issues", spec.Prompt, spec.Workspace, spec.Depth)
+	a.Registry.Register(spec.IssueID, "issues", spec.Prompt, spec.Workspace, runDepth)
 	return mcp.NewRunHandle(spec.IssueID), nil
 }
 
@@ -64,6 +84,7 @@ func (a *ControlAdapter) RunStatus(_ context.Context, handle mcp.RunHandle) (mcp
 		return mcp.RunStatus{}, fmt.Errorf("unknown run %q", handle.String())
 	}
 	return mcp.RunStatus{
+		IssueID:     run.IssueID,
 		State:       run.State,
 		Attempt:     run.Attempt,
 		LastEventAt: run.LastEventAt,

@@ -235,18 +235,6 @@ func unmarshalStrict(data string, v any) error {
 // hygiene.
 func trimSpace(s string) string { return strings.TrimSpace(s) }
 
-// firstLine returns the first line of s, capped, for defer reasons.
-func firstLine(s string) string {
-	line := s
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		line = s[:i]
-	}
-	if len(line) > 120 {
-		line = line[:120]
-	}
-	return line
-}
-
 // compile-time interface checks.
 var (
 	_ Hub = (*BdHub)(nil)

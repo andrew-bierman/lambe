@@ -18,6 +18,13 @@ import (
 type Orphan struct {
 	PGID      int
 	SessionID string
+	// StartTime is the group leader's /proc/<pid>/stat field 22 recorded
+	// at spawn time. It is the identity check that makes the recorded
+	// pgid safe to kill: pids are recycled, so a stale pgid without a
+	// matching starttime may point at an unrelated process. Zero means no
+	// starttime was recorded, in which case recovery cannot verify the
+	// group and stands down without killing.
+	StartTime uint64
 }
 
 // OrphanSource yields the persisted pgid/session bindings left behind by a
@@ -61,6 +68,14 @@ func Recover(ctx context.Context, src OrphanSource, tr tracker.Tracker, actor st
 			continue
 		}
 		if !ok || !symphony.StatusActive(issue.Status) {
+			// Identity check before any kill: the recorded pgid is only
+			// safe to signal when the group leader's starttime still
+			// matches the one recorded at spawn. Anything unverifiable —
+			// no recorded starttime (non-Linux persist, older records), a
+			// gone or unreadable leader, a recycled pid — is a stand-down.
+			if !orphanIdentityHolds(log, o) {
+				continue
+			}
 			log.Info("orphan issue gone or terminal, killing group", "pgid", o.PGID, "session", o.SessionID)
 			killCtx, cancel := context.WithTimeout(ctx, grace)
 			kerr := proc.TerminateGroup(killCtx, o.PGID, grace)
@@ -92,6 +107,34 @@ func Recover(ctx context.Context, src OrphanSource, tr tracker.Tracker, actor st
 	return adopted, nil
 }
 
+// orphanIdentityHolds reports whether the orphan's recorded group identity
+// still matches the live kernel state: the group leader's /proc starttime
+// equals the recorded one. On any mismatch or unverifiable reading it logs
+// a stand-down and returns false — the daemon never kills a group it
+// cannot prove is the one it spawned. A leader that is simply gone is
+// also a stand-down (the ladder is unnecessary but unprovable; a later
+// reap or the next boot clears it).
+func orphanIdentityHolds(log *slog.Logger, o Orphan) bool {
+	if o.StartTime == 0 {
+		log.Warn("orphan kill refused: no recorded starttime to verify pgid against, standing down",
+			"pgid", o.PGID, "session", o.SessionID)
+		return false
+	}
+	live, ok := procStartTime(o.PGID)
+	if !ok {
+		log.Warn("orphan kill refused: group leader starttime unreadable, standing down",
+			"pgid", o.PGID, "session", o.SessionID)
+		return false
+	}
+	if live != o.StartTime {
+		log.Warn("orphan kill refused: pgid starttime mismatch (recycled pid?), standing down",
+			"pgid", o.PGID, "session", o.SessionID,
+			"recorded_starttime", o.StartTime, "live_starttime", live)
+		return false
+	}
+	return true
+}
+
 // lookupIssue reads one issue by id, reporting whether it still exists in
 // an answerable state.
 func lookupIssue(ctx context.Context, tr tracker.Tracker, id string) (tracker.Issue, bool, error) {
@@ -109,13 +152,20 @@ func lookupIssue(ctx context.Context, tr tracker.Tracker, id string) (tracker.Is
 
 // TrackerOrphans is the default OrphanSource: it derives orphans from the
 // tracker's own attempt records — the newest attempt of every in-progress
-// session that carries a persisted pgid.
+// session that carries a persisted pgid. One session's failing Attempts
+// read is logged and skipped; it never aborts the recovery of the others.
 type TrackerOrphans struct {
 	Tracker tracker.Tracker
+	// Log receives per-session skip warnings; nil uses the default logger.
+	Log *slog.Logger
 }
 
 // Orphans implements OrphanSource.
 func (t TrackerOrphans) Orphans(ctx context.Context) ([]Orphan, error) {
+	log := t.Log
+	if log == nil {
+		log = slog.Default()
+	}
 	issues, err := t.Tracker.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}})
 	if err != nil {
 		return nil, fmt.Errorf("read in-progress sessions: %w", err)
@@ -124,7 +174,9 @@ func (t TrackerOrphans) Orphans(ctx context.Context) ([]Orphan, error) {
 	for _, issue := range issues {
 		attempts, err := t.Tracker.Attempts(ctx, issue.ID)
 		if err != nil {
-			return nil, fmt.Errorf("read attempts for %s: %w", issue.ID, err)
+			log.Warn("orphan scan: attempts read failed, skipping session",
+				"session", issue.ID, "category", ErrorCategory(err), "error", err)
+			continue
 		}
 		for i := len(attempts) - 1; i >= 0; i-- {
 			if attempts[i].PGID > 0 {

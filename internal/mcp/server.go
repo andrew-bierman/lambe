@@ -28,8 +28,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
+	"unicode"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -95,15 +95,20 @@ func ParseRunHandle(s string) (RunHandle, error) {
 	if s == "" {
 		return RunHandle{}, fmt.Errorf("empty run handle")
 	}
-	if strings.ContainsAny(s, " \t\r\n") {
-		return RunHandle{}, fmt.Errorf("malformed run handle")
+	for _, r := range s {
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			return RunHandle{}, fmt.Errorf("malformed run handle")
+		}
 	}
 	return RunHandle{s}, nil
 }
 
 // RunSpec describes one supervised run the daemon should register. Depth
-// is the supervision depth the spawned agent will run at; the daemon
-// exports it to the child as LAMBE_DEPTH.
+// is the supervision depth of the calling context — the agent requesting
+// the spawn — as the server observed it from its inherited environment.
+// The daemon, not the client, derives the spawned run's depth (calling
+// depth + 1) and refuses spawns from contexts at or over the configured
+// maximum; a client cannot nominate its own run depth.
 type RunSpec struct {
 	// IssueID identifies the tracker issue the run works on.
 	IssueID string
@@ -111,8 +116,9 @@ type RunSpec struct {
 	Prompt string
 	// Workspace is the working directory for the run.
 	Workspace string
-	// Depth is the supervision depth of the spawned agent (1 for a run
-	// spawned by a top-level agent).
+	// Depth is the calling context's supervision depth (0 for a
+	// human-started caller, 1 for an agent started by that agent, and so
+	// on). The daemon registers the run at Depth+1.
 	Depth int
 }
 
@@ -120,6 +126,10 @@ type RunSpec struct {
 type RunStatus struct {
 	// State is the run's lifecycle state.
 	State RunState
+	// IssueID is the tracker issue the run works on, when known. The
+	// daemon's control adapter populates it so single-run status calls can
+	// report it without a list round trip.
+	IssueID string
 	// Attempt is the current attempt number, starting at 1.
 	Attempt int
 	// LastEventAt is when the run last produced an event; zero when
@@ -180,7 +190,9 @@ type RunInfo struct {
 // with a live context from a tool call.
 type Control interface {
 	// SpawnRun registers a new supervised run and returns its handle
-	// immediately.
+	// immediately. spec.Depth is the calling context's depth; the
+	// implementation derives the run's depth (Depth+1) authoritatively and
+	// must refuse spawns from contexts at or over the configured maximum.
 	SpawnRun(ctx context.Context, spec RunSpec) (RunHandle, error)
 	// RunStatus returns the run's current typed snapshot.
 	RunStatus(ctx context.Context, handle RunHandle) (RunStatus, error)

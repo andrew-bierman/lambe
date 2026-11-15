@@ -159,9 +159,52 @@ func TestRoutes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_ = resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusMethodNotAllowed {
 			t.Errorf("POST state status = %d, want 405", resp.StatusCode)
+		}
+		var got ErrorResponse
+		if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+			t.Fatalf("decode error body: %v", err)
+		}
+		if got.Error != "method_not_allowed" {
+			t.Errorf("POST state error DTO: %+v", got)
+		}
+	})
+
+	t.Run("GET refresh is method not allowed with DTO", func(t *testing.T) {
+		resp, err := http.Get(base + "/api/v1/refresh")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("GET refresh status = %d, want 405", resp.StatusCode)
+		}
+		var got ErrorResponse
+		if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+			t.Fatalf("decode error body: %v", err)
+		}
+		if got.Error != "method_not_allowed" || got.Message == "" {
+			t.Errorf("GET refresh error DTO: %+v", got)
+		}
+	})
+
+	t.Run("unknown path is 404 with DTO", func(t *testing.T) {
+		resp, err := http.Get(base + "/api/v1/nope")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("unknown path status = %d, want 404", resp.StatusCode)
+		}
+		var got ErrorResponse
+		if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+			t.Fatalf("decode error body: %v", err)
+		}
+		if got.Error != "not_found" || got.Message == "" {
+			t.Errorf("unknown path error DTO: %+v", got)
 		}
 	})
 }

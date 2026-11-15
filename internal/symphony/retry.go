@@ -41,15 +41,18 @@ func FailureBackoff(attempt int, maxDelay time.Duration) time.Duration {
 	return delay
 }
 
-// RetryKind distinguishes the two retry paths: a failed attempt backs off
+// RetryKind distinguishes the retry paths: a failed attempt backs off
 // exponentially and consumes the next attempt number; a continuation retry
-// fires 1s after a normal exit and reuses the attempt.
+// fires 1s after a normal exit and reuses the attempt; a gate retry
+// re-evaluates the gate on the stored settled output without re-prompting
+// the agent or consuming the attempt.
 type RetryKind int
 
 // The retry kinds.
 const (
 	RetryFailure RetryKind = iota
 	RetryContinuation
+	RetryGate
 )
 
 // Retry is one scheduled re-entry of a supervised issue.

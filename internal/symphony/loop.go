@@ -25,6 +25,18 @@ type AgentRunner interface {
 	RunTurn(ctx context.Context, req TurnRequest) (TurnResult, error)
 }
 
+// SessionCloser is the optional runner teardown seam: runners that hold
+// per-session resources (agent processes) implement it so the loop can
+// release them when supervision of a session pauses (deferred turn, gate
+// retry) or ends (terminal transition). The next turn for the issue
+// reconstructs its resources from the session's durable state.
+type SessionCloser interface {
+	// CloseSession releases every resource the runner holds for the
+	// session. It must be a no-op for a session with no live resources
+	// and must not block unboundedly.
+	CloseSession(ctx context.Context, sessionID string)
+}
+
 // TurnRequest is one turn of an attempt.
 type TurnRequest struct {
 	SessionID string
@@ -151,12 +163,20 @@ func LoadFormulas(dir string) ([]Formula, error) {
 
 // TriggerFired evaluates a formula trigger: the command runs under sh -lc
 // with the formula's directory as cwd, and a non-zero exit means fired.
+// Exit codes 126 and 127 are infrastructure failures (the command cannot
+// be executed or found — a broken PATH, a missing gh), not a fired
+// trigger: they return an error so the caller logs the trigger
+// unavailable instead of materializing work on every tick.
 func TriggerFired(ctx context.Context, f Formula) (bool, error) {
 	cmd := exec.CommandContext(ctx, "sh", "-lc", f.Command) // #nosec G204 -- trigger commands are operator-authored formula configuration
 	cmd.Dir = filepath.Dir(f.Path)
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
+			switch exitErr.ExitCode() {
+			case 126, 127:
+				return false, fmt.Errorf("trigger %s exited %d (command not executable or not found): %w", f.Name, exitErr.ExitCode(), err)
+			}
 			return true, nil
 		}
 		return false, fmt.Errorf("run trigger for %s: %w", f.Name, err)
@@ -202,13 +222,18 @@ func (m *BeadsMaterializer) Materialize(ctx context.Context, f Formula) error {
 // session is one supervised issue: the pinned workflow revision, the
 // attempt counter, the live thread, and the workspace key.
 type session struct {
-	issue    tracker.Issue
-	wf       *Workflow
-	attempt  int
-	turn     int
-	thread   string
-	lastGate string
-	key      string
+	issue     tracker.Issue
+	wf        *Workflow
+	attempt   int
+	turn      int
+	thread    string
+	lastGate  string
+	key       string
+	workspace string
+	// gateOutput holds the settled output between a gate error and its
+	// gate-only re-evaluation, so the agent is never re-prompted while the
+	// gate retries on the same output.
+	gateOutput string
 }
 
 // Loop is the tick orchestrator: formula triggers, the two-read dispatch,
@@ -317,6 +342,11 @@ func (l *Loop) serviceRetries(ctx context.Context) error {
 			l.terminal(ctx, s, "retry found terminal state")
 			continue
 		}
+		if r.Kind == RetryGate {
+			logging.WithIssue(l.Log, s.issue.ID).Info("gate retry, re-evaluating on settled output")
+			l.evaluateGate(ctx, s, s.gateOutput, logging.WithIssue(l.Log, s.issue.ID))
+			continue
+		}
 		l.runAttempt(ctx, s, r.Kind == RetryFailure)
 	}
 	return nil
@@ -338,7 +368,11 @@ func (l *Loop) dispatch(ctx context.Context) error {
 			if errors.Is(err, tracker.ErrLostRace) || errors.Is(err, tracker.ErrFrozen) {
 				continue
 			}
-			return fmt.Errorf("claim %s: %w", issue.ID, err)
+			// One poisoned issue must not starve the rest of the
+			// dispatch front: log it and move on. Only a failure of
+			// the Dispatchable read itself aborts the tick.
+			logging.WithIssue(l.Log, issue.ID).Error("claim failed, continuing with remaining issues", "category", "dispatch", "error", err)
+			continue
 		}
 		wf := l.Loader.Current()
 		s := &session{issue: claimed, wf: wf, key: claimed.ID, turn: 0, attempt: 0}
@@ -366,6 +400,7 @@ func (l *Loop) runAttempt(ctx context.Context, s *session, nextAttempt bool) {
 		l.schedule(s, RetryFailure, l.failureDelay(s.attempt))
 		return
 	}
+	s.workspace = ws.Dir
 
 	if err := l.Spaces.RunBeforeRun(ctx, ws.Dir, wf.Hooks); err != nil {
 		log.Error("before_run failed, attempt aborted", "error", err)
@@ -430,6 +465,7 @@ func (l *Loop) runTurn(ctx context.Context, s *session, ws *Workspace, log *slog
 			return true
 		}
 		log.Info("turn deferred, attempt preserved", "turn", s.turn, "wake_at", until.UTC().Format(time.RFC3339))
+		l.closeRunnerSession(ctx, s.issue.ID)
 		delete(l.sessions, s.issue.ID)
 		return true
 	}
@@ -441,26 +477,7 @@ func (l *Loop) runTurn(ctx context.Context, s *session, ws *Workspace, log *slog
 	}
 
 	if res.Settled {
-		outcome, gerr := l.Gates.Evaluate(ctx, GateRequest{
-			Issue:     s.issue,
-			Attempt:   s.attempt,
-			Workspace: ws.Dir,
-			Revision:  wf.Revision,
-			Output:    res.Output,
-		})
-		if gerr != nil || outcome.Verdict == GateErr {
-			log.Info("gate error, retrying gate without consuming attempt", "error", gerr)
-			l.schedule(s, RetryContinuation, l.ContinuationDelay)
-			return true
-		}
-		if outcome.Verdict == GateRed {
-			log.Info("gate red, scheduling failure retry with gate output")
-			s.lastGate = outcome.Output
-			l.schedule(s, RetryFailure, l.failureDelay(s.attempt))
-			return true
-		}
-		l.terminal(ctx, s, "gate green")
-		return true
+		return l.evaluateGate(ctx, s, res.Output, log)
 	}
 
 	stop, err := Reconcile(ctx, l.Tracker, []string{s.issue.ID})
@@ -501,6 +518,7 @@ func (l *Loop) turnPrompt(s *session) (string, error) {
 func (l *Loop) terminal(ctx context.Context, s *session, reason string) {
 	log := logging.WithIssue(l.Log, s.issue.ID)
 	log.Info("run terminal", "reason", reason)
+	l.closeRunnerSession(ctx, s.issue.ID)
 	if err := l.Spaces.Remove(ctx, s.key, s.wf.Hooks); err != nil {
 		log.Error("terminal workspace cleanup failed", "error", err)
 	}
@@ -513,4 +531,43 @@ func (l *Loop) terminal(ctx context.Context, s *session, reason string) {
 // schedule arms the retry queue for a session's issue.
 func (l *Loop) schedule(s *session, kind RetryKind, delay time.Duration) {
 	l.retries.Add(Retry{IssueID: s.issue.ID, Kind: kind, At: time.Now().Add(delay)})
+}
+
+// closeRunnerSession releases the runner's per-session resources (agent
+// processes) when the runner implements the optional SessionCloser seam.
+// It is a no-op for runners that hold nothing per session.
+// evaluateGate judges a settled attempt's output and routes the verdict:
+// green terminates, red retries with the gate output as guidance, and a
+// gate error schedules a gate-only re-evaluation on the SAME settled
+// output — the agent is never re-prompted for a gate that errored, and
+// the attempt is not consumed.
+func (l *Loop) evaluateGate(ctx context.Context, s *session, output string, log *slog.Logger) bool {
+	outcome, gerr := l.Gates.Evaluate(ctx, GateRequest{
+		Issue:     s.issue,
+		Attempt:   s.attempt,
+		Workspace: s.workspace,
+		Revision:  s.wf.Revision,
+		Output:    output,
+	})
+	if gerr != nil || outcome.Verdict == GateErr {
+		log.Info("gate error, retrying gate without consuming attempt", "error", gerr)
+		l.closeRunnerSession(ctx, s.issue.ID)
+		s.gateOutput = output
+		l.schedule(s, RetryGate, l.ContinuationDelay)
+		return true
+	}
+	if outcome.Verdict == GateRed {
+		log.Info("gate red, scheduling failure retry with gate output")
+		s.lastGate = outcome.Output
+		l.schedule(s, RetryFailure, l.failureDelay(s.attempt))
+		return true
+	}
+	l.terminal(ctx, s, "gate green")
+	return true
+}
+
+func (l *Loop) closeRunnerSession(ctx context.Context, issueID string) {
+	if closer, ok := l.Runner.(SessionCloser); ok {
+		closer.CloseSession(ctx, issueID)
+	}
 }

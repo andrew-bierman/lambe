@@ -155,16 +155,23 @@ func (e *fakeExec) exec(_ context.Context, dir string, argv ...string) (string, 
 	return e.fn(dir, argv)
 }
 
+// fullSha is a stand-in full commit SHA for gate refs in tests.
+const fullSha = "0123456789abcdef0123456789abcdef01234567"
+
 // fakeGH pins one GitHub-side gate condition.
 type fakeGH struct {
-	mu     sync.Mutex
-	result gate.GHResult
-	err    error
+	mu      sync.Mutex
+	result  gate.GHResult
+	err     error
+	head    string
+	headErr error
+	runRef  string
 }
 
-func (g *fakeGH) CheckRun(context.Context, string) (gate.GHResult, error) {
+func (g *fakeGH) CheckRun(_ context.Context, ref string) (gate.GHResult, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.runRef = ref
 	return g.result, g.err
 }
 
@@ -172,6 +179,15 @@ func (g *fakeGH) CheckPR(context.Context, string) (gate.GHResult, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.result, g.err
+}
+
+func (g *fakeGH) ResolvePRHead(context.Context, string) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.head == "" {
+		return fullSha, g.headErr
+	}
+	return g.head, g.headErr
 }
 
 // ---- helpers ----
@@ -207,7 +223,6 @@ func newTestRunner(t *testing.T, dir string, hub *fakeHub, kv *memKV, execFn gat
 	if gh != nil {
 		r.Gh = gh
 	}
-	r.GateRetryDelay = 10 * time.Millisecond
 	return r
 }
 
@@ -237,16 +252,41 @@ func TestParseSpecFile(t *testing.T) {
 		}
 	})
 
-	t.Run("gh run gate accepts ref and run_id", func(t *testing.T) {
-		for _, key := range []string{"ref", "run_id"} {
+	t.Run("gh run gate accepts full sha, run id, or a pr", func(t *testing.T) {
+		cases := []struct {
+			name, key, value string
+			wantRef          string
+		}{
+			{"ref full sha", "ref", fullSha, fullSha},
+			{"ref run id", "ref", "12345", "12345"},
+			{"run_id", "run_id", "12345", "12345"},
+			{"pr only", "pr", "17", ""},
+		}
+		for _, tc := range cases {
 			dir := t.TempDir()
-			path := writeFormula(t, dir, "ci", fmt.Sprintf("type = \"gh:run\"\n%s = \"main\"", key))
+			path := writeFormula(t, dir, "ci", fmt.Sprintf("type = \"gh:run\"\n%s = %q", tc.key, tc.value))
 			spec, err := gate.ParseSpecFile(path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if spec.Config.Kind != gate.KindGhRun || spec.Config.Ref != "main" {
-				t.Fatalf("unexpected config for %s: %+v", key, spec.Config)
+			if spec.Config.Kind != gate.KindGhRun || spec.Config.Ref != tc.wantRef {
+				t.Fatalf("unexpected config for %s: %+v", tc.name, spec.Config)
+			}
+		}
+	})
+
+	t.Run("gh run gate rejects bare branch refs", func(t *testing.T) {
+		for _, ref := range []string{"main", "refs/heads/main", "feature/x", "deadbeef"} {
+			dir := t.TempDir()
+			path := writeFormula(t, dir, "ci", fmt.Sprintf("type = \"gh:run\"\nref = %q", ref))
+			_, err := gate.ParseSpecFile(path)
+			if err == nil {
+				t.Fatalf("ref %q must be rejected", ref)
+			}
+			for _, want := range []string{"bare branch-name ref", `pr = "<number-or-branch>"`, "full-commit-sha"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("ref %q error must mention %q, got: %v", ref, want, err)
+				}
 			}
 		}
 	})
@@ -269,7 +309,7 @@ func TestParseSpecFile(t *testing.T) {
 		}{
 			{"unknown type", "type = \"noise\"", "unknown gate type"},
 			{"shell without command", "type = \"shell\"", "command is required"},
-			{"gh run without ref", "type = \"gh:run\"", "ref is required"},
+			{"gh run without ref or pr", "type = \"gh:run\"", "ref is required"},
 			{"gh pr without pr", "type = \"gh:pr\"", "pr is required"},
 			{"missing type", "command = \"true\"", "type is required"},
 		}
@@ -369,7 +409,7 @@ func TestEvaluateShellGreenClosesAndTombstones(t *testing.T) {
 	}
 }
 
-func TestEvaluateGateInfraErrorDefersWithoutConsumingAttempt(t *testing.T) {
+func TestEvaluateGateInfraErrorReturnsErrWithoutParking(t *testing.T) {
 	dir := t.TempDir()
 	writeFormula(t, dir, "tests", "type = \"shell\"\ncommand = \"go test ./...\"")
 	hub, kv := newFakeHub(), newMemKV()
@@ -385,11 +425,10 @@ func TestEvaluateGateInfraErrorDefersWithoutConsumingAttempt(t *testing.T) {
 	if outcome.Verdict != symphony.GateErr {
 		t.Fatalf("verdict = %d, want gate error", outcome.Verdict)
 	}
-	if len(hub.defers) != 1 {
-		t.Fatalf("gate error must defer with a retry timer: %+v", hub.defers)
-	}
-	if !hub.defers[0].until.After(time.Now()) {
-		t.Fatal("defer until must be in the future")
+	// The caller owns re-evaluation timing: the gate must not park the
+	// issue itself.
+	if len(hub.defers) != 0 {
+		t.Fatalf("gate error must not defer the issue: %+v", hub.defers)
 	}
 	if len(hub.comments) != 0 || len(hub.closes) != 0 || len(hub.needHuman) != 0 {
 		t.Fatalf("gate error must not write back verdicts: %+v", hub)
@@ -456,7 +495,7 @@ func TestGhGateResults(t *testing.T) {
 		wantKV   string // MetaGateErrors value after evaluation
 	}{
 		{
-			name: "run pending defers without consuming attempt", toml: "type = \"gh:run\"\nref = \"main\"",
+			name: "run pending defers without consuming attempt", toml: "type = \"gh:run\"\nref = \"" + fullSha + "\"",
 			ghResult: gate.GHPending, verdict: symphony.GateErr,
 		},
 		{
@@ -466,6 +505,14 @@ func TestGhGateResults(t *testing.T) {
 		{
 			name: "run green is green", toml: "type = \"gh:run\"\nref = \"123\"",
 			ghResult: gate.GHPass, verdict: symphony.GateGreen,
+		},
+		{
+			name: "run with pr resolves and judges the pr head", toml: "type = \"gh:run\"\npr = \"17\"",
+			ghResult: gate.GHPass, verdict: symphony.GateGreen,
+		},
+		{
+			name: "run with pr head resolution failure is gate error", toml: "type = \"gh:run\"\npr = \"17\"",
+			ghErr: errors.New("gh pr view: no pull requests match"), verdict: symphony.GateErr, wantKV: "1",
 		},
 		{
 			name: "pr merged is green", toml: "type = \"gh:pr\"\npr = \"7\"",
@@ -482,6 +529,9 @@ func TestGhGateResults(t *testing.T) {
 			writeFormula(t, dir, "gh", tc.toml)
 			hub, kv := newFakeHub(), newMemKV()
 			gh := &fakeGH{result: tc.ghResult, err: tc.ghErr}
+			if tc.ghErr != nil && strings.Contains(tc.name, "head resolution") {
+				gh = &fakeGH{result: tc.ghResult, headErr: tc.ghErr}
+			}
 			r := newTestRunner(t, dir, hub, kv, nil, gh)
 
 			outcome, err := r.Evaluate(context.Background(), reqWithWorkspace(t, 1, symphony.Revision("wf-1")))
@@ -491,8 +541,12 @@ func TestGhGateResults(t *testing.T) {
 			if outcome.Verdict != tc.verdict {
 				t.Fatalf("verdict = %d, want %d", outcome.Verdict, tc.verdict)
 			}
-			if tc.verdict == symphony.GateErr && len(hub.defers) != 1 {
-				t.Fatalf("gate error must defer: %+v", hub.defers)
+			if strings.Contains(tc.name, "resolves and judges the pr head") && gh.runRef != fullSha {
+				t.Fatalf("gh:run with pr must judge the resolved PR head, got ref %q", gh.runRef)
+			}
+			// Gate errors are returned bare; the caller owns retry timing.
+			if len(hub.defers) != 0 {
+				t.Fatalf("gate error must not park the issue: %+v", hub.defers)
 			}
 			if want := tc.wantKV; want != "" {
 				if v, _ := kv.Get(context.Background(), testIssue().ID, gate.MetaGateErrors); v != want {
@@ -505,7 +559,7 @@ func TestGhGateResults(t *testing.T) {
 
 func TestConsecutivePendingDeferralsEscalateToNeedsHuman(t *testing.T) {
 	dir := t.TempDir()
-	writeFormula(t, dir, "ci", "type = \"gh:run\"\nref = \"main\"")
+	writeFormula(t, dir, "ci", "type = \"gh:run\"\nref = \""+fullSha+"\"")
 	hub, kv := newFakeHub(), newMemKV()
 	r := newTestRunner(t, dir, hub, kv, nil, &fakeGH{result: gate.GHPending})
 	ctx := context.Background()
@@ -766,7 +820,6 @@ func newLoopFixture(t *testing.T, gateTOML string) *loopFixture {
 	kv := newMemKV()
 	gates := gate.NewRunner(formulas, hub, gate.NewEscalator(kv), "lambe@test", discardLog())
 	gates.Exec = gate.OsExec
-	gates.GateRetryDelay = 5 * time.Millisecond
 
 	spaces := symphony.NewWorkspaceManager(filepath.Join(root, "spaces"), discardLog())
 	loop := symphony.NewLoop(tr, loader, agent, gates, spaces, discardLog())
@@ -806,7 +859,9 @@ func TestLoopRedConsumesAttemptAndFeedsOutputToNextPrompt(t *testing.T) {
 func TestLoopGateErrorReusesAttempt(t *testing.T) {
 	f := newLoopFixture(t, "type = \"shell\"\ncommand = \"true\"")
 	// CI unreachable: the gate command's interpreter cannot even start.
+	evalCalls := 0
 	f.gates.Exec = func(context.Context, string, ...string) (string, error) {
+		evalCalls++
 		return "", errors.New("CI unreachable")
 	}
 	ctx := context.Background()
@@ -821,16 +876,17 @@ func TestLoopGateErrorReusesAttempt(t *testing.T) {
 
 	f.agent.mu.Lock()
 	defer f.agent.mu.Unlock()
-	if len(f.agent.attempts) != 2 {
-		t.Fatalf("want two gate retries, got %v", f.agent.attempts)
+	if len(f.agent.attempts) != 1 {
+		t.Fatalf("gate error must not re-prompt the agent: got %d agent attempts, want 1 (gate retries re-evaluate on the settled output)", len(f.agent.attempts))
 	}
-	for i, n := range f.agent.attempts {
-		if n != 1 {
-			t.Fatalf("gate errors must not consume attempts: attempt %d = %d", i, n)
-		}
+	if n := f.agent.attempts[0]; n != 1 {
+		t.Fatalf("gate errors must not consume attempts: attempt = %d", n)
 	}
-	if len(f.hub.defers) < 1 {
-		t.Fatal("gate error must defer the issue with a gate-retry timer")
+	if got := evalCalls; got < 2 {
+		t.Fatalf("gate evaluations = %d, want >= 2 (gate-only retry on the same output)", got)
+	}
+	if len(f.hub.defers) != 0 {
+		t.Fatal("gate error must not park the issue; the loop owns retry timing")
 	}
 	if f.tr.status("bd-loop-1") != "in_progress" {
 		t.Fatalf("issue status = %q, want in_progress (never terminal on gate error)", f.tr.status("bd-loop-1"))
@@ -887,6 +943,226 @@ func TestLoopAttemptCapRetainsWorkspace(t *testing.T) {
 	// inspect what eight red attempts produced.
 	if len(entries) != 1 {
 		t.Fatalf("needs-human workspace must be retained, got %d entries", len(entries))
+	}
+}
+
+// ---- escalation thresholds ----
+
+// TestEscalatorDeferThresholdIndependent proves DeferThreshold is
+// consulted: with DeferThreshold=2 and ErrorThreshold=5, deferrals
+// escalate at 2 while errors still need 5.
+func TestEscalatorDeferThresholdIndependent(t *testing.T) {
+	ctx := context.Background()
+	kv := newMemKV()
+	esc := gate.NewEscalator(kv)
+	esc.DeferThreshold = 2
+	esc.ErrorThreshold = 5
+
+	for i := 1; i <= 2; i++ {
+		escalated, err := esc.RecordDeferral(ctx, "bd-esc-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := i == 2; escalated != want {
+			t.Fatalf("deferral %d: escalated = %v, want %v", i, escalated, want)
+		}
+	}
+	if escalated, err := esc.RecordGateError(ctx, "bd-esc-1"); err != nil || escalated {
+		t.Fatalf("error streak must not borrow the deferral threshold: escalated=%v err=%v", escalated, err)
+	}
+
+	for i := 1; i <= 5; i++ {
+		escalated, err := esc.RecordGateError(ctx, "bd-esc-2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := i == 5; escalated != want {
+			t.Fatalf("error %d: escalated = %v, want %v", i, escalated, want)
+		}
+	}
+	if escalated, err := esc.RecordDeferral(ctx, "bd-esc-2"); err != nil || escalated {
+		t.Fatalf("defer threshold must not be raised by the error threshold: escalated=%v err=%v", escalated, err)
+	}
+}
+
+// ---- gh CLI verdict mapping ----
+
+// TestGhCLICheckRunConclusions covers every CheckRun conclusion mapping
+// plus malformed JSON, with the process execution stubbed.
+func TestGhCLICheckRunConclusions(t *testing.T) {
+	cases := []struct {
+		name       string
+		json       string
+		execErr    error
+		want       gate.GHResult
+		wantErr    bool
+		wantArgvOk bool
+	}{
+		{name: "success passes", json: `{"status":"completed","conclusion":"success"}`, want: gate.GHPass},
+		{name: "failure fails", json: `{"status":"completed","conclusion":"failure"}`, want: gate.GHFail},
+		{name: "cancelled fails", json: `{"status":"completed","conclusion":"cancelled"}`, want: gate.GHFail},
+		{name: "timed_out fails", json: `{"status":"completed","conclusion":"timed_out"}`, want: gate.GHFail},
+		{name: "startup_failure fails", json: `{"status":"completed","conclusion":"startup_failure"}`, want: gate.GHFail},
+		{name: "unknown conclusion pends", json: `{"status":"completed","conclusion":"weird"}`, want: gate.GHPending},
+		{name: "in_progress pends", json: `{"status":"in_progress","conclusion":""}`, want: gate.GHPending},
+		{name: "queued pends", json: `{"status":"queued"}`, want: gate.GHPending},
+		{name: "malformed json is an error", json: `{"status":`, want: gate.GHPending, wantErr: true},
+		{name: "non-object json is an error", json: `[1,2]`, want: gate.GHPending, wantErr: true},
+		{name: "exec failure is an error", execErr: errors.New("gh: command not found"), want: gate.GHPending, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			cli := &gate.GhCLI{Exec: func(_ context.Context, _ string, argv ...string) (string, error) {
+				called = true
+				want := []string{"gh", "run", "view", fullSha, "--json", "status,conclusion"}
+				if fmt.Sprint(argv) != fmt.Sprint(want) {
+					t.Errorf("argv = %v, want %v", argv, want)
+				}
+				return tc.json, tc.execErr
+			}}
+			res, err := cli.CheckRun(context.Background(), fullSha)
+			if called != true {
+				t.Fatal("exec seam not invoked")
+			}
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("err = %v, want error=%v", err, tc.wantErr)
+			}
+			if res != tc.want {
+				t.Fatalf("result = %d, want %d", res, tc.want)
+			}
+		})
+	}
+}
+
+// TestGhCLICheckPRStates covers the CheckPR state mapping with the
+// process execution stubbed.
+func TestGhCLICheckPRStates(t *testing.T) {
+	cases := []struct {
+		name    string
+		json    string
+		execErr error
+		want    gate.GHResult
+		wantErr bool
+	}{
+		{name: "merged passes", json: `{"state":"MERGED"}`, want: gate.GHPass},
+		{name: "closed fails", json: `{"state":"CLOSED"}`, want: gate.GHFail},
+		{name: "open pends", json: `{"state":"OPEN"}`, want: gate.GHPending},
+		{name: "malformed json is an error", json: `nope`, want: gate.GHPending, wantErr: true},
+		{name: "exec failure is an error", execErr: errors.New("connection refused"), want: gate.GHPending, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cli := &gate.GhCLI{Exec: func(_ context.Context, _ string, argv ...string) (string, error) {
+				want := []string{"gh", "pr", "view", "17", "--json", "state"}
+				if fmt.Sprint(argv) != fmt.Sprint(want) {
+					t.Errorf("argv = %v, want %v", argv, want)
+				}
+				return tc.json, tc.execErr
+			}}
+			res, err := cli.CheckPR(context.Background(), "17")
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("err = %v, want error=%v", err, tc.wantErr)
+			}
+			if res != tc.want {
+				t.Fatalf("result = %d, want %d", res, tc.want)
+			}
+		})
+	}
+}
+
+// TestGhCLIResolvePRHead covers the PR-head resolution gh:run gates use.
+func TestGhCLIResolvePRHead(t *testing.T) {
+	t.Run("resolves headRefOid", func(t *testing.T) {
+		cli := &gate.GhCLI{Exec: func(_ context.Context, _ string, argv ...string) (string, error) {
+			want := []string{"gh", "pr", "view", "17", "--json", "headRefOid"}
+			if fmt.Sprint(argv) != fmt.Sprint(want) {
+				t.Errorf("argv = %v, want %v", argv, want)
+			}
+			return `{"headRefOid":"` + fullSha + `"}`, nil
+		}}
+		head, err := cli.ResolvePRHead(context.Background(), "17")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if head != fullSha {
+			t.Fatalf("head = %q, want %q", head, fullSha)
+		}
+	})
+	t.Run("missing headRefOid is an error", func(t *testing.T) {
+		cli := &gate.GhCLI{Exec: func(context.Context, string, ...string) (string, error) {
+			return `{}`, nil
+		}}
+		if _, err := cli.ResolvePRHead(context.Background(), "17"); err == nil {
+			t.Fatal("empty headRefOid must be an error")
+		}
+	})
+}
+
+// ---- close race and request-path pinning ----
+
+// TestGreenCloseRaceSkipsTombstoneReturnsGateErr proves only the close
+// winner tombstones: a lost CAS race neither tombstones nor reports
+// green.
+func TestGreenCloseRaceSkipsTombstoneReturnsGateErr(t *testing.T) {
+	dir := t.TempDir()
+	writeFormula(t, dir, "tests", "type = \"shell\"\ncommand = \"exit 0\"")
+	hub, kv := newFakeHub(), newMemKV()
+	hub.closeErr = fmt.Errorf("close bd-gate-1: %w", gate.ErrCloseRace)
+	r := newTestRunner(t, dir, hub, kv, gate.OsExec, nil)
+	ctx := context.Background()
+
+	outcome, err := r.Evaluate(ctx, reqWithWorkspace(t, 1, symphony.Revision("wf-1")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Verdict != symphony.GateErr {
+		t.Fatalf("verdict = %d, want gate error on lost close race", outcome.Verdict)
+	}
+	if ok, _ := hub.IsTombstoned(ctx, testIssue().ID); ok {
+		t.Fatal("close-race loser must not tombstone; the close winner owns it")
+	}
+	if len(hub.needHuman) != 0 {
+		t.Fatal("a close race is not an escalation")
+	}
+}
+
+// TestEvaluatePinsRevisionFromRequest proves claim-time pinning engages
+// through the gate request: the first evaluation carrying a revision
+// snapshots the formulas, and a mid-attempt formula edit does not change
+// the rules the attempt is judged by.
+func TestEvaluatePinsRevisionFromRequest(t *testing.T) {
+	dir := t.TempDir()
+	writeFormula(t, dir, "tests", "type = \"shell\"\ncommand = \"exit 0\"")
+	hub, kv := newFakeHub(), newMemKV()
+	r := newTestRunner(t, dir, hub, kv, gate.OsExec, nil)
+	rev := symphony.Revision("wf-request-pin")
+
+	outcome, err := r.Evaluate(context.Background(), reqWithWorkspace(t, 1, rev))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Verdict != symphony.GateGreen {
+		t.Fatalf("first evaluation verdict = %d, want green", outcome.Verdict)
+	}
+
+	// Operator edits the formula mid-attempt.
+	writeFormula(t, dir, "tests", "type = \"shell\"\ncommand = \"exit 1\"")
+	outcome, err = r.Evaluate(context.Background(), reqWithWorkspace(t, 1, rev))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Verdict != symphony.GateGreen {
+		t.Fatalf("pinned revision must judge the attempt: verdict = %d, want green", outcome.Verdict)
+	}
+
+	// A different revision sees the edited formula.
+	outcome, err = r.Evaluate(context.Background(), reqWithWorkspace(t, 1, symphony.Revision("wf-next")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Verdict != symphony.GateRed {
+		t.Fatalf("new revision must see the live formula: verdict = %d, want red", outcome.Verdict)
 	}
 }
 
@@ -971,7 +1247,10 @@ func TestBdIntegration(t *testing.T) {
 	}
 
 	// Green after the operator fixes the formula: CAS close + tombstone.
+	// The formula edit means a fresh gate revision; the pinned revision
+	// would still judge by the old formula.
 	writeFormula(t, formulas, "tests", "type = \"shell\"\ncommand = \"exit 0\"")
+	req.Revision = symphony.Revision("wf-int-green")
 	outcome, err = gates.Evaluate(ctx, req)
 	if err != nil {
 		t.Fatal(err)

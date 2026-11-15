@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -147,6 +148,8 @@ func (s *Server) registerTools() {
 }
 
 // spawn implements lambe_spawn: depth-check, register, return the handle.
+// The spec carries the calling context's depth (from this server's
+// environment); the daemon derives and enforces the run's depth.
 func (s *Server) spawn(ctx context.Context, _ *mcp.CallToolRequest, args spawnArgs) (*mcp.CallToolResult, spawnResult, error) {
 	if args.IssueID == "" {
 		return nil, spawnResult{}, fmt.Errorf("issue_id is required")
@@ -159,7 +162,7 @@ func (s *Server) spawn(ctx context.Context, _ *mcp.CallToolRequest, args spawnAr
 		IssueID:   args.IssueID,
 		Prompt:    args.Prompt,
 		Workspace: args.Workspace,
-		Depth:     runDepth,
+		Depth:     runDepth - 1,
 	})
 	if err != nil {
 		return nil, spawnResult{}, fmt.Errorf("daemon refused spawn: %w", err)
@@ -201,6 +204,7 @@ func (s *Server) status(ctx context.Context, _ *mcp.CallToolRequest, args status
 func statusFrom(h RunHandle, st RunStatus) statusResult {
 	res := statusResult{
 		Handle:  h.String(),
+		IssueID: st.IssueID,
 		State:   st.State.String(),
 		Attempt: st.Attempt,
 		Outcome: st.Outcome,
@@ -231,10 +235,23 @@ func (s *Server) output(ctx context.Context, _ *mcp.CallToolRequest, args output
 	}
 	res.Tail = out.Tail
 	if len(res.Tail) > maxTailBytes {
-		res.Tail = res.Tail[len(res.Tail)-maxTailBytes:]
+		res.Tail = trimToRuneStart(res.Tail[len(res.Tail)-maxTailBytes:])
 		res.Truncated = true
 	}
 	return nil, res, nil
+}
+
+// trimToRuneStart drops leading continuation bytes so a truncated tail
+// begins on a UTF-8 rune boundary instead of surfacing mojibake.
+func trimToRuneStart(s string) string {
+	for len(s) > 0 {
+		r, size := utf8.DecodeRuneInString(s)
+		if r != utf8.RuneError || size != 1 {
+			return s
+		}
+		s = s[size:]
+	}
+	return s
 }
 
 // cancel implements lambe_cancel.

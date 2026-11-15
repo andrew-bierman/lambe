@@ -67,8 +67,13 @@ type Config struct {
 	// Command is the shell gate's command; it runs with the workspace as
 	// cwd and a non-zero exit is a red verdict.
 	Command string
-	// Ref is the gh:run gate's workflow ref, run id, or branch. The CI
-	// status of the PR head is what counts, never local test output.
+	// Ref is the gh:run gate's immutable ref: a full commit SHA or a
+	// numeric workflow run id. Bare branch names are rejected at parse
+	// time: a static branch ref greens on whatever the branch points at,
+	// not the attempt's PR head. To gate the attempt's PR, set PR and
+	// leave Ref empty; the PR head SHA is resolved at evaluation time.
+	// The CI status of the PR head is what counts, never local test
+	// output.
 	Ref string
 	// PR is the gh:pr gate's pull-request number, url, or branch.
 	PR string
@@ -82,8 +87,16 @@ func (c Config) Validate() error {
 			return fmt.Errorf("gate type shell: command is required")
 		}
 	case KindGhRun:
+		// A configured PR resolves the PR head at evaluation time, so no
+		// static ref is needed.
+		if c.PR != "" {
+			return nil
+		}
 		if c.Ref == "" {
 			return fmt.Errorf("gate type gh:run: ref is required")
+		}
+		if !isImmutableRunRef(c.Ref) {
+			return fmt.Errorf("gate type gh:run: bare branch-name ref %q is not allowed: it greens on whatever the branch points at, not the attempt's PR head; set pr = \"<number-or-branch>\" to gate the PR head, or ref = \"<full-commit-sha>\" or a numeric run id", c.Ref)
 		}
 	case KindGhPr:
 		if c.PR == "" {
@@ -93,6 +106,44 @@ func (c Config) Validate() error {
 		return fmt.Errorf("gate type is required")
 	}
 	return nil
+}
+
+// isImmutableRunRef reports whether ref pins one exact CI target: a full
+// commit SHA (40 hex for SHA-1, 64 for SHA-256 repos) or a numeric
+// workflow run id. Branch names, short SHAs, and URLs are refused.
+func isImmutableRunRef(ref string) bool {
+	if ref == "" {
+		return false
+	}
+	if isAllDigits(ref) {
+		return true
+	}
+	if len(ref) == 40 || len(ref) == 64 {
+		return isAllHex(ref)
+	}
+	return false
+}
+
+// isAllDigits reports whether s consists only of ASCII digits.
+func isAllDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// isAllHex reports whether s consists only of ASCII hex characters.
+func isAllHex(s string) bool {
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f', r >= 'A' && r <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // Spec is one parsed gate plus the content revision of its formula file.

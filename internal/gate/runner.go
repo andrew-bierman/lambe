@@ -8,14 +8,9 @@ import (
 	"log/slog"
 	"os/exec"
 	"sync"
-	"time"
 
 	"github.com/andrew-bierman/lambe/internal/symphony"
 )
-
-// DefaultGateRetryDelay is how long an issue waits before the gate is
-// retried after an error verdict; the issue is deferred with this timer.
-const DefaultGateRetryDelay = time.Minute
 
 // ExitFailure reports a gate command that ran and exited non-zero. It is
 // the red signal; every other execution error is gate-infra failure.
@@ -70,8 +65,16 @@ const (
 // machinery (bd gate check) can be wired in when a future tracker
 // build advertises it, and for tests.
 type GHChecker interface {
+	// CheckRun reports the workflow-run condition of one immutable ref
+	// (full commit SHA or run id).
 	CheckRun(ctx context.Context, ref string) (GHResult, error)
+	// CheckPR reports the pull-request condition of pr (number, url, or
+	// branch).
 	CheckPR(ctx context.Context, pr string) (GHResult, error)
+	// ResolvePRHead returns the current head commit SHA of pr (number,
+	// url, or branch), so a gh:run gate can judge the attempt's PR head
+	// instead of a static branch ref.
+	ResolvePRHead(ctx context.Context, pr string) (string, error)
 }
 
 // GhCLI implements GHChecker with the gh CLI. Queries evaluate CI status
@@ -92,6 +95,11 @@ type ghRunJSON struct {
 // ghPrJSON mirrors gh pr view --json output.
 type ghPrJSON struct {
 	State string `json:"state"`
+}
+
+// ghPrHeadJSON mirrors gh pr view --json headRefOid output.
+type ghPrHeadJSON struct {
+	HeadRefOid string `json:"headRefOid"`
 }
 
 func (g *GhCLI) exec(ctx context.Context, argv ...string) (string, error) {
@@ -157,13 +165,32 @@ func (g *GhCLI) ghBin() string {
 	return "gh"
 }
 
+// ResolvePRHead implements GHChecker: gh pr view <pr> --json headRefOid.
+// The returned SHA is what a gh:run gate judges, so CI status is read at
+// the attempt's PR head rather than a static branch ref. Execution and
+// decode errors are infra failures.
+func (g *GhCLI) ResolvePRHead(ctx context.Context, pr string) (string, error) {
+	out, err := g.exec(ctx, g.ghBin(), "pr", "view", pr, "--json", "headRefOid")
+	if err != nil {
+		return "", fmt.Errorf("gh pr view %s: %w", pr, err)
+	}
+	var head ghPrHeadJSON
+	if err := unmarshalStrict(out, &head); err != nil {
+		return "", fmt.Errorf("decode gh pr %s head: %w", pr, err)
+	}
+	if head.HeadRefOid == "" {
+		return "", fmt.Errorf("gh pr view %s: no headRefOid in output", pr)
+	}
+	return head.HeadRefOid, nil
+}
+
 // Runner is the gate evaluator behind symphony's GateEvaluator seam. On
 // every settled turn it judges the attempt against the gate revision
 // pinned at claim time and performs the hub writeback for the verdict:
 // green closes (CAS-guarded) and tombstones; red writes the rejection
 // back as a hub comment so the next attempt's reconstructed context
-// explains it; error defers the issue on a gate-retry timer without
-// consuming the attempt budget, escalating to needs-human when the
+// explains it; error returns GateErr without parking the issue — the
+// caller owns re-evaluation timing — escalating to needs-human when the
 // consecutive-error or consecutive-deferral counter exceeds its
 // threshold.
 type Runner struct {
@@ -175,8 +202,6 @@ type Runner struct {
 	Esc *Escalator
 	// Actor is the claim identity used to CAS-guard closes.
 	Actor string
-	// GateRetryDelay is the defer timer armed on error verdicts.
-	GateRetryDelay time.Duration
 	// Gh resolves gh gate conditions; nil uses the gh CLI.
 	Gh GHChecker
 	// Exec runs shell gate commands; nil uses OsExec.
@@ -188,7 +213,7 @@ type Runner struct {
 	pins map[symphony.Revision][]Spec
 }
 
-// NewRunner assembles a Runner with the default gate-retry delay.
+// NewRunner assembles a Runner.
 func NewRunner(dir string, hub Hub, esc *Escalator, actor string, log *slog.Logger) *Runner {
 	if log == nil {
 		log = slog.Default()
@@ -197,14 +222,13 @@ func NewRunner(dir string, hub Hub, esc *Escalator, actor string, log *slog.Logg
 		esc = NewEscalator(nil)
 	}
 	return &Runner{
-		Dir:            dir,
-		Hub:            hub,
-		Esc:            esc,
-		Actor:          actor,
-		GateRetryDelay: DefaultGateRetryDelay,
-		Exec:           OsExec,
-		Log:            log,
-		pins:           map[symphony.Revision][]Spec{},
+		Dir:   dir,
+		Hub:   hub,
+		Esc:   esc,
+		Actor: actor,
+		Exec:  OsExec,
+		Log:   log,
+		pins:  map[symphony.Revision][]Spec{},
 	}
 }
 
@@ -234,6 +258,26 @@ func (r *Runner) specsFor(rev symphony.Revision) ([]Spec, error) {
 	return LoadDir(r.Dir)
 }
 
+// ensurePin makes claim-time pinning engage through the request path: the
+// first evaluation carrying rev snapshots the formulas directory under
+// it, and later evaluations with the same rev are judged by that
+// snapshot even if the operator edits the formulas mid-attempt. An empty
+// revision always reads the live directory.
+func (r *Runner) ensurePin(rev symphony.Revision) ([]Spec, error) {
+	if rev == "" {
+		return LoadDir(r.Dir)
+	}
+	r.mu.Lock()
+	_, pinned := r.pins[rev]
+	r.mu.Unlock()
+	if !pinned {
+		if err := r.Pin(rev); err != nil {
+			return nil, err
+		}
+	}
+	return r.specsFor(rev)
+}
+
 // ShouldDispatch reports whether an issue may enter the dispatch front.
 // A tombstoned issue (closed green and cleaned up) must not be
 // re-dispatched even if its record was later purged.
@@ -247,10 +291,13 @@ func (r *Runner) ShouldDispatch(ctx context.Context, issue string) (bool, error)
 
 // Evaluate implements symphony.GateEvaluator. The returned outcome's
 // verdict is the three-valued gate decision; the error return is always
-// nil because infra failures are themselves the error verdict, which the
-// loop already treats as retry-gate-without-consuming-attempt.
+// nil because infra failures are themselves the error verdict. On
+// GateErr the runner performs no writeback that parks or re-routes the
+// issue: the caller owns re-evaluation timing (the loop retries the
+// gate), so a defer here would collide with the caller's own retry
+// scheduling and reconcile.
 func (r *Runner) Evaluate(ctx context.Context, req symphony.GateRequest) (symphony.GateOutcome, error) {
-	specs, err := r.specsFor(req.Revision)
+	specs, err := r.ensurePin(req.Revision)
 	if err != nil {
 		return r.settleErr(ctx, req, "gate config unreadable: "+err.Error(), true)
 	}
@@ -312,8 +359,18 @@ func (r *Runner) evaluateSpec(ctx context.Context, cfg Config, req symphony.Gate
 		}
 		return symphony.GateErr, err.Error(), true
 	case KindGhRun:
-		res, err := r.ghChecker().CheckRun(ctx, cfg.Ref)
-		return ghVerdict(res, err, "gh:run "+cfg.Ref)
+		checker := r.ghChecker()
+		ref := cfg.Ref
+		if cfg.PR != "" {
+			// Judge the attempt's PR head, never a static branch ref.
+			head, herr := checker.ResolvePRHead(ctx, cfg.PR)
+			if herr != nil {
+				return symphony.GateErr, "gh:run pr " + cfg.PR + ": " + herr.Error(), true
+			}
+			ref = head
+		}
+		res, err := checker.CheckRun(ctx, ref)
+		return ghVerdict(res, err, "gh:run "+ref)
 	case KindGhPr:
 		res, err := r.ghChecker().CheckPR(ctx, cfg.PR)
 		return ghVerdict(res, err, "gh:pr "+cfg.PR)
@@ -347,11 +404,18 @@ func (r *Runner) ghChecker() GHChecker {
 
 // settleGreen closes the issue behind the actor's claim, tombstones it,
 // and resets escalation counters. A close race means someone else already
-// closed it: the completion stands.
+// closed it: the completion stands for the winner only — this runner
+// skips the tombstone (the close winner owns it) and surfaces GateErr so
+// the caller re-reconciles instead of treating the issue as terminal
+// here.
 func (r *Runner) settleGreen(ctx context.Context, req symphony.GateRequest, output string) (symphony.GateOutcome, error) {
 	id := req.Issue.ID
-	if err := r.Hub.Close(ctx, id, r.Actor, "gate green"); err != nil && !errors.Is(err, ErrCloseRace) {
-		r.Log.Error("gate green close failed, deferring gate retry", "issue", id, "error", err)
+	if err := r.Hub.Close(ctx, id, r.Actor, "gate green"); err != nil {
+		if errors.Is(err, ErrCloseRace) {
+			r.Log.Info("gate green close lost race; the close winner tombstones", "issue", id)
+			return symphony.GateOutcome{Verdict: symphony.GateErr, Output: "close lost race: another actor already closed the issue"}, nil
+		}
+		r.Log.Error("gate green close failed, reporting gate error", "issue", id, "error", err)
 		return r.settleErr(ctx, req, "close failed: "+err.Error(), true)
 	}
 	if err := r.Hub.Tombstone(ctx, id); err != nil {
@@ -386,10 +450,13 @@ func (r *Runner) settleRed(ctx context.Context, req symphony.GateRequest, output
 	return symphony.GateOutcome{Verdict: symphony.GateRed, Output: output}, nil
 }
 
-// settleErr parks the issue on a gate-retry timer without consuming the
+// settleErr records the undecided-gate outcome without consuming the
 // attempt budget, counting infra failures and pending-condition deferrals
 // separately; either counter past its threshold escalates to
-// needs-human so deferral is never an infinite silent loop.
+// needs-human so deferral is never an infinite silent loop. It performs
+// no parking writeback: GateErr is returned bare and the caller owns
+// re-evaluation timing, so the gate must not defer the issue out from
+// under the caller's retry schedule.
 func (r *Runner) settleErr(ctx context.Context, req symphony.GateRequest, output string, infra bool) (symphony.GateOutcome, error) {
 	id := req.Issue.ID
 	var escalated bool
@@ -413,18 +480,7 @@ func (r *Runner) settleErr(ctx context.Context, req symphony.GateRequest, output
 		}
 		return symphony.GateOutcome{Verdict: symphony.GateErr, Output: output}, nil
 	}
-	if err := r.Hub.Defer(ctx, id, time.Now().Add(r.gateRetryDelay()), "lambe gate retry: "+firstLine(output)); err != nil {
-		r.Log.Error("gate-retry defer failed", "issue", id, "error", err)
-	}
 	return symphony.GateOutcome{Verdict: symphony.GateErr, Output: output}, nil
-}
-
-// gateRetryDelay resolves the configured delay with its default.
-func (r *Runner) gateRetryDelay() time.Duration {
-	if r.GateRetryDelay > 0 {
-		return r.GateRetryDelay
-	}
-	return DefaultGateRetryDelay
 }
 
 // compile-time seam check.

@@ -32,6 +32,8 @@ type fakeTracker struct {
 	heartbeats []string
 	// heartbeatErr overrides Heartbeat for matching ids.
 	heartbeatErr map[string]error
+	// attemptsErr overrides Attempts for matching sessions.
+	attemptsErr map[string]error
 	// dispatchErr, when set, fails every Dispatchable read.
 	dispatchErr error
 }
@@ -41,6 +43,7 @@ func newFakeTracker() *fakeTracker {
 		issues:       map[string]tracker.Issue{},
 		attempts:     map[string][]tracker.Attempt{},
 		heartbeatErr: map[string]error{},
+		attemptsErr:  map[string]error{},
 	}
 }
 
@@ -169,6 +172,9 @@ func (f *fakeTracker) PutAttempt(_ context.Context, a tracker.Attempt) error {
 func (f *fakeTracker) Attempts(_ context.Context, sessionID string) ([]tracker.Attempt, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.attemptsErr[sessionID]; err != nil {
+		return nil, err
+	}
 	return f.attempts[sessionID], nil
 }
 
@@ -324,7 +330,11 @@ func TestRecover(t *testing.T) {
 	t.Run("kills orphan when issue terminal", func(t *testing.T) {
 		tr, child := newCase(t)
 		tr.issues["issue-1"] = tracker.Issue{ID: "issue-1", Status: "closed", Assignee: actor}
-		adopted, err := Recover(context.Background(), staticOrphans{{PGID: child.Pgid(), SessionID: "issue-1"}},
+		st, ok := procStartTime(child.Pgid())
+		if !ok {
+			t.Skip("starttime unreadable on this platform")
+		}
+		adopted, err := Recover(context.Background(), staticOrphans{{PGID: child.Pgid(), SessionID: "issue-1", StartTime: st}},
 			tr, actor, 5*time.Second, nil)
 		if err != nil {
 			t.Fatalf("recover: %v", err)
@@ -336,6 +346,42 @@ func TestRecover(t *testing.T) {
 			t.Fatal("terminal issue orphan must be group-killed")
 		}
 		_ = child.Wait()
+	})
+
+	t.Run("stands down when no starttime was recorded", func(t *testing.T) {
+		tr, child := newCase(t)
+		tr.issues["issue-1"] = tracker.Issue{ID: "issue-1", Status: "closed", Assignee: actor}
+		adopted, err := Recover(context.Background(), staticOrphans{{PGID: child.Pgid(), SessionID: "issue-1"}},
+			tr, actor, 5*time.Second, nil)
+		if err != nil {
+			t.Fatalf("recover: %v", err)
+		}
+		if len(adopted) != 0 {
+			t.Fatalf("adopted = %+v, want none", adopted)
+		}
+		if !proc.GroupAlive(child.Pgid()) {
+			t.Fatal("unverifiable pgid must never be killed")
+		}
+	})
+
+	t.Run("stands down when starttime mismatches", func(t *testing.T) {
+		tr, child := newCase(t)
+		tr.issues["issue-1"] = tracker.Issue{ID: "issue-1", Status: "closed", Assignee: actor}
+		st, ok := procStartTime(child.Pgid())
+		if !ok {
+			t.Skip("starttime unreadable on this platform")
+		}
+		adopted, err := Recover(context.Background(), staticOrphans{{PGID: child.Pgid(), SessionID: "issue-1", StartTime: st + 1}},
+			tr, actor, 5*time.Second, nil)
+		if err != nil {
+			t.Fatalf("recover: %v", err)
+		}
+		if len(adopted) != 0 {
+			t.Fatalf("adopted = %+v, want none", adopted)
+		}
+		if !proc.GroupAlive(child.Pgid()) {
+			t.Fatal("a recycled-pid mismatch must never be killed")
+		}
 	})
 
 	t.Run("never kills when ownership unverified", func(t *testing.T) {
@@ -353,6 +399,98 @@ func TestRecover(t *testing.T) {
 			t.Fatal("unverified ownership must never kill")
 		}
 	})
+}
+
+// TestTrackerOrphansSkipsFailingAttemptsRead encodes the recovery
+// contract: one session's failing Attempts read is skipped, not fatal —
+// the other sessions' orphans are still recovered.
+func TestTrackerOrphansSkipsFailingAttemptsRead(t *testing.T) {
+	t.Parallel()
+	tr := newFakeTracker()
+	tr.issues["broken"] = tracker.Issue{ID: "broken", Status: "in_progress", Assignee: "lambe@test"}
+	tr.issues["healthy"] = tracker.Issue{ID: "healthy", Status: "in_progress", Assignee: "lambe@test"}
+	tr.attemptsErr["broken"] = errors.New("journal unreadable")
+	tr.attempts["healthy"] = []tracker.Attempt{{SessionID: "healthy", Number: 1, PGID: 4242}}
+
+	orphans, err := TrackerOrphans{Tracker: tr}.Orphans(context.Background())
+	if err != nil {
+		t.Fatalf("one failing attempts read must not abort the scan: %v", err)
+	}
+	if len(orphans) != 1 || orphans[0].SessionID != "healthy" || orphans[0].PGID != 4242 {
+		t.Fatalf("orphans = %+v, want only the healthy session's pgid", orphans)
+	}
+}
+
+// slowSyncer records the peak number of concurrent Pull calls while each
+// call blocks briefly.
+type slowSyncer struct {
+	mu       sync.Mutex
+	inFlight int
+	peak     int
+}
+
+func (s *slowSyncer) Pull(context.Context) error {
+	s.mu.Lock()
+	s.inFlight++
+	if s.inFlight > s.peak {
+		s.peak = s.inFlight
+	}
+	s.mu.Unlock()
+	time.Sleep(50 * time.Millisecond)
+	s.mu.Lock()
+	s.inFlight--
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *slowSyncer) Push(context.Context) error { return nil }
+
+func (s *slowSyncer) peakInFlight() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.peak
+}
+
+// TestDaemonCycleSerializesTickAndPoke proves the mutual exclusion the
+// Symphony loop requires: concurrent cycle invocations (a tick beside a
+// poke) never interleave — their pulls run strictly one at a time.
+func TestDaemonCycleSerializesTickAndPoke(t *testing.T) {
+	t.Parallel()
+	syncer := &slowSyncer{}
+	d, err := New(Options{
+		Config: &config.Config{Supervisor: config.Supervisor{
+			TickSeconds:    10,
+			SilenceTimeout: time.Minute,
+		}},
+		StateDir: t.TempDir(),
+		Machine:  "testbox",
+		Actor:    "lambe@test",
+		Wire: func(a *Assembly) error {
+			a.Sync = syncer
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("new daemon: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := range 4 {
+		wg.Add(1)
+		go func(poke bool) {
+			defer wg.Done()
+			if poke {
+				d.cycle(context.Background(), "poke", true)
+			} else {
+				d.cycle(context.Background(), "tick", false)
+			}
+		}(i%2 == 0)
+	}
+	wg.Wait()
+
+	if peak := syncer.peakInFlight(); peak > 1 {
+		t.Fatalf("peak concurrent cycle pulls = %d, want 1 (cycles must serialize)", peak)
+	}
 }
 
 func TestSkipsMachine(t *testing.T) {

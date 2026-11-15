@@ -119,13 +119,13 @@ Done:
 In flight:
 
 - [x] Additional harness driver (Pi)
-- [ ] Verified-completion gates (`shell`, `gh:run`, `gh:pr`)
-- [ ] Daemon assembly (`lambe run`, `lambe status`, single-instance lock)
-- [ ] Fault-injection suite as the definition of done
-- [ ] MCP server surface
-- [ ] ACP harness driver
-- [ ] Rex surface
-- [ ] HTTP state API
+- [x] Verified-completion gates (`shell`, `gh:run`, `gh:pr`)
+- [x] Daemon assembly (`lambe run`, `lambe status`, single-instance lock)
+- [x] Fault-injection suite as the definition of done
+- [x] MCP server surface
+- [x] ACP harness driver
+- [x] Rex surface
+- [x] HTTP state API
 
 Next:
 

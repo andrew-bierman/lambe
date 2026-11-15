@@ -208,6 +208,12 @@ func quoteBatchToken(tok string) string {
 	return `"` + escaped + `"`
 }
 
+// DefaultCommandTimeout bounds one bd subprocess invocation when the
+// transport does not configure its own limit. Without it a wedged bd (a
+// hung dolt engine, a stuck lock) would wedge every caller — including the
+// daemon's tick loop — forever.
+const DefaultCommandTimeout = 60 * time.Second
+
 // Transport carries tracker operations to a Beads backend. Two
 // implementations exist: ShellTransport forks a bd subprocess per call
 // (embedded local mode), and HTTPTransport talks to a supervised bd serve

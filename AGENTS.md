@@ -52,6 +52,9 @@ gitmoji + conventional commits: `✨ feat: ...`, `🐛 fix: ...`, `📝 docs: ..
 - `internal/harness` — agent harness drivers (Pi first, ACP next)
 - `internal/gate` — verified-completion gates (shell, gh:run, gh:pr)
 - `internal/daemon` — the run loop, single-instance lock, status snapshots
+- `internal/mcp` — MCP server surface exposing supervised runs as tool calls
+- `internal/httpstate` — read-only HTTP state API (Symphony §13.7)
+- `internal/surface/rex` — Rex terminal surface (presence detection, OSC status)
 
 ## Quality bar
 

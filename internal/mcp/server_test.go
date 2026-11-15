@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -227,6 +228,7 @@ func TestStatusReflectsTransitions(t *testing.T) {
 	wake := time.Now().Add(5 * time.Minute).UTC().Truncate(time.Second)
 	h.fc.setStatus(t, mustHandle(t, out.Handle), RunStatus{
 		State:       StateDeferred,
+		IssueID:     "iss-2",
 		Attempt:     2,
 		LastEventAt: time.Now().Add(-90 * time.Second),
 		WakeAt:      wake,
@@ -240,6 +242,9 @@ func TestStatusReflectsTransitions(t *testing.T) {
 	}
 	if st.State != StateDeferred.String() || st.Attempt != 2 {
 		t.Errorf("status = %+v; want deferred attempt 2", st)
+	}
+	if st.IssueID != "iss-2" {
+		t.Errorf("issue_id = %q; want iss-2", st.IssueID)
 	}
 	if st.WakeAt != wake.Format(time.RFC3339) {
 		t.Errorf("wake_at = %q; want %q", st.WakeAt, wake.Format(time.RFC3339))
@@ -278,6 +283,50 @@ func TestOutputTailBound(t *testing.T) {
 	}
 	if len(resOut.Artifacts) != 2 || resOut.Artifacts[0].Path != "/tmp/artifacts/iss-3/transcript.jsonl" {
 		t.Errorf("artifacts = %+v; want both artifact paths", resOut.Artifacts)
+	}
+}
+
+// TestOutputTailBoundMultibyte checks the truncation slice lands on a UTF-8
+// rune boundary when the byte cap cuts a multi-byte rune in half.
+func TestOutputTailBoundMultibyte(t *testing.T) {
+	h := newHarness(t, Options{})
+	var out spawnResult
+	h.call("lambe_spawn", spawnArgs{IssueID: "iss-mb", Prompt: "p"}, &out)
+	handle := mustHandle(t, out.Handle)
+
+	// "é" is 2 bytes per rune: 5k runes = 10k bytes, so the 4KB slice
+	// starts mid-rune without boundary trimming.
+	tail := strings.Repeat("é", 5*1024)
+	h.fc.setOutput(t, handle, RunOutput{Tail: tail})
+
+	var resOut outputResult
+	res := h.call("lambe_output", outputArgs{Handle: out.Handle}, &resOut)
+	if res.IsError {
+		t.Fatalf("lambe_output errored: %v", res.Content)
+	}
+	if !resOut.Truncated {
+		t.Error("truncated = false; want true")
+	}
+	if !utf8.ValidString(resOut.Tail) {
+		t.Error("truncated tail is not valid UTF-8")
+	}
+	if r, _ := utf8.DecodeRuneInString(resOut.Tail); r == utf8.RuneError {
+		t.Error("truncated tail starts on a continuation byte")
+	}
+}
+
+// TestParseRunHandleRejectsControlAndSpace checks the handle validator
+// rejects any control or space rune, not just ASCII whitespace.
+func TestParseRunHandleRejectsControlAndSpace(t *testing.T) {
+	for _, bad := range []string{"run\x01", "run\u00a0", "run\v", "run\x7f"} {
+		if _, err := ParseRunHandle(bad); err == nil {
+			t.Errorf("ParseRunHandle(%q) = nil error; want rejection", bad)
+		}
+	}
+	for _, ok := range []string{"run-1", "iss/42", "héllo"} {
+		if _, err := ParseRunHandle(ok); err != nil {
+			t.Errorf("ParseRunHandle(%q) = %v; want accepted", ok, err)
+		}
 	}
 }
 
@@ -367,8 +416,8 @@ func TestDepthAllowedAtTop(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("lambe_spawn at depth 0 errored: %v", res.Content)
 	}
-	if len(h.fc.spawned) != 1 || h.fc.spawned[0].Depth != 1 {
-		t.Errorf("spawn specs = %+v; want one spawn at depth 1", h.fc.spawned)
+	if len(h.fc.spawned) != 1 || h.fc.spawned[0].Depth != 0 {
+		t.Errorf("spawn specs = %+v; want one spawn whose spec carries caller depth 0 (daemon registers the run at depth 1)", h.fc.spawned)
 	}
 }
 
@@ -380,8 +429,8 @@ func TestDepthConfigurable(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("lambe_spawn at depth 1 with max 2 errored: %v", res.Content)
 	}
-	if len(h.fc.spawned) != 1 || h.fc.spawned[0].Depth != 2 {
-		t.Errorf("spawn specs = %+v; want one spawn at depth 2", h.fc.spawned)
+	if len(h.fc.spawned) != 1 || h.fc.spawned[0].Depth != 1 {
+		t.Errorf("spawn specs = %+v; want one spawn whose spec carries caller depth 1 (daemon derives the run's depth 2)", h.fc.spawned)
 	}
 }
 

@@ -16,15 +16,47 @@ import (
 // RunExec.
 type CommandRunner func(ctx context.Context, name string, args ...string) (stdout string, exitCode int, err error)
 
+// Reason explains how the detector reached its availability verdict.
+type Reason int
+
+const (
+	// ReasonNone means no verdict has been reached yet.
+	ReasonNone Reason = iota
+	// ReasonEnv means environment variables named a Rex server.
+	ReasonEnv
+	// ReasonProbe means the rex CLI answered the probe.
+	ReasonProbe
+	// ReasonAbsent means rex reported itself absent (exit code 4).
+	ReasonAbsent
+	// ReasonProbeFailed means the probe could not reach a verdict.
+	ReasonProbeFailed
+)
+
+// String returns the reason's short machine-stable name.
+func (r Reason) String() string {
+	switch r {
+	case ReasonEnv:
+		return "env"
+	case ReasonProbe:
+		return "probe"
+	case ReasonAbsent:
+		return "absent"
+	case ReasonProbeFailed:
+		return "probe failed"
+	default:
+		return "unknown"
+	}
+}
+
 // Availability reports whether a Rex server can be reached and why the
 // detector reached its verdict.
 type Availability struct {
 	// Available is true when lambe should surface into Rex.
 	Available bool
-	// Reason is one of "env" (environment variables named a Rex server),
-	// "probe" (the rex CLI answered), "absent" (rex reports itself
-	// absent, exit code 4), or "probe failed".
-	Reason string
+	// Reason explains the verdict: env (environment variables named a Rex
+	// server), probe (the rex CLI answered), absent (rex reports itself
+	// absent, exit code 4), or probe failed.
+	Reason Reason
 }
 
 // exitAbsent is the exit code `rex ls` uses when no Rex server exists.
@@ -45,20 +77,20 @@ type Detector struct {
 func (d Detector) Detect(ctx context.Context) Availability {
 	for _, key := range []string{"REX_SESSION", "REX_SERVER"} {
 		if lookup(d.Env, key) != "" {
-			return Availability{Available: true, Reason: "env"}
+			return Availability{Available: true, Reason: ReasonEnv}
 		}
 	}
 	if d.Runner == nil {
-		return Availability{Reason: "probe failed"}
+		return Availability{Reason: ReasonProbeFailed}
 	}
 	_, code, err := d.Runner(ctx, "rex", "ls", "--json")
 	switch {
 	case err == nil && code == 0:
-		return Availability{Available: true, Reason: "probe"}
+		return Availability{Available: true, Reason: ReasonProbe}
 	case err == nil && code == exitAbsent:
-		return Availability{Reason: "absent"}
+		return Availability{Reason: ReasonAbsent}
 	default:
-		return Availability{Reason: "probe failed"}
+		return Availability{Reason: ReasonProbeFailed}
 	}
 }
 
@@ -71,7 +103,7 @@ func lookup(env func(string) string, key string) string {
 
 // DetectError formats a probe failure for logs.
 func (a Availability) DetectError() error {
-	if a.Available || a.Reason == "absent" {
+	if a.Available || a.Reason == ReasonAbsent {
 		return nil
 	}
 	return fmt.Errorf("rex detection failed: %s", a.Reason)

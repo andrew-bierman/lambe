@@ -12,15 +12,20 @@ import (
 	"time"
 )
 
-// bdBin returns the bd binary path, or "" when bd is unavailable. These
-// tests are skipped under -short and where bd is absent; a CI runner that
-// wants them must install bd and run the full suite. LAMBE_TEST_BD either
-// names an explicit binary path or is set to a truthy value ("1", "true")
-// meaning "use the first bd found on PATH or in ~/.local/bin"; unsetting
-// it defers to PATH discovery as well, so green never silently skips.
+// bdBin returns the bd binary path, or "" when the tests must skip. These
+// tests are skipped under -short and when bd is unavailable; a CI runner
+// that wants them must install bd and run the full suite. LAMBE_TEST_BD
+// gates discovery per AGENTS.md: unset, "0", or "false" skips (returns "");
+// "1" or "true" means "use the first bd found on PATH or in ~/.local/bin";
+// any other value names an explicit binary path.
 func bdBin() string {
-	if bin := os.Getenv("LAMBE_TEST_BD"); bin != "" && bin != "1" && bin != "true" {
-		return bin
+	gate := os.Getenv("LAMBE_TEST_BD")
+	switch gate {
+	case "", "0", "false":
+		return ""
+	case "1", "true":
+	default:
+		return gate
 	}
 	if bin, err := exec.LookPath("bd"); err == nil {
 		return bin

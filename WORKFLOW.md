@@ -34,7 +34,7 @@ Working rules:
 1. Work only inside this workspace; it is your per-issue workspace.
 2. Read the tracker for the issue's current state before acting.
 3. Write progress to the tracker as you go.
-4. When you believe the work is finished, declare completion; an external
-   gate verifies it. A green gate is the only path to done.
+4. When you believe the work is finished, post your final progress comment
+   and stop; an external gate verifies completion.
 5. If you cannot continue, hand the issue off: leave the workspace and the
    tracker in a state a human or the next attempt can pick up.

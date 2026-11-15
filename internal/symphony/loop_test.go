@@ -2,10 +2,12 @@ package symphony
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -306,11 +308,14 @@ func TestGateErrorReusesAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := f.runner.recorded()
-	if len(calls) != 2 {
-		t.Fatalf("runner calls = %d, want 2", len(calls))
+	if len(calls) != 1 {
+		t.Fatalf("runner calls = %d, want 1: a gate error retries the GATE on the settled output, never the agent", len(calls))
 	}
-	if calls[1].Attempt != 1 {
-		t.Errorf("gate error consumed the attempt: attempt = %d, want 1", calls[1].Attempt)
+	if calls[0].Attempt != 1 {
+		t.Errorf("attempt = %d, want 1", calls[0].Attempt)
+	}
+	if got := len(f.gate.calls); got < 2 {
+		t.Errorf("gate evaluations = %d, want >= 2 (gate-only retry after the error)", got)
 	}
 }
 
@@ -421,4 +426,165 @@ func TestLoaderWatchAppliesValidEdit(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+// closingRunner wraps a fakeRunner with a recording SessionCloser.
+type closingRunner struct {
+	*fakeRunner
+	mu     sync.Mutex
+	closed []string
+}
+
+// CloseSession implements SessionCloser, recording the call.
+func (c *closingRunner) CloseSession(_ context.Context, sessionID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = append(c.closed, sessionID)
+}
+
+func (c *closingRunner) closeLog() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.closed...)
+}
+
+// claimErrTracker poisons Claim for chosen issue ids while delegating
+// everything else.
+type claimErrTracker struct {
+	*fakeTracker
+	poison map[string]error
+}
+
+func (c *claimErrTracker) Claim(ctx context.Context, id string) (tracker.Issue, error) {
+	if err := c.poison[id]; err != nil {
+		return tracker.Issue{}, err
+	}
+	return c.fakeTracker.Claim(ctx, id)
+}
+
+// TestTerminalClosesRunnerSession pins the teardown seam: a terminal
+// transition releases the runner's per-session resources.
+func TestTerminalClosesRunnerSession(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "body", settle)
+	f.gate.outcomes = []GateOutcome{{Verdict: GateGreen}}
+	closer := &closingRunner{fakeRunner: f.runner}
+	f.loop.Runner = closer
+
+	if err := f.loop.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := closer.closeLog(); len(got) != 1 || got[0] != "i-1" {
+		t.Errorf("CloseSession calls = %v, want [i-1]", got)
+	}
+}
+
+// TestTurnDeferredClosesRunnerSession pins the defer path: parking the
+// issue until the wake time releases the agent process instead of leaking
+// it across the defer horizon.
+func TestTurnDeferredClosesRunnerSession(t *testing.T) {
+	t.Parallel()
+	deferTurn := func(TurnRequest) TurnResult {
+		return TurnResult{Exit: TurnDeferred, WakeAt: time.Now().Add(time.Hour)}
+	}
+	f := newFixture(t, "body", deferTurn)
+	closer := &closingRunner{fakeRunner: f.runner}
+	f.loop.Runner = closer
+
+	if err := f.loop.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := closer.closeLog(); len(got) != 1 || got[0] != "i-1" {
+		t.Errorf("CloseSession calls = %v, want [i-1]", got)
+	}
+}
+
+// TestGateErrorClosesRunnerSession pins the gate-error path: a gate that
+// could not judge parks the issue without consuming the attempt, and the
+// agent process does not linger idle until the gate retry.
+func TestGateErrorClosesRunnerSession(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "body", settle, settle)
+	f.gate.outcomes = []GateOutcome{{Verdict: GateGreen}}
+	f.gate.errs = []error{context.DeadlineExceeded}
+	closer := &closingRunner{fakeRunner: f.runner}
+	f.loop.Runner = closer
+
+	if err := f.loop.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := closer.closeLog(); len(got) != 1 || got[0] != "i-1" {
+		t.Errorf("CloseSession calls = %v, want [i-1]", got)
+	}
+}
+
+// TestClaimErrorDoesNotStarveRemainingIssues pins dispatch resilience: a
+// claim failure on one issue is logged and skipped; only the dispatch read
+// failure aborts the tick.
+func TestClaimErrorDoesNotStarveRemainingIssues(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "body", settle)
+	delete(f.tr.issues, "i-1")
+	f.tr.issues["bad-1"] = tracker.Issue{ID: "bad-1", Title: "poisoned", Status: "ready"}
+	f.tr.issues["good-1"] = tracker.Issue{ID: "good-1", Title: "healthy", Status: "ready"}
+	f.loop.Tracker = &claimErrTracker{
+		fakeTracker: f.tr,
+		poison:      map[string]error{"bad-1": fmt.Errorf("tracker exploded")},
+	}
+	f.gate.outcomes = []GateOutcome{{Verdict: GateGreen}}
+
+	if err := f.loop.Tick(context.Background()); err != nil {
+		t.Fatalf("tick aborted on one bad claim: %v", err)
+	}
+	calls := f.runner.recorded()
+	if len(calls) != 1 || calls[0].Issue.ID != "good-1" {
+		t.Fatalf("runner calls = %+v, want only good-1 dispatched", calls)
+	}
+}
+
+// TestTriggerFiredCommandUnavailable pins the infra-failure mapping: exit
+// codes 126 and 127 mean the trigger command could not run at all, so the
+// trigger reports unavailable instead of firing work into the tracker.
+func TestTriggerFiredCommandUnavailable(t *testing.T) {
+	t.Parallel()
+	for _, code := range []string{"126", "127"} {
+		f := Formula{Name: "broken", Path: "/tmp/opencode/broken.formula.toml", Command: "exit " + code}
+		fired, err := TriggerFired(context.Background(), f)
+		if fired {
+			t.Errorf("exit %s: fired = true, want false", code)
+		}
+		if err == nil {
+			t.Errorf("exit %s: err = nil, want unavailable error", code)
+		}
+	}
+}
+
+// TestFormulaTriggerUnavailableDoesNotMaterialize pins the loop-level
+// behavior: an unavailable trigger logs and materializes nothing, without
+// failing the tick.
+func TestFormulaTriggerUnavailableDoesNotMaterialize(t *testing.T) {
+	t.Parallel()
+	formulaDir := filepath.Join(t.TempDir(), ".beads", "formulas")
+	if err := os.MkdirAll(formulaDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(formulaDir, "gone.formula.toml"), []byte("[trigger]\ncommand = \"definitely-not-a-command-lambe --flag\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := newFixture(t, "body")
+	delete(f.tr.issues, "i-1")
+	materializer := &fakeMaterializer{tr: f.tr}
+	f.loop.Materializer = materializer
+	formulas, err := LoadFormulas(formulaDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.loop.Formulas = formulas
+
+	if err := f.loop.Tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := materializer.materialized(); len(got) != 0 {
+		t.Errorf("materialized = %v, want none", got)
+	}
 }
