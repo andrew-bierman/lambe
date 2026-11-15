@@ -1,5 +1,10 @@
 # lambe
 
+[![CI](https://github.com/andrew-bierman/lambe/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/andrew-bierman/lambe/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/andrew-bierman/lambe.svg)](https://pkg.go.dev/github.com/andrew-bierman/lambe)
+[![Go Report Card](https://goreportcard.com/badge/github.com/andrew-bierman/lambe)](https://goreportcard.com/report/github.com/andrew-bierman/lambe)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 **Keep your agents working while you sleep.**
 
 lambe is an MIT-licensed Go supervisor daemon for autonomous coding agents. It
@@ -99,6 +104,41 @@ double-assigning work.
 Early development. Expect rough edges and changing interfaces. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
 [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
+## Roadmap
+
+Done:
+
+- [x] Go module scaffold, config, logging, toolchain pins, GoReleaser
+- [x] Beads tracker adapter (hub, repo, in-repo `.beads`, embedded local store)
+- [x] Process-supervision primitives (spawn ownership, kill ladder, watchdog)
+- [x] Symphony core loop (WORKFLOW.md render, workspaces, retry/reconcile)
+- [x] Pi harness driver (RPC client, settle-only completion, limit classifier)
+- [x] Docs and CI
+
+In flight:
+
+- [x] Additional harness driver (Pi)
+- [ ] Verified-completion gates (`shell`, `gh:run`, `gh:pr`)
+- [ ] Daemon assembly (`lambe run`, `lambe status`, single-instance lock)
+- [ ] Fault-injection suite as the definition of done
+- [ ] MCP server surface
+- [ ] ACP harness driver
+- [ ] Rex surface
+- [ ] HTTP state API
+
+Next:
+
+- [ ] Multi-machine affinity and failover
+- [ ] Shared Dolt-server mode
+- [ ] More harness drivers (Codex, Claude Code, OpenCode)
+- [ ] `bd`-as-library embedding
+- [ ] Limit-classifier tuning on real traffic
+
+Later / exploring:
+
+- [ ] Gas-City interop
+- [ ] `ghx` caching proxy at multi-agent scale
 
 ## License
 
