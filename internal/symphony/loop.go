@@ -45,6 +45,11 @@ const (
 	TurnFailure
 	TurnTimeout
 	TurnCanceled
+	// TurnDeferred ends the attempt without consuming it: the runner
+	// detected a condition (for example a suspected provider limit) whose
+	// remedy is to park the issue until WakeAt and let the dispatch front
+	// wake it, rather than burn retry attempts.
+	TurnDeferred
 )
 
 // TurnResult reports the outcome of one turn. Settled carries the runner's
@@ -55,6 +60,9 @@ type TurnResult struct {
 	Exit     TurnExit
 	Output   string
 	Settled  bool
+	// WakeAt is the earliest re-dispatch time for TurnDeferred turns;
+	// zero defers to the tracker's own default horizon.
+	WakeAt time.Time
 }
 
 // GateEvaluator judges a settled turn. Green is the only path to done.
@@ -416,6 +424,21 @@ func (l *Loop) runTurn(ctx context.Context, s *session, ws *Workspace, log *slog
 		s.thread = res.ThreadID
 	}
 	l.Spaces.RunAfterRun(ctx, ws.Dir, wf.Hooks)
+
+	if res.Exit == TurnDeferred {
+		until := res.WakeAt
+		if until.IsZero() {
+			until = time.Now().Add(5 * time.Minute)
+		}
+		if err := l.Tracker.Defer(ctx, s.issue.ID, until, "runner deferred turn: "+res.Output); err != nil {
+			log.Error("defer failed, falling back to failure retry", "error", err)
+			l.schedule(s, RetryFailure, l.failureDelay(s.attempt))
+			return true
+		}
+		log.Info("turn deferred, attempt preserved", "turn", s.turn, "wake_at", until.UTC().Format(time.RFC3339))
+		delete(l.sessions, s.issue.ID)
+		return true
+	}
 
 	if err != nil || res.Exit != TurnSuccess {
 		log.Info("turn failed, scheduling failure retry", "turn", s.turn, "error", err)
