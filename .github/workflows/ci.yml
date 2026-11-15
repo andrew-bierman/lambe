@@ -1,0 +1,90 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+      - name: go vet
+        run: go vet ./...
+      - name: gofumpt
+        run: |
+          out=$(go run mvdan.cc/gofumpt -l .)
+          if [ -n "$out" ]; then
+            echo "gofumpt found unformatted files:"
+            echo "$out"
+            exit 1
+          fi
+      - name: golangci-lint
+        run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint run ./...
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck ./...
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck ./...
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+      - name: Install bd
+        run: |
+          set -eu
+          releases=$(curl -fsSL https://api.github.com/repos/gastownhall/beads/releases)
+          # Prefer a stable 1.4.x release; fall back to the latest 1.3.x.
+          version=$(echo "$releases" | grep -o '"tag_name": *"v1\.4\.[0-9]*"' | head -1 | grep -o 'v1\.4\.[0-9]*')
+          if [ -z "$version" ]; then
+            version=$(echo "$releases" | grep -o '"tag_name": *"v1\.3\.[0-9]*"' | head -1 | grep -o 'v1\.3\.[0-9]*')
+          fi
+          if [ -z "$version" ]; then
+            echo "no bd 1.3.x/1.4.x release found" >&2
+            exit 1
+          fi
+          echo "installing bd $version"
+          ver=${version#v}
+          curl -fsSL "https://github.com/gastownhall/beads/releases/download/${version}/beads_${ver}_linux_amd64.tar.gz" | tar -xz -C /tmp
+          mkdir -p "$HOME/.local/bin"
+          mv /tmp/bd "$HOME/.local/bin/bd"
+          chmod +x "$HOME/.local/bin/bd"
+          "$HOME/.local/bin/bd" --version
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Test (with bd integration)
+        env:
+          LAMBE_TEST_BD: "1"
+        run: go test -race ./...
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -o "dist/lambe-${GOOS}-${GOARCH}" ./cmd/lambe
