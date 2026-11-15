@@ -1,4 +1,4 @@
-# lambe — architecture (working name, pre-planning)
+# lambe — architecture (pre-planning)
 
 Positioning: **a Symphony-compatible, Beads-native supervisor for autonomous coding agents.**
 Tagline: *Keep your agents working while you sleep.*
@@ -125,8 +125,11 @@ tests (gate rejects), duplicate tick (no double dispatch).
 
 ## Open decisions
 
-1. Final name — lambe working; collision check in flight (lyre, cory as
-   alternates); ichnite/laurasia previously cleared.
+1. ~~Final name~~ — SETTLED: lambe. Collision-checked 2026-11-15: npm, crates,
+   PyPI, Homebrew all free (only a small Dart pub.dev query-language package,
+   different ecosystem). lyre rejected (npm/crates/PyPI taken; active
+   commercial `brew install lyre` AI voice product); cory rejected (active
+   Bitcoin tool on crates; first-name searchability).
 2. First harness driver for slice one.
 3. Hub fencing posture day one: affinity + reclaim (default) vs shared-server.
 4. Language: Go selected in-session (user permitted Go/Elixir); confirm.
