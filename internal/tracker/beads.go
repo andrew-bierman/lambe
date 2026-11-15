@@ -20,8 +20,9 @@ type Beads struct {
 	t     Transport
 	actor string
 
-	mu     sync.Mutex
-	prefix string
+	mu      sync.Mutex
+	prefix  string
+	pending []BatchOp
 }
 
 // NewBeads returns a tracker bound to t, writing guarded operations as
@@ -445,6 +446,105 @@ func (b *Beads) Attempts(ctx context.Context, sessionID string) ([]Attempt, erro
 	}
 	sort.Slice(attempts, func(i, j int) bool { return attempts[i].Number < attempts[j].Number })
 	return attempts, nil
+}
+
+// QueueClose buffers a terminal close whose comment rides as the close
+// reason. The write is applied by the next FlushWrites.
+func (b *Beads) QueueClose(id, comment string) error {
+	op := BatchClose(id, comment)
+	if _, err := op.Render(); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pending = append(b.pending, op)
+	return nil
+}
+
+// QueueUpdate buffers a grammar-legal field update (status, priority,
+// title, assignee, force). Metadata is not settable through the batch
+// grammar, so metadata writes — attempt re-puts included — must keep using
+// the single-op Update path. The write is applied by the next FlushWrites.
+func (b *Beads) QueueUpdate(id string, f BatchFields) error {
+	op := BatchUpdate(id, f)
+	if _, err := op.Render(); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pending = append(b.pending, op)
+	return nil
+}
+
+// QueueCreate buffers a grammar-legal create (type, priority, title only;
+// no pinned id, labels, or metadata — those need the single-op path).
+func (b *Beads) QueueCreate(typ string, priority int, title string) error {
+	op := BatchCreate(typ, priority, title)
+	if _, err := op.Render(); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pending = append(b.pending, op)
+	return nil
+}
+
+// QueueDepAdd buffers a dependency add. An empty depType is bd's default.
+func (b *Beads) QueueDepAdd(fromID, toID, depType string) error {
+	op := BatchDepAdd(fromID, toID, depType)
+	if _, err := op.Render(); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pending = append(b.pending, op)
+	return nil
+}
+
+// QueueDepRemove buffers a dependency removal.
+func (b *Beads) QueueDepRemove(fromID, toID string) error {
+	op := BatchDepRemove(fromID, toID)
+	if _, err := op.Render(); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pending = append(b.pending, op)
+	return nil
+}
+
+// FlushWrites applies every queued write in one bd batch transaction: one
+// engine start and one commit instead of N. An empty buffer contacts
+// nothing. A failed batch is rolled back atomically by bd, so the buffer is
+// kept and the caller may retry (or drop it by re-queuing nothing and
+// abandoning the tracker). Claims, defers, and heartbeats are outside the
+// batch grammar and always go single-op; queue only what the grammar
+// allows.
+func (b *Beads) FlushWrites(ctx context.Context) error {
+	b.mu.Lock()
+	pending := b.pending
+	b.mu.Unlock()
+	if len(pending) == 0 {
+		return nil
+	}
+	if _, err := b.t.Batch(ctx, pending); err != nil {
+		if typed := classifyExit(err); typed != nil {
+			return fmt.Errorf("flush writes: %w", typed)
+		}
+		return fmt.Errorf("flush writes: %w", err)
+	}
+	b.mu.Lock()
+	b.pending = nil
+	b.mu.Unlock()
+	return nil
+}
+
+// BufferedWrites reports how many writes are queued, awaiting the next
+// FlushWrites.
+func (b *Beads) BufferedWrites() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.pending)
 }
 
 // decodeOneIssue accepts the single bead or single-element array shapes bd

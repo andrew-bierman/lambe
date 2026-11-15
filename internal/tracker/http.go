@@ -116,6 +116,12 @@ func (t *HTTPTransport) Defer(_ context.Context, _ string, _ *time.Time, _ strin
 	return t.unsupported("defer")
 }
 
+// Batch implements Transport; the daemon's bd serve wiring has not pinned
+// a batch endpoint yet.
+func (t *HTTPTransport) Batch(_ context.Context, _ []BatchOp) (Result, error) {
+	return t.unsupported("batch")
+}
+
 // Events implements Transport: GET /v0/beads/events?since=N, where HTTP 410
 // maps to the truncation contract via ExitError.
 func (t *HTTPTransport) Events(ctx context.Context, since int64) (Result, error) {

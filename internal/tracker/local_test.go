@@ -14,9 +14,12 @@ import (
 
 // bdBin returns the bd binary path, or "" when bd is unavailable. These
 // tests are skipped under -short and where bd is absent; a CI runner that
-// wants them must install bd and run the full suite.
+// wants them must install bd and run the full suite. LAMBE_TEST_BD either
+// names an explicit binary path or is set to a truthy value ("1", "true")
+// meaning "use the first bd found on PATH or in ~/.local/bin"; unsetting
+// it defers to PATH discovery as well, so green never silently skips.
 func bdBin() string {
-	if bin := os.Getenv("LAMBE_TEST_BD"); bin != "" {
+	if bin := os.Getenv("LAMBE_TEST_BD"); bin != "" && bin != "1" && bin != "true" {
 		return bin
 	}
 	if bin, err := exec.LookPath("bd"); err == nil {

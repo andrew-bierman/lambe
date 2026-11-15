@@ -76,6 +76,11 @@ func (f *fakeTransport) ConfigGet(_ context.Context, _ string) (string, error) {
 	return "x", nil
 }
 
+func (f *fakeTransport) Batch(_ context.Context, _ []BatchOp) (Result, error) {
+	f.calls = append(f.calls, "batch")
+	return Result{}, nil
+}
+
 func TestDispatchableEmptyQueryMakesNoCall(t *testing.T) {
 	ft := &fakeTransport{}
 	b := NewBeads(ft, "lambe@test")

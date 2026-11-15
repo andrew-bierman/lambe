@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -224,6 +225,30 @@ func (t *ShellTransport) Reclaim(ctx context.Context, olderThan time.Duration, i
 		args = append(args, "--id", id)
 	}
 	return t.run(ctx, args)
+}
+
+// Batch implements Transport. All ops render into a temp batch file applied
+// by a single `bd batch -f` invocation: one engine start, one DOLT_COMMIT,
+// rolled back entirely on any error. Render failures return before bd runs.
+func (t *ShellTransport) Batch(ctx context.Context, ops []BatchOp) (Result, error) {
+	if len(ops) == 0 {
+		return Result{}, nil
+	}
+	var sb strings.Builder
+	for i, op := range ops {
+		line, err := op.Render()
+		if err != nil {
+			return Result{}, fmt.Errorf("batch op %d: %w", i+1, err)
+		}
+		sb.WriteString(line)
+		sb.WriteByte('\n')
+	}
+	path := filepath.Join(os.TempDir(), fmt.Sprintf("lambe-bd-batch-%d-%d.bd", os.Getpid(), time.Now().UnixNano()))
+	if err := os.WriteFile(path, []byte(sb.String()), 0o600); err != nil {
+		return Result{}, fmt.Errorf("write batch file: %w", err)
+	}
+	defer os.Remove(path) //nolint:errcheck // best-effort cleanup of a temp file
+	return t.run(ctx, []string{"batch", "-f", path, "--json"})
 }
 
 // Events implements Transport. BD_EVENTS_JOURNAL=1 makes the journal record
