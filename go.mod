@@ -11,6 +11,7 @@ tool (
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/coder/acp-go-sdk v0.13.5
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/knadh/koanf/parsers/yaml v1.1.1
 	github.com/knadh/koanf/providers/confmap v1.0.1
