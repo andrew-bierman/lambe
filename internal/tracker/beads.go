@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"math"
 	"bufio"
 	"context"
 	"encoding/json"
@@ -45,7 +46,7 @@ type issueJSON struct {
 func (j issueJSON) toIssue() Issue {
 	meta := make(map[string]string, len(j.Metadata))
 	for k, v := range j.Metadata {
-		meta[k] = fmt.Sprintf("%v", v)
+		meta[k] = metadataString(v)
 	}
 	return Issue{
 		ID:       j.ID,
@@ -55,6 +56,25 @@ func (j issueJSON) toIssue() Issue {
 		Revision: j.Revision,
 		Metadata: meta,
 	}
+}
+
+// metadataString renders a decoded metadata value losslessly. bd returns
+// numbers as JSON floats; plain %v formatting turns large integers (real
+// process-group ids are typically >= 1e6) into scientific notation like
+// "2.900324e+06", which strconv.Atoi rejects and crash recovery then loses
+// the pgid binding. Integral floats below 1e15 render as plain integers.
+func metadataString(v any) string {
+	switch n := v.(type) {
+	case float64:
+		if n == math.Trunc(n) && math.Abs(n) < 1e15 {
+			return strconv.FormatInt(int64(n), 10)
+		}
+	case bool:
+		return strconv.FormatBool(n)
+	case nil:
+		return ""
+	}
+	return fmt.Sprintf("%v", v)
 }
 
 // classifyExit maps bd exit codes to typed outcomes. It returns nil when
@@ -394,7 +414,11 @@ func (b *Beads) PutAttempt(ctx context.Context, a Attempt) error {
 		wake = a.WakeAt.UTC().Format(time.RFC3339)
 	}
 	update[metaWakeAt] = wake
-	if _, err := b.t.Update(ctx, UpdateRequest{ID: b.mustPrefix(ctx) + "-" + attemptKey(a.SessionID, a.Number), Metadata: update}); err != nil {
+	// Operational records stay off the ready dispatch front: an open attempt
+	// bead would be dispatched as work by the loop's own two-read within the
+	// same tick that wrote it. "blocked" keeps it readable via metadata query
+	// while invisible to Dispatchable.
+	if _, err := b.t.Update(ctx, UpdateRequest{ID: b.mustPrefix(ctx) + "-" + attemptKey(a.SessionID, a.Number), Status: "blocked", Metadata: update}); err != nil {
 		if typed := classifyExit(err); typed != nil {
 			return fmt.Errorf("put attempt: %w", typed)
 		}
