@@ -35,12 +35,12 @@ Autonomous coding agents stop making progress unattended. The verified 2026 reco
 
 **Conformance and loop**
 
-- R1. The daemon implements the Symphony §18.1 REQUIRED-for-conformance surface at SPEC commit `8001b52`: WORKFLOW.md loader with hot-reload that never crashes on invalid reload, polling orchestrator, tracker adapter with state-list and ID-refresh reads, sanitized per-issue workspaces with the four lifecycle hooks, strict `{issue, attempt}` prompt rendering, exponential retry with continuation retries, reconciliation stopping runs on terminal states, terminal workspace cleanup, and structured logs carrying `issue_id`/`issue_identifier`/`session_id`.
+- R1. The daemon implements the Symphony §18.1 REQUIRED-for-conformance surface at SPEC commit `8001b52`: WORKFLOW.md loader with hot-reload that never crashes on invalid reload, typed config layer with defaults and `$VAR` resolution, polling orchestrator, tracker adapter with state-list and ID-refresh reads, sanitized per-issue workspaces with the four lifecycle hooks, strict `{issue, attempt}` prompt rendering, exponential retry with continuation retries, reconciliation stopping runs on terminal states, terminal workspace cleanup, and structured logs carrying `issue_id`/`issue_identifier`/`session_id`. The agent-invocation target is a documented divergence: the Pi driver honors the launch/turn contract in place of the Codex app-server client (permitted by SP958-962 when the contract is honored).
 - R2. The Beads tracker adapter publishes a Symphony adapter profile and implements the two-read contract (state-list, ID-refresh), including the empty-input short-circuit.
 
 **State substrate**
 
-- R3. All shared work state — tasks, claims, dependencies, progress comments, memories — lives in the existing Beads hub; the daemon creates no second shared store.
+- R3. All shared work state — tasks, claims, dependencies, progress comments, memories — lives in Beads; the daemon creates no second shared store. The tracker adapter is layout-agnostic: a shared multi-project hub, repo-level trackers, or `.beads/` committed inside repos are all supported, selected by config — never assume one board topology.
 - R4. The daemon's operational state (harness session bindings, attempt counters, wake timers, process-group bindings) lives in a machine-local embedded-Beads tracker that never syncs; wake timers use native defer semantics.
 - R5. Responsibilities are declared as Beads formulas (TOML under `.beads/formulas/` in the hub repo), materialized through cook/pour, and dispatched through the same loop as finite work.
 
@@ -49,7 +49,7 @@ Autonomous coding agents stop making progress unattended. The verified 2026 reco
 - R6. The daemon is crash-only: safe to SIGKILL at any instruction; every reconcile decision derives from Beads state and the local tracker, never from memory alone.
 - R7. Supervised runs are watched by a silence-timeout watchdog with two independent liveness signals, and every kill path uses the group SIGTERM → bounded grace → group SIGKILL ladder.
 - R8. Provider limit lockouts are classified heuristically (Pi emits no limit signal) and handled by deferring the issue with a wake-at-reset time rather than burning retry attempts.
-- R9. A responsibility stops dispatching after 8 failed attempts (configurable), moving its issue to a needs-human status with the last gate output written to Beads; the workspace is retained for inspection.
+- R9. A responsibility stops dispatching after 8 failed attempts (configurable), or after a configurable run of consecutive gate-infra errors or heuristic deferrals with no completed attempt, moving its issue to a needs-human status with the last gate output written to Beads; the workspace is retained for inspection.
 
 **Verified completion**
 
@@ -92,7 +92,7 @@ Autonomous coding agents stop making progress unattended. The verified 2026 reco
 
 Outside this product's identity (non-goals): no LLM watchdogs; no self-owned state plane; no UI beyond logs and `lambe status`; no agent-self-reported completion path, ever.
 
-Deferred to Follow-Up Work: ACP driver as the second harness implementation (owner-expressed interest; the driver interface is designed for it); MCP server surface (accept-handle-return + status/cancel); Rex surface (OSC 7501, session labels); HTTP `/api/v1/state` dashboard; additional harness drivers (Codex, Claude Code, OpenCode); bd-as-Go-library embedding (measure shell-out cost first); multi-machine deployment (reclaim logic ships and is fault-tested, but no second machine in scope); shared Dolt-server mode; same-commit gate hardening beyond the CI-on-PR-head default.
+Deferred to Follow-Up Work: ACP driver as the second harness implementation (owner-expressed interest; the driver interface is designed for it, and a Go SDK exists — github.com/coder/acp-go-sdk); MCP server surface (accept-handle-return + status/cancel); Rex surface (OSC 7501, session labels); HTTP `/api/v1/state` dashboard; additional harness drivers (Codex, Claude Code, OpenCode); bd-as-Go-library embedding (measure shell-out cost first); multi-machine deployment and the affinity-routing/failover config that ships with it (reclaim logic ships and is fault-tested, but no second machine in scope); shared Dolt-server mode; same-commit gate hardening beyond the CI-on-PR-head default; limit-classifier accuracy baseline on real Pi traffic.
 
 ---
 
@@ -103,14 +103,14 @@ Deferred to Follow-Up Work: ACP driver as the second harness implementation (own
 - KTD1. **Go 1.26 floor, single static binary per machine.** (session-settled: user-approved — chosen over Elixir/TypeScript: static cross-compiled binaries, process-control strength, and bd is itself Go.) GoReleaser produces macOS + Linux artifacts.
 - KTD2. **Pi driver over the RPC JSONL protocol**: strict LF framing, ID-correlated commands, listeners attached before first prompt, completion on `agent_settled` (never `agent_end` alone), resume via `--session-id` at spawn, `streamingBehavior` tracking, vendor guidance confirms deadlines are the client's job. (session-settled: user-directed — chosen over Codex-first: Pi's RPC is built for programmatic drivers; limit signaling stays optional in the driver interface because Pi emits none.)
 - KTD3. **Symphony §18.1 conformance pinned to `8001b52`**, durable runtime state as the spec's own §18.2-listed extension, multi-orchestrator profile documented as divergence with Beads claims supplying the fencing the spec omits. Quarterly SPEC re-diff. (session-settled: user-directed — chosen over bespoke-only.)
-- KTD4. **The daemon supervises a `bd serve` child per tracker database** (loopback HTTP + SSE events journal) with shell-out fallback for commands the HTTP surface lacks; `BD_JSON_ENVELOPE=1` set once; exit 13 (lost CAS race — stand down) and 14 (migration freeze — retry later) branch explicitly; events journal enabled at every writer with per-server seq checkpoints and 410/409/truncated re-baseline.
+- KTD4. **The daemon supervises a `bd serve` child for the hub clone only** (loopback HTTP + SSE events journal) with shell-out fallback for commands the HTTP surface lacks; **the local operational tracker runs embedded in-process per R4** (file-lock single-writer, no server child — a killed serve process must never become a mid-reconcile fault path); `BD_JSON_ENVELOPE=1` set once; exit 13 (lost CAS race — stand down) and 14 (migration freeze — retry later) branch explicitly, with the mapping verified against the installed bd at U3 implementation start; events journal enabled at every writer with per-server seq checkpoints and 410/409/truncated re-baseline.
 - KTD5. **Process discipline from the first spawn abstraction**: `Setpgid` with negative-PID group kill; single-goroutine `Wait` ownership with `os.Pipe` (no `StdoutPipe`); `Cmd.WaitDelay` bounding post-exit pipe waits; SIGTERM → grace → SIGKILL ladder everywhere; pgid + session binding persisted to the local tracker before `Start()` returns; `PDEATHSIG` never relied on (macOS-absent). A deterministic regression test pins the pipe/Wait race.
 - KTD6. **Single instance via `flock` held for life** (kernel-released on SIGKILL); PID file is a human hint, never an arbiter; restart recovery scans persisted pgids and adopts (resume) or group-kills orphans after re-verifying lease ownership — stand down without killing when the assignee changed.
-- KTD7. **Gate semantics**: the gate runs on every `agent_settled`; three-valued outcome; red injects gate output as continuation guidance and consumes an attempt; error defers with gate-retry on timer and consumes nothing; attempt cap 8 → needs-human; formula/WORKFLOW revision pinned at claim.
+- KTD7. **Gate semantics**: the gate runs on every `agent_settled`; three-valued outcome; red injects gate output as continuation guidance and consumes an attempt; error defers with gate-retry on timer and consumes nothing; attempt cap 8 → needs-human; formula/WORKFLOW revision pinned at claim. Consecutive gate-infra errors and consecutive heuristic deferrals each carry a persisted counter (local tracker, survives restarts) that escalates the issue to needs-human when exceeded — deferral is never an infinite silent loop.
 - KTD8. **Agents touch the hub only.** The local tracker is daemon-private (single-writer file lock); attempt parity reaches agents through the spec-mandated `{issue, attempt}` prompt rendering; WORKFLOW.md is human-only-editable (agents read and execute).
 - KTD9. **Config via koanf**, defaults < file < env < flags, env-flattening rule documented day one, validated pre-boot with all errors collected; heartbeat at TTL/3; knobs ship as constants with env overrides.
 - KTD10. **Tooling pinned via go.mod `tool` directive**: golangci-lint v2, gofumpt, staticcheck, govulncheck; stdlib `slog` JSON handler with pid/pgid/session/attempt on every lifecycle line; `go-cmp`; re-exec `TestMain` fake-agent harness; native fuzz target for the JSONL frame parser; logging via `slog`, no Sprintf'd messages.
-- KTD11. **Hub sync is single-writer in slice one**: pull at tick start, push after successful write batches; `bd reclaim` timer at ~2× lease TTL, scoped `--any-replica --id`; invariants (TTL > sync interval, grace > sync interval) documented for the multi-machine future.
+- KTD11. **Hub sync is single-writer in slice one**: pull at tick start, push after successful write batches; the owner's formula and WORKFLOW.md edits reach the hub remote through the work machine's clone (commit on-machine, or stop the daemon first — the README documents the stop), and the daemon's push retries pull-then-push on non-fast-forward instead of forcing; `bd reclaim` timer at ~2× lease TTL, scoped `--any-replica --id`; invariants (TTL > sync interval, grace > sync interval) documented for the multi-machine future.
 - KTD12. **WORKFLOW.md reload**: in-flight runs finish under their pinned revision (KTD7); reload applies to the next claim; invalid reload logs and keeps the last-good copy per spec.
 
 ### Assumptions
@@ -119,7 +119,8 @@ Deferred to Follow-Up Work: ACP driver as the second harness implementation (own
 - Pi's installed release matches `master` RPC docs; the build verifies `rpc-commands.md` against the pinned Pi version at implementation time.
 - Heuristic limit classification (error-string patterns + repeated failures with no progress writes) is adequate on Pi for slice one; classification confidence is logged for later tuning.
 - Gate execution via `gh:run`/CI status on the PR head is the default same-commit-gaming mitigation; deeper hardening is deferred (Scope Boundaries).
-- The hub clone on the work machine is the only writer during slice one, making the pull/push cycle safe without coordination.
+- The hub clone on the work machine is the only daemon writer during slice one (owner edits flow through it per KTD11), making the pull/push cycle safe without coordination.
+- bd 1.4.0 line is pinned at go-live; the owner has approved running rc builds locally, so rc.2+ is acceptable with `bd version`/schema checks at startup.
 
 ### Risks & Dependencies
 
@@ -139,7 +140,7 @@ Component topology:
 flowchart TB
     subgraph machine[one machine]
         lambe[lambe daemon] -->|supervises| bds[bd serve - hub clone]
-        lambe -->|supervises| bdl[bd serve - local tracker]
+        lambe -->|embedded local tracker| bdl[local Beads tracker - in-process, never synced]
         lambe -->|spawns + watches| pi[Pi agent child - JSONL RPC]
         lambe -->|workspace hooks + gates| ws[per-issue workspace]
         pi -->|progress comments| bds
@@ -185,7 +186,7 @@ U1 → U2 → U3 are the foundation (scaffold, process primitives, tracker adapt
 - **Requirements:** R15 (partial), R14 (interface placement).
 - **Dependencies:** none.
 - **Files:** `go.mod`, `cmd/lambe/main.go`, `internal/config/`, `internal/logging/`, `.golangci.yml`, `.goreleaser.yaml`, `CONTRIBUTING.md`, `LICENSE` (MIT).
-- **Approach:** Go 1.26 floor; koanf config loader (defaults < file < env < flags) with the env-flattening rule in `internal/config`; `slog` JSON handler with lifecycle attr helpers; tools pinned via the go.mod `tool` directive; GoReleaser config for macOS + Linux static builds; a `lambe version` subcommand proving the binary runs.
+- **Approach:** Go 1.26 floor; koanf config loader (defaults < file < env < flags) with the env-flattening rule in `internal/config`; `slog` JSON handler with lifecycle attr helpers; tools pinned via the go.mod `tool` directive; GoReleaser config for macOS + Linux static builds; a `lambe version` subcommand proving the binary runs; tracker-source config that names each Beads layout it reads (hub clone, repo tracker, or in-repo `.beads/`).
 - **Patterns to follow:** standard Go project layout — `cmd/`, `internal/`, no `pkg/`.
 - **Test scenarios:**
   - Defaults apply with no file/env/flag present; config boots zero-config.
@@ -199,7 +200,7 @@ U1 → U2 → U3 are the foundation (scaffold, process primitives, tracker adapt
 - **Requirements:** R7 (kill ladder, watchdogs).
 - **Dependencies:** U1.
 - **Files:** `internal/proc/` (spawn, group-kill ladder, silence watchdog, wait ownership), `internal/proc/proc_test.go`, `internal/testchild/` (re-exec fake-agent helper).
-- **Approach:** One goroutine owns `Wait` and closes pipe read-cends after EOF; `os.Pipe` ends passed to the child; `Cmd.WaitDelay` set so group-SIGKILL wins races; `Setpgid` + negative-PID kill helper; two-timer watchdog (max-deadline context + silence timer reset on each valid frame); re-exec helper dispatching on an env var to fake `hang|silent|exit0|spam|ignore-sigterm|grandchild-holds-pipe` behaviors; a Go fuzz target for the LF-strict JSONL frame reader.
+- **Approach:** One goroutine owns `Wait` and closes pipe read-cends after EOF; `os.Pipe` ends passed to the child; `Cmd.WaitDelay` set so group-SIGKILL wins races; `Setpgid` + negative-PID kill helper; two-timer watchdog (max-deadline context + silence timer reset on each valid frame); re-exec helper dispatching on an env var to fake `hang|silent|exit0|spam|ignore-sigterm|grandchild-holds-pipe|limit-error|streaming-then-settled` behaviors (the last two serve U5's classifier and `streamingBehavior`/`agent_settled` tests and U8's limit-lockout fault); a Go fuzz target for the LF-strict JSONL frame reader.
 - **Execution note:** Build the pipe/Wait regression test first — hold a reader past the bound, deliver a final frame, assert it is never lost; this is the documented 2026 postmortem bug class for exactly this shape.
 - **Test scenarios:**
   - Final JSONL frame survives concurrent `Wait` (the regression test).
@@ -229,10 +230,10 @@ U1 → U2 → U3 are the foundation (scaffold, process primitives, tracker adapt
 ### U4. Symphony core loop and workspaces
 
 - **Goal:** The §18.1 conformant orchestrator: WORKFLOW.md, workspaces, hooks, prompt rendering, retry, reconciliation, cleanup.
-- **Requirements:** R1, R2, R11 (revision pinning), R12 (write-back path), R6 (reconcile from state).
+- **Requirements:** R1, R2, R5, R11 (revision pinning), R12 (write-back path), R6 (reconcile from state).
 - **Dependencies:** U3.
 - **Files:** `internal/symphony/` (workflow loader/watcher, workspace manager, hooks, prompt renderer, retry queue, reconciler), `internal/symphony/*.test.go`, `WORKFLOW.md` (repo template).
-- **Approach:** WORKFLOW.md loader with watcher honoring KTD12 reload semantics (in-flight runs keep their pinned revision; invalid reload logs, keeps last-good, never crashes); sanitized workspace keys `[A-Za-z0-9._-]` + hash suffix when sanitization changed the identifier; the four hooks with spec failure semantics (after_create fatal, before_run aborts attempt, after_run logged, before_remove ignored); strict `{issue, attempt}` rendering failing on unknown vars; retry `min(10000·2^(attempt-1), cap)` with 1s continuation; reconciliation re-fetches by ID and stops runs on terminal states; terminal cleanup keyed on pinned id; formula revision recorded on the attempt at claim time.
+- **Approach:** WORKFLOW.md loader with watcher honoring KTD12 reload semantics (in-flight runs keep their pinned revision; invalid reload logs, keeps last-good, never crashes); sanitized workspace keys `[A-Za-z0-9._-]` + hash suffix when sanitization changed the identifier; the four hooks with spec failure semantics (after_create fatal, before_run aborts attempt, after_run logged, before_remove ignored); strict `{issue, attempt}` rendering failing on unknown vars; retry `min(10000·2^(attempt-1), cap)` with 1s continuation; reconciliation re-fetches by ID and stops runs on terminal states; terminal cleanup keyed on pinned id; formula revision recorded on the attempt at claim time. The loop's two-read includes responsibility formulas: triggers (e.g. red-CI detection for keep-tests-green) evaluate per tick, and `bd cook` → `bd mol pour` materializes finite issues into the hub before dispatch, so responsibilities flow through the same loop as finite work.
 - **Patterns to follow:** Symphony SPEC §5–§9 as cited in `docs/research/deep-symphony-spec.md`.
 - **Test scenarios:**
   - Invalid WORKFLOW.md written mid-run: daemon keeps serving, logs, keeps last-good.
@@ -241,6 +242,7 @@ U1 → U2 → U3 are the foundation (scaffold, process primitives, tracker adapt
   - after_create failure: workspace creation retried later, agent never spawned.
   - Issue closed externally mid-run: reconcile stops the run at next check.
   - Revision pin: WORKFLOW.md edited between claim and settle → attempt judged under the pinned revision.
+  - Responsibility trigger: a formula's trigger condition met → `bd cook` + pour materializes the finite issue → next two-read dispatches it (R5).
 - **Verification:** Unit tests green; §18.1 checklist items for loop/workspaces/hooks initialed in the Verification Contract table.
 
 ### U5. Pi harness driver
@@ -281,13 +283,14 @@ U1 → U2 → U3 are the foundation (scaffold, process primitives, tracker adapt
 - **Requirements:** R6, R3 (sync), R15, R13 (status readout).
 - **Dependencies:** U4, U5, U6.
 - **Files:** `cmd/lambe/` (run, status subcommands), `internal/daemon/` (flock, recovery, shutdown, tick loop, sync), `internal/daemon/daemon_test.go`, `launchd`/`systemd` example units under `examples/`.
-- **Approach:** `flock` held for life (KTD6); startup order: lock → `bd serve` children → recovery scan (persisted pgids: adopt or group-kill after lease re-verification; stand down without killing when assignee changed) → tick loop; tick = pull hub → two-read → dispatch per R1 → write batch → push; SIGTERM/SIGINT forwarded to children via ladder with bound; SIGHUP reloads config; `lambe status` reads the local tracker + hub and prints the morning report (active, deferred + wake times, needs-human, last-night gate rejections); machine-affinity routing config (responsibility → home machine label) with failover off by default; launchd/systemd examples shipped, not installed.
+- **Approach:** `flock` held for life (KTD6); startup order: lock → `bd serve` children → recovery scan (persisted pgids: adopt or group-kill after lease re-verification; stand down without killing when assignee changed) → tick loop; tick = pull hub → two-read → dispatch per R1 → write batch → push; SIGTERM/SIGINT forwarded to children via ladder with bound; SIGHUP reloads config; `lambe status` reads the local tracker + hub and prints the morning report (active, deferred + wake times, needs-human, last-night gate rejections); dispatch applies a fixed label-skip rule (issues labeled for another machine are never dispatched locally — no config surface in slice one; the affinity-routing and failover posture config ships with multi-machine work); launchd/systemd example units shipped under `examples/`, and the README's zero-config startup documents loading the unit (KeepAlive / Restart=on-failure) so daemon death is recovered by the OS, not by a human returning later; document the approval posture (no interactive approvals — proceed or defer) in `examples/` alongside the units.
 - **Test scenarios:**
   - Second daemon instance exits immediately on lock contention; first unaffected.
   - Restart with orphaned fake agent whose lease still holds: adopted (resume same session).
   - Restart with orphan whose issue was reclaimed (assignee changed): stands down, no kill, no duplicate dispatch.
   - SIGTERM: children get the ladder, daemon exits within bound, lock released.
-  - Affinity: responsibility labeled for another machine is never dispatched locally.
+  - Affinity: responsibility labeled for another machine is never dispatched locally (fixed rule, no config).
+  - Approval posture documented in `examples/` alongside the service units; checklist item initialable.
 - **Verification:** Daemon lifecycle tests green including `-race`; `lambe status` renders a correct report against fixture trackers.
 
 ### U8. Fault-injection suite
@@ -318,13 +321,16 @@ U1 → U2 → U3 are the foundation (scaffold, process primitives, tracker adapt
 | Fault suite | `go test ./test/faultsuite/` | All five scenarios green |
 | §18.1 conformance checklist | Item-by-item table in the PR description, initialed per unit | Complete |
 | Example responsibility | keep-tests-green formula end-to-end on a scratch repo | Observably closes |
+| Example environment | fixture GitHub repo with Actions enabled + authenticated `gh` in the test environment; the keep-tests-green formula's trigger wired to that repo's CI | Named and provisioned |
+| OS-level restart | launchd/systemd unit from `examples/` loaded on the dev machine (KeepAlive / Restart=on-failure) | Daemon crash recovers without human action |
 
-Symphony §18.1 checklist (initialed as units land): WORKFLOW.md loader (U4) · hot-reload non-crash (U4) · two-read tracker adapter + profile (U3) · sanitized workspaces + 4 hooks (U4) · strict prompt rendering (U4) · retry queue + continuation (U4) · reconciliation on terminal states (U4) · terminal cleanup (U4, U6) · structured logs with issue/session ids (U1, U4) · approval posture documented: no interactive approvals — proceed or defer (U7 docs).
+Symphony §18.1 checklist (initialed as units land): WORKFLOW.md loader (U4) · hot-reload non-crash (U4) · typed config layer with defaults + `$VAR` resolution (U1, U4) · two-read tracker adapter + profile (U3) · sanitized workspaces + 4 hooks (U4) · strict prompt rendering (U4) · retry queue + continuation (U4) · reconciliation on terminal states (U4) · terminal cleanup (U4, U6) · structured logs with issue/session ids (U1, U4) · agent-invocation target: documented divergence — Pi driver honors the launch/turn contract in place of the Codex app-server client (U5) · approval posture documented: no interactive approvals — proceed or defer (U7 docs).
 
 ## Definition of Done
 
 - All Verification Contract gates pass, including the five fault scenarios under `-race`.
 - The example responsibility runs unattended end-to-end: red → pour → dispatch → gate green → close, record readable via `bd`.
+- Daemon death on the dev machine is recovered by the OS: the service unit is loaded and its restart behavior verified by killing the daemon.
 - Every session-settled decision is implemented as labeled (KTD1–KTD3, KTD8 carry the labels) or the run stopped with `settled-decision-invalidated`.
 - No dead experimental code: approaches tried and abandoned during implementation are removed from the diff, not left behind.
 - `README` documents zero-config single-machine startup, the adapter seams, and the multi-orchestrator divergence note; `LICENSE` (MIT) and attribution (OpenAI Symphony spec, Apache-2.0) are in place.
