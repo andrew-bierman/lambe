@@ -47,7 +47,9 @@ type Tracker struct {
 // Config is the fully resolved daemon configuration.
 type Config struct {
 	Supervisor Supervisor
-	Trackers   []Tracker
+	// Harness names the default agent backend: "pi" or "acp".
+	Harness  string
+	Trackers []Tracker
 }
 
 // Options controls where Load reads overrides from. Env and Flags are
@@ -102,7 +104,13 @@ func Load(opts Options) (*Config, error) {
 		}
 	}
 
+	harness := k.String("harness")
+	if harness == "" {
+		harness = "pi"
+	}
+
 	cfg := &Config{
+		Harness: harness,
 		Supervisor: Supervisor{
 			TickSeconds:        k.Int("supervisor.tick_seconds"),
 			AttemptCap:         k.Int("supervisor.attempt_cap"),
