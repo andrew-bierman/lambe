@@ -1,0 +1,39 @@
+# Formula: pr-reviewer (a human-gated responsibility)
+#
+# Responsibility: every open pull request gets reviewed — first by the
+# agent (summary, risk callouts, review comments), then by a human, whose
+# approval is the only path to done.
+#
+# Trigger: fires (non-zero exit) when at least one open PR is awaiting
+# review, so each such PR materializes one review issue.
+#
+# Gate: lambe has no native "human" gate kind — the parser accepts only
+# type shell, gh:run, or gh:pr (see internal/gate/gate.go ParseKind). The
+# human exit-gate is therefore modeled as a shell gate that polls the PR's
+# review decision: the gate stays red until a human approves on GitHub,
+# and the loop's retry/escalation machinery (attempt caps, needs-human)
+# handles the waiting. Swap in your own approval signal (a label, a
+# comment convention, a file) if GitHub reviews are not your flow.
+
+[trigger]
+# Fires when any PR is sitting in review-pending state.
+command = 'test -n "$(gh pr list --repo "${LAMBE_GH_REPO:-.}" --review-pending --state open --json number --jq ".[].number")"'
+
+[steps]
+# Step 1: summarize the diff for the reviewer — what changed, why, and the
+# riskiest parts. Posted as a PR comment so the human review starts warm.
+[[steps.summarize]]
+run = 'gh pr diff "${LAMBE_PR_NUMBER:?}" > /tmp/pr.diff && review-summarize /tmp/pr.diff | gh pr comment "${LAMBE_PR_NUMBER}" --body-file -'
+
+# Step 2: leave line-level review comments on anything questionable, then
+# request a human review. The agent proposes; it does not approve.
+[[steps.request_review]]
+run = 'gh pr ready "${LAMBE_PR_NUMBER:?}" && gh pr edit "${LAMBE_PR_NUMBER:?}" --add-reviewer "${LAMBE_REVIEWER:?}"'
+
+[gate]
+# Human exit-gate, shell-shaped: green only when a human has APPROVED the
+# PR on GitHub. Every non-approved state (PENDING, CHANGES_REQUESTED, no
+# review) is red, and the gate output tells the agent what is still being
+# asked of the human.
+type = "shell"
+command = 'test "$(gh pr view "${LAMBE_PR_NUMBER:?}" --json reviewDecision --jq .reviewDecision)" = "APPROVED"'
