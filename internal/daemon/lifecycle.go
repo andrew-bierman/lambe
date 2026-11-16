@@ -278,6 +278,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	primary := trackers[0]
 	d.primary = primary
+	primaryDir := ""
+	if len(d.opts.Config.Trackers) > 0 {
+		primaryDir = d.opts.Config.Trackers[0].Path
+	}
 	if f, ok := primary.(Flusher); ok {
 		d.flusher = f
 	}
@@ -308,7 +312,26 @@ func (d *Daemon) Run(ctx context.Context) error {
 			filtered.Labels = MetadataLabelSource{Tracker: primary}
 		}
 		spaces := symphony.NewWorkspaceManager(filepath.Join(d.opts.StateDir, "workspaces"), d.log)
-		loop = symphony.NewLoop(filtered, loader, d.asm.Runner, d.asm.Gates, spaces, d.log)
+		l := symphony.NewLoop(filtered, loader, d.asm.Runner, d.asm.Gates, spaces, d.log)
+		// Load responsibility formulas from the tracker's conventional
+		// .beads/formulas directory and wire the bd materializer so
+		// triggers materialize finite issues into the dispatch front.
+		formulaDir := filepath.Join(primaryDir, ".beads", "formulas")
+		formulas, err := symphony.LoadFormulas(formulaDir)
+		if err != nil {
+			d.log.Warn("formula loading failed; running without responsibilities", "dir", formulaDir, "error", err)
+		} else {
+			l.Formulas = formulas
+			l.Materializer = &symphony.BeadsMaterializer{
+				Bin: d.opts.BdBin,
+				Dir: primaryDir,
+				Log: d.log,
+			}
+			if n := len(formulas); n > 0 {
+				d.log.Info("responsibilities loaded", "count", n, "dir", formulaDir)
+			}
+		}
+		loop = l
 		d.loop = loop
 		go func() {
 			if err := loader.Watch(runCtx); err != nil {
