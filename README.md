@@ -46,21 +46,44 @@ configuration written by init; `-config FILE` selects another one.
 
 ## Quickstart
 
-Install (Go 1.27+):
+Production installs use a tagged GitHub release archive, never a local build or
+an untagged `master` commit. For macOS on Apple Silicon:
 
 ```sh
-go install github.com/andrew-bierman/lambe/cmd/lambe@latest
+(
+set -eu
+install_dir=$(mktemp -d)
+trap 'rm -rf "$install_dir"' EXIT
+gh release download v0.1.0 --repo andrew-bierman/lambe --dir "$install_dir" \
+  --pattern lambe_0.1.0_darwin_arm64.tar.gz --pattern checksums.txt
+(cd "$install_dir" && awk '$2 == "lambe_0.1.0_darwin_arm64.tar.gz"' checksums.txt | shasum -a 256 -c -)
+tar -xzf "$install_dir/lambe_0.1.0_darwin_arm64.tar.gz" -C "$install_dir"
+mkdir -p "$HOME/.local/bin"
+install -m 755 "$install_dir/lambe" "$HOME/.local/bin/lambe"
+lambe version
+)
 ```
 
-While the repository is private, Git must have access to it (for example,
-through `gh auth login` and `gh auth setup-git`). Install with:
+The private repository requires an authenticated `gh` account. Other platform
+archives are listed on the [releases page](https://github.com/andrew-bierman/lambe/releases).
+Release binaries report their version, commit and build date. Upgrading a binary
+does not upgrade a running daemon: stop it in its owning terminal, then restart.
+
+### Development installs
+
+Keep development builds out of the production PATH. From this checkout:
 
 ```sh
-GOPRIVATE=github.com/andrew-bierman/lambe go install github.com/andrew-bierman/lambe/cmd/lambe@latest
+go build -ldflags='-X main.version=dev-local' -o .dev/bin/lambe-dev ./cmd/lambe
+LAMBE_STATE_DIR="$PWD/.dev/state" LAMBE_WORKSPACE_ROOT="$PWD/.dev/workspaces" \
+  ./.dev/bin/lambe-dev run -config /absolute/path/to/dev-config.yaml
 ```
 
-No GitHub releases are published yet. The commands above install from the
-upstream repository; they do not use a local checkout.
+Use a disposable Beads tracker and an explicit development configuration. The
+separate state directory alone does not isolate tracker mutations. Do not run
+`go install` into the production binary directory while developing, and do not
+point a development instance at production tasks. These development builds report `dev-local`;
+release archives report the tagged version.
 
 Install `bd` and your chosen agent harness. Pi is the default; authenticate it
 with your model provider before starting Lambe. For Codex or another ACP agent,
@@ -100,6 +123,10 @@ trackers:
 lambe run -config lambe.yaml
 lambe status -config lambe.yaml
 ```
+
+Only one daemon runs per configured tracker. `lambe tui` and `lambe logs -follow`
+attach as viewers; quitting a viewer leaves the daemon running. To stop it,
+press Ctrl-C in the terminal running `lambe run`.
 
 The morning read:
 

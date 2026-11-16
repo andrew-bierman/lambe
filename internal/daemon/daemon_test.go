@@ -225,6 +225,9 @@ func TestAcquireStateLockContention(t *testing.T) {
 	if !errors.Is(err, ErrLockHeld) {
 		t.Fatalf("second acquire: want ErrLockHeld, got %v", err)
 	}
+	if !strings.Contains(err.Error(), "lambe tui") || !strings.Contains(err.Error(), "quitting a viewer does not stop it") {
+		t.Fatalf("lock contention lacks recovery guidance: %v", err)
+	}
 	if second != nil {
 		t.Fatal("second acquire must not return a lock")
 	}

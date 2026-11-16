@@ -44,7 +44,7 @@ func AcquireStateLock(path string) (*StateLock, error) {
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = file.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, fmt.Errorf("%w: %s", ErrLockHeld, path)
+			return nil, fmt.Errorf("%w: %s; use lambe tui or lambe logs -follow to view the running daemon; quitting a viewer does not stop it; stop the daemon in its terminal before restarting", ErrLockHeld, path)
 		}
 		return nil, fmt.Errorf("flock %s: %w", path, err)
 	}
