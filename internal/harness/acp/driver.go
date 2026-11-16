@@ -21,10 +21,9 @@
 //     always auto-denied (the reject option when offered, else cancelled)
 //     and surfaced as a [harness.DiagnosticEvent]; the agent sees the denial
 //     and continues or fails on its own.
-//   - Resume: an ACP session lives inside the agent process that created
-//     it, so a supervisor restart cannot reattach. Capabilities reports
-//     LimitSignal false and Resume fails with [ErrResumeNotSupported]; the
-//     supervisor falls back to reconstruct-from-record.
+//   - Resume: advertised session/resume avoids replaying long histories;
+//     session/load is the compatible fallback. Unsupported backends return
+//     [ErrResumeNotSupported] rather than silently starting a new thread.
 //   - Silence: ACP agents can go quiet without dying, so Run arms the
 //     internal/proc watchdog on inbound-traffic silence. A silent agent is
 //     killed via the group kill ladder and reported as a retryable
@@ -47,11 +46,11 @@ import (
 	"github.com/andrew-bierman/lambe/internal/proc"
 )
 
-// ErrResumeNotSupported reports that ACP sessions cannot be resumed across
-// processes: they die with the agent process that created them. Callers use
-// errors.Is to detect it and fall back to reconstructing the session from
-// the attempt record in a fresh process.
-var ErrResumeNotSupported = errors.New("acp: session resume is not supported: sessions are per-process")
+// ErrResumeNotSupported reports a backend that does not advertise session/load.
+var ErrResumeNotSupported = errors.New("acp: backend does not support loading saved sessions")
+
+// ErrSessionNotFound identifies a backend that explicitly has no saved conversation for the requested ID.
+var ErrSessionNotFound = errors.New("acp: saved backend session does not exist")
 
 // Driver tuning defaults.
 const (
@@ -64,6 +63,8 @@ const (
 
 // Options configures one ACP driver.
 type Options struct {
+	// SessionID loads a saved backend conversation when nonempty.
+	SessionID string
 	// Argv launches the agent in ACP mode, e.g. ["opencode", "acp"];
 	// typically obtained from Lookup. Mutually exclusive with Agent.
 	Argv []string
@@ -116,6 +117,7 @@ type Driver struct {
 	// pendingMessage buffers streamed assistant-message chunks until the
 	// next boundary (tool call or stop) completes the message.
 	pendingMessage string
+	replaying      bool
 
 	runMu sync.Mutex // serializes Run
 
@@ -168,9 +170,18 @@ func (d *Driver) Capabilities() harness.Capabilities {
 }
 
 // Start spawns the agent in ACP mode, performs the initialize handshake,
-// and creates a fresh session rooted at the configured directory. The event
+// and creates or loads a session rooted at the configured directory. The event
 // loop is attached before Start returns, so no inbound update can be missed.
 func (d *Driver) Start(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-d.closed:
+		return fmt.Errorf("acp: driver is closed")
+	default:
+	}
+
 	d.mu.Lock()
 	if d.client != nil {
 		d.mu.Unlock()
@@ -215,10 +226,19 @@ func (d *Driver) Start(ctx context.Context) error {
 		d.mu.Unlock()
 		return err
 	}
-	sessionID, err := client.newSession(ictx, dir)
+	sessionID := d.opts.SessionID
+	d.mu.Lock()
+	d.replaying = sessionID != ""
+	d.mu.Unlock()
+	if sessionID == "" {
+		sessionID, err = client.newSession(ictx, dir)
+	} else {
+		err = client.load(ictx, sessionID, dir)
+	}
 	if err != nil {
 		_ = client.Close(context.WithoutCancel(ctx), d.opts.TerminateGrace)
 		d.mu.Lock()
+		d.replaying = false
 		if d.client == client {
 			d.client = nil
 		}
@@ -227,9 +247,12 @@ func (d *Driver) Start(ctx context.Context) error {
 	}
 	d.mu.Lock()
 	d.sessionID = sessionID
+	d.replaying = false
+	// session/load replays history before returning; it is not output from the next turn.
+	d.pendingMessage = ""
 	d.stats = harness.SessionStats{SessionID: sessionID}
 	d.mu.Unlock()
-	d.log.Info("acp session created", "session_id", sessionID, "cwd", dir)
+	d.log.Info("acp session ready", "session_id", sessionID, "cwd", dir)
 	return nil
 }
 
@@ -278,12 +301,26 @@ func (d *Driver) Abort(ctx context.Context) error {
 	return client.cancel(cctx, sessionID)
 }
 
-// Resume is not supported: ACP sessions are per-process and die with the
-// agent that created them. It always fails with [ErrResumeNotSupported]; the
-// supervisor falls back to reconstructing the session from the attempt
-// record in a fresh process.
-func (d *Driver) Resume(context.Context, string) error {
-	return ErrResumeNotSupported
+// Resume replaces an idle agent process and loads the named backend conversation.
+func (d *Driver) Resume(ctx context.Context, sessionID string) error {
+	if sessionID == "" {
+		return fmt.Errorf("acp: resume requires a session id")
+	}
+	if !d.runMu.TryLock() {
+		return fmt.Errorf("acp: cannot resume during an active turn")
+	}
+	defer d.runMu.Unlock()
+	d.mu.Lock()
+	old := d.client
+	d.client = nil
+	d.opts.SessionID = sessionID
+	d.mu.Unlock()
+	if old != nil {
+		if err := old.Close(ctx, d.opts.TerminateGrace); err != nil {
+			return err
+		}
+	}
+	return d.Start(ctx)
 }
 
 // SessionStats returns the session's current usage snapshot, accumulated
@@ -386,6 +423,12 @@ func (d *Driver) Close(ctx context.Context) error {
 // handleUpdate maps one session/update notification onto typed events.
 // Updates are progress only; none of them settle a run.
 func (d *Driver) handleUpdate(n acpsdk.SessionNotification) {
+	d.mu.Lock()
+	replaying := d.replaying
+	d.mu.Unlock()
+	if replaying {
+		return
+	}
 	u := n.Update
 	switch {
 	case u.AgentMessageChunk != nil:
@@ -450,6 +493,9 @@ func (d *Driver) handlePermissionDenied(toolTitle string) {
 // ensureStarted returns the live client and session id, starting the
 // process if needed.
 func (d *Driver) ensureStarted(ctx context.Context) (*client, string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
 	d.mu.Lock()
 	client := d.client
 	sessionID := d.sessionID

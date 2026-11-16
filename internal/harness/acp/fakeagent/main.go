@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -84,13 +85,21 @@ type fakeAgent struct {
 }
 
 func (a *fakeAgent) Initialize(_ context.Context, _ acpsdk.InitializeRequest) (acpsdk.InitializeResponse, error) {
+	var resume *acpsdk.SessionResumeCapabilities
+	if a.behavior == "resume-native" || a.behavior == "resume-no-method" {
+		resume = &acpsdk.SessionResumeCapabilities{}
+	}
 	return acpsdk.InitializeResponse{
-		ProtocolVersion: 1,
-		AuthMethods:     []acpsdk.AuthMethod{},
+		ProtocolVersion:   1,
+		AgentCapabilities: acpsdk.AgentCapabilities{LoadSession: strings.HasPrefix(a.behavior, "resume-") && a.behavior != "resume-native", SessionCapabilities: acpsdk.SessionCapabilities{Resume: resume}},
+		AuthMethods:       []acpsdk.AuthMethod{},
 	}, nil
 }
 
 func (a *fakeAgent) NewSession(_ context.Context, _ acpsdk.NewSessionRequest) (acpsdk.NewSessionResponse, error) {
+	if a.behavior == "empty-session" {
+		return acpsdk.NewSessionResponse{}, nil
+	}
 	a.nextID++
 	id := fmt.Sprintf("fake-%d", a.nextID)
 	a.sessions[id] = a.behavior
@@ -115,7 +124,11 @@ func (a *fakeAgent) ListSessions(context.Context, acpsdk.ListSessionsRequest) (a
 	return acpsdk.ListSessionsResponse{}, acpsdk.NewMethodNotFound("session/list")
 }
 
-func (a *fakeAgent) ResumeSession(context.Context, acpsdk.ResumeSessionRequest) (acpsdk.ResumeSessionResponse, error) {
+func (a *fakeAgent) ResumeSession(_ context.Context, p acpsdk.ResumeSessionRequest) (acpsdk.ResumeSessionResponse, error) {
+	if a.behavior == "resume-native" {
+		a.sessions[string(p.SessionId)] = "work"
+		return acpsdk.ResumeSessionResponse{}, nil
+	}
 	return acpsdk.ResumeSessionResponse{}, acpsdk.NewMethodNotFound("session/resume")
 }
 
@@ -282,4 +295,31 @@ func (a *fakeAgent) turnIgnoreInterrupt(p acpsdk.PromptRequest) (acpsdk.PromptRe
 		}
 	}
 	return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+}
+
+// LoadSession supplies replay and error scenarios for protocol tests.
+func (a *fakeAgent) LoadSession(ctx context.Context, p acpsdk.LoadSessionRequest) (acpsdk.LoadSessionResponse, error) {
+	switch a.behavior {
+	case "resume-work", "resume-no-method":
+		a.sessions[string(p.SessionId)] = "work"
+		for _, update := range []acpsdk.SessionUpdate{
+			{AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{SessionUpdate: "agent_message_chunk", Content: acpsdk.TextBlock("old replayed summary")}},
+			{ToolCall: &acpsdk.SessionUpdateToolCall{SessionUpdate: "tool_call", ToolCallId: "historical-tool", Title: "historical tool", Status: acpsdk.ToolCallStatusInProgress}},
+			{ToolCallUpdate: &acpsdk.SessionToolCallUpdate{SessionUpdate: "tool_call_update", ToolCallId: "historical-tool", Title: ptrString("historical tool"), Status: ptrStatus(acpsdk.ToolCallStatusCompleted)}},
+			{AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{SessionUpdate: "agent_message_chunk", Content: acpsdk.TextBlock("old replayed tail")}},
+		} {
+			if err := sendUpdate(ctx, currentConn, p.SessionId, update); err != nil {
+				return acpsdk.LoadSessionResponse{}, err
+			}
+		}
+		return acpsdk.LoadSessionResponse{}, nil
+	case "resume-missing":
+		return acpsdk.LoadSessionResponse{}, &acpsdk.RequestError{Code: -32002, Message: "Resource not found", Data: map[string]string{"sessionId": string(p.SessionId)}}
+	case "resume-empty-rollout":
+		return acpsdk.LoadSessionResponse{}, acpsdk.NewInternalError(map[string]string{"details": "no rollout found for thread id " + string(p.SessionId)})
+	case "resume-internal-error":
+		return acpsdk.LoadSessionResponse{}, acpsdk.NewInternalError(map[string]string{"details": "disk unavailable"})
+	default:
+		return acpsdk.LoadSessionResponse{}, acpsdk.NewMethodNotFound("session/load")
+	}
 }

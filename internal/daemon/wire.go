@@ -6,10 +6,14 @@ package daemon
 // DefaultWire is the Options.Wire implementation the lambe binary installs.
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -44,6 +48,9 @@ const (
 // the work itself.
 func DefaultWire(cfg *config.Config, bdBin, actor string) func(*Assembly) error {
 	return func(asm *Assembly) error {
+		if _, err := HarnessCommand(cfg); err != nil {
+			return err
+		}
 		log := logging.Default()
 
 		primary := ""
@@ -63,6 +70,7 @@ func DefaultWire(cfg *config.Config, bdBin, actor string) func(*Assembly) error 
 		if cfg.Harness != "" {
 			name = cfg.Harness
 		}
+		log.Info("agent harness configured", "harness", name)
 		runner := newHarnessRunner(name, cfg)
 		runner.persist = newAttemptPersister(bdBin, primary, actor, log)
 		asm.Runner = runner
@@ -203,12 +211,68 @@ func closeDriver(drv harness.Driver) {
 // outright failure) retire the driver so the next turn starts fresh
 // instead of reusing a Start no-op.
 func (r *harnessRunner) RunTurn(ctx context.Context, req symphony.TurnRequest) (symphony.TurnResult, error) {
+	if err := ctx.Err(); err != nil {
+		return symphony.TurnResult{Exit: symphony.TurnFailure}, err
+	}
+	backend := r.backendKey()
+	foreign := req.ThreadID != "" && ((req.ThreadHarness != "" && req.ThreadHarness != backend) || (r.name != "pi" && req.ThreadID == sessionIDFor(req.SessionID)))
+	if foreign {
+		if req.Turn > 1 {
+			return symphony.TurnResult{Exit: symphony.TurnFailure}, symphony.ErrRestartFromFullPrompt
+		}
+		logging.Default().Warn("harness changed; starting from the full task prompt", "issue", req.SessionID)
+		req.ThreadID = ""
+		if r.name == "pi" {
+			req.ThreadID = sessionIDFor(req.SessionID) + "-" + rand.Text()
+		}
+	}
 	sd, err := r.driverFor(req)
 	if err != nil {
 		return symphony.TurnResult{Exit: symphony.TurnFailure}, err
 	}
 
-	if err := sd.drv.Start(ctx); err != nil {
+	err = sd.drv.Start(ctx)
+	if err != nil && ctx.Err() == nil && req.Turn == 1 && req.ThreadID != "" && (errors.Is(err, acpdrv.ErrSessionNotFound) || errors.Is(err, acpdrv.ErrResumeNotSupported)) {
+		// Reconstruct at a full-prompt boundary; a continuation fragment cannot replace lost context.
+		logging.Default().Warn("saved conversation unavailable; reconstructing from the full task prompt", "issue", req.SessionID, "thread", req.ThreadID, "error", err)
+		r.retire(req.SessionID, sd)
+		req.ThreadID = ""
+		sd, err = r.driverFor(req)
+		if err == nil {
+			err = sd.drv.Start(ctx)
+		}
+	}
+	if err != nil {
+		if req.Turn > 1 && (errors.Is(err, acpdrv.ErrSessionNotFound) || errors.Is(err, acpdrv.ErrResumeNotSupported)) {
+			return symphony.TurnResult{Exit: symphony.TurnFailure}, symphony.ErrRestartFromFullPrompt
+		}
+		return symphony.TurnResult{Exit: symphony.TurnFailure}, err
+	}
+	if err := ctx.Err(); err != nil {
+		r.retire(req.SessionID, sd)
+		return symphony.TurnResult{Exit: symphony.TurnFailure}, err
+	}
+	thread := sessionIDFor(req.SessionID)
+	if r.name == "pi" {
+		if req.ThreadID != "" {
+			thread = req.ThreadID
+		}
+	} else {
+		stats, statsErr := sd.drv.SessionStats(ctx)
+		if statsErr != nil || stats.SessionID == "" {
+			r.retire(req.SessionID, sd)
+			return symphony.TurnResult{Exit: symphony.TurnFailure}, fmt.Errorf("%w: backend did not supply its session identity: %v", proc.ErrBindingUnavailable, statsErr)
+		}
+		thread = stats.SessionID
+	}
+	if req.RecordThread != nil {
+		if err := req.RecordThread(thread, backend); err != nil {
+			r.retire(req.SessionID, sd)
+			return symphony.TurnResult{Exit: symphony.TurnFailure}, fmt.Errorf("%w: save backend session: %w", proc.ErrBindingUnavailable, err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		r.retire(req.SessionID, sd)
 		return symphony.TurnResult{Exit: symphony.TurnFailure}, err
 	}
 	sd.resetAssistant()
@@ -216,7 +280,7 @@ func (r *harnessRunner) RunTurn(ctx context.Context, req symphony.TurnRequest) (
 	if deadOutcome(outcome.Kind) {
 		r.retire(req.SessionID, sd)
 	}
-	res := symphony.TurnResult{ThreadID: sessionIDFor(req.SessionID)}
+	res := symphony.TurnResult{ThreadID: thread, ThreadHarness: backend}
 	switch outcome.Kind {
 	case harness.OutcomeSettled:
 		res.Exit = symphony.TurnSuccess
@@ -313,35 +377,22 @@ func deadOutcome(kind harness.OutcomeKind) bool {
 // group id lands on the session's attempt bead before Start returns.
 func (r *harnessRunner) newDriver(req symphony.TurnRequest) (harness.Driver, error) {
 	sess := sessionIDFor(req.SessionID)
+	if req.ThreadID != "" {
+		sess = req.ThreadID
+	}
 	persist := r.persistFor(req.SessionID)
 	// Loop dispatch is top-level: supervised agents run at depth 1 so the
 	// MCP server's recursion pre-check sees them and refuses their spawns.
 	env := append(os.Environ(), mcp.DepthEnvVar+"=1")
 	stderr := agentStderr{log: logging.Default().With("session", sess)}
-	switch r.name {
-	case "acp":
-		return acpdrv.New(acpdrv.Options{
-			Agent:        "opencode",
-			Dir:          req.Workspace,
-			Env:          env,
-			Logger:       logging.Default(),
-			Stderr:       stderr,
-			Persist:      persist,
-			SilenceAfter: silenceTimeout(r.cfg),
-			MaxRun:       turnTimeout(r.cfg),
-		})
-	default:
-		return pidrv.New(pidrv.Options{
-			SessionID:    sess,
-			Dir:          req.Workspace,
-			Env:          env,
-			Logger:       logging.Default(),
-			Stderr:       stderr,
-			Persist:      persist,
-			SilenceAfter: silenceTimeout(r.cfg),
-			MaxRun:       turnTimeout(r.cfg),
-		}), nil
+	if r.name == "pi" {
+		return pidrv.New(pidrv.Options{SessionID: sess, Dir: req.Workspace, Env: env, Logger: logging.Default(), Stderr: stderr, Persist: persist, SilenceAfter: silenceTimeout(r.cfg), MaxRun: turnTimeout(r.cfg)}), nil
 	}
+	argv, err := HarnessCommand(r.cfg)
+	if err != nil {
+		return nil, err
+	}
+	return acpdrv.New(acpdrv.Options{SessionID: req.ThreadID, Argv: argv, Dir: req.Workspace, Env: env, Logger: logging.Default(), Stderr: stderr, Persist: persist, SilenceAfter: silenceTimeout(r.cfg), MaxRun: turnTimeout(r.cfg)})
 }
 
 // persistFor binds the runner's persist seam to one issue. It returns nil
@@ -447,3 +498,49 @@ func sessionIDFor(issueID string) string {
 
 func silenceTimeout(cfg *config.Config) time.Duration { return cfg.Supervisor.SilenceTimeout }
 func turnTimeout(cfg *config.Config) time.Duration    { return cfg.Supervisor.TurnTimeout }
+
+// HarnessCommand resolves the configured backend launch argv without invoking a shell.
+func HarnessCommand(cfg *config.Config) ([]string, error) {
+	switch cfg.Harness {
+	case "", "pi":
+		return []string{"pi"}, nil
+	case "codex":
+		return acpdrv.Lookup("codex")
+	case "acp":
+		if len(cfg.ACP.Command) > 0 {
+			return append([]string(nil), cfg.ACP.Command...), nil
+		}
+		agent := cfg.ACP.Agent
+		if agent == "" {
+			agent = "opencode"
+		}
+		return acpdrv.Lookup(agent)
+	default:
+		return nil, fmt.Errorf("unknown harness %q; choose pi, codex, or acp", cfg.Harness)
+	}
+}
+
+// CheckHarness fails startup before claiming work when the backend executable is missing.
+func CheckHarness(cfg *config.Config) error {
+	argv, err := HarnessCommand(cfg)
+	if err != nil {
+		return err
+	}
+	if _, err := exec.LookPath(argv[0]); err != nil {
+		return fmt.Errorf("cannot find agent executable %q for harness %q: %w; install the harness, or select harness: acp and configure acp.command", argv[0], cfg.Harness, err)
+	}
+	return nil
+}
+
+// backendKey keeps saved conversations attached to their originating agent command.
+func (r *harnessRunner) backendKey() string {
+	if r.name != "acp" || r.cfg == nil {
+		return r.name
+	}
+	argv, err := HarnessCommand(r.cfg)
+	if err != nil {
+		return r.name
+	}
+	sum := sha256.Sum256([]byte(strings.Join(argv, "\x00")))
+	return fmt.Sprintf("acp:%x", sum[:8])
+}

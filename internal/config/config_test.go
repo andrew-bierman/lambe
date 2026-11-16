@@ -211,3 +211,46 @@ func isolatedConfigDir(t *testing.T) string {
 	}
 	return dir
 }
+
+func TestHarnessAndACPConfiguration(t *testing.T) {
+	for _, tt := range []struct{ name, body, wantErr string }{
+		{"codex", "harness: codex", ""},
+		{"gemini", "harness: acp\nacp:\n  agent: gemini", ""},
+		{"unknown", "harness: typo", "harness must"},
+		{"argv-string", "harness: acp\nacp:\n  command: opencode acp", "YAML list"},
+		{"argv-empty", "harness: acp\nacp:\n  command: []", "executable"},
+		{"argv-invalid", "harness: acp\nacp:\n  command: [opencode, 42]", "acp.command[1]"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(Options{File: writeTemp(t, tt.body), Env: []string{}})
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("configuration error = %v", err)
+				}
+				return
+			}
+			if err != nil || cfg == nil {
+				t.Fatalf("valid harness rejected: %v", err)
+			}
+		})
+	}
+	file := writeTemp(t, "harness: acp\nacp:\n  command: [./bin/agent, '--acp', 'argument with spaces']")
+	cfg, err := Load(Options{File: file, Env: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.ACP.Command) != 3 || cfg.ACP.Command[0] != filepath.Join(filepath.Dir(file), "bin", "agent") || cfg.ACP.Command[2] != "argument with spaces" {
+		t.Fatalf("argv was split or resolved outside configuration: %v", cfg.ACP.Command)
+	}
+}
+
+func TestACPCommandRejectsNULBeforeLaunching(t *testing.T) {
+	file := writeTemp(t, `harness: acp
+acp:
+  command: ["agent", "bad\0arg"]
+`)
+	_, err := Load(Options{File: file, Env: []string{}})
+	if err == nil || !strings.Contains(err.Error(), "acp.command[1]") {
+		t.Fatalf("NUL argv was not rejected at configuration loading: %v", err)
+	}
+}

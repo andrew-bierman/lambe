@@ -29,19 +29,20 @@ const (
 )
 
 type checkpoint struct {
-	Version    int             `json:"version"`
-	Phase      checkpointPhase `json:"phase"`
-	Issue      tracker.Issue   `json:"issue"`
-	Workflow   *Workflow       `json:"workflow"`
-	Attempt    int             `json:"attempt"`
-	Turn       int             `json:"turn"`
-	Thread     string          `json:"thread,omitempty"`
-	LastGate   string          `json:"last_gate,omitempty"`
-	GateOutput string          `json:"gate_output,omitempty"`
-	Key        string          `json:"key"`
-	Workspace  string          `json:"workspace,omitempty"`
-	Retry      *Retry          `json:"retry,omitempty"`
-	Error      string          `json:"error,omitempty"`
+	Version       int             `json:"version"`
+	Phase         checkpointPhase `json:"phase"`
+	Issue         tracker.Issue   `json:"issue"`
+	Workflow      *Workflow       `json:"workflow"`
+	Attempt       int             `json:"attempt"`
+	Turn          int             `json:"turn"`
+	Thread        string          `json:"thread,omitempty"`
+	ThreadHarness string          `json:"thread_harness,omitempty"`
+	LastGate      string          `json:"last_gate,omitempty"`
+	GateOutput    string          `json:"gate_output,omitempty"`
+	Key           string          `json:"key"`
+	Workspace     string          `json:"workspace,omitempty"`
+	Retry         *Retry          `json:"retry,omitempty"`
+	Error         string          `json:"error,omitempty"`
 }
 
 func (l *Loop) checkpointPath(id string) string {
@@ -52,7 +53,7 @@ func (l *Loop) saveCheckpoint(s *session, phase checkpointPhase, retry *Retry) e
 	if l.CheckpointDir == "" {
 		return nil
 	}
-	return l.writeCheckpoint(checkpoint{Version: 1, Phase: phase, Issue: s.issue, Workflow: s.wf, Attempt: s.attempt, Turn: s.turn, Thread: s.thread, LastGate: s.lastGate, GateOutput: s.gateOutput, Key: s.key, Workspace: s.workspace, Retry: retry})
+	return l.writeCheckpoint(checkpoint{Version: 1, Phase: phase, Issue: s.issue, Workflow: s.wf, Attempt: s.attempt, Turn: s.turn, Thread: s.thread, ThreadHarness: s.threadHarness, LastGate: s.lastGate, GateOutput: s.gateOutput, Key: s.key, Workspace: s.workspace, Retry: retry})
 }
 
 func (l *Loop) writeCheckpoint(saved checkpoint) error {
@@ -121,7 +122,7 @@ func (l *Loop) readCheckpoint(path string) (checkpoint, error) {
 }
 
 func checkpointSession(saved checkpoint) *session {
-	return &session{issue: saved.Issue, wf: saved.Workflow, attempt: saved.Attempt, turn: saved.Turn, thread: saved.Thread, lastGate: saved.LastGate, gateOutput: saved.GateOutput, key: saved.Key, workspace: saved.Workspace}
+	return &session{issue: saved.Issue, wf: saved.Workflow, attempt: saved.Attempt, turn: saved.Turn, thread: saved.Thread, threadHarness: saved.ThreadHarness, lastGate: saved.LastGate, gateOutput: saved.GateOutput, key: saved.Key, workspace: saved.Workspace}
 }
 
 func (l *Loop) removeCheckpoint(id string) {

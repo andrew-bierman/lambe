@@ -516,8 +516,9 @@ func TestLookup(t *testing.T) {
 		want    []string
 		wantErr bool
 	}{
+		{name: "codex", want: []string{"codex-acp"}},
 		{name: "opencode", want: []string{"opencode", "acp"}},
-		{name: "gemini", want: []string{"gemini", "acp"}},
+		{name: "gemini", want: []string{"gemini", "--acp"}},
 		{name: "no-such-agent", wantErr: true},
 	}
 	for _, tt := range tests {
@@ -576,5 +577,144 @@ func TestPersistenceFailurePreventsACPStart(t *testing.T) {
 	}
 	if pid <= 1 || syscall.Kill(-pid, 0) == nil {
 		t.Fatalf("untracked ACP group %d survived", pid)
+	}
+}
+
+func TestResumeLoadsBackendSessionBeforePrompt(t *testing.T) {
+	drv, _ := newDriver(t, "resume-work", nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := drv.Resume(ctx, "durable-backend-thread"); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := drv.SessionStats(ctx)
+	if err != nil || stats.SessionID != "durable-backend-thread" {
+		t.Fatalf("loaded session identity lost: %+v, %v", stats, err)
+	}
+	outcome, err := drv.Run(ctx, "continue the saved conversation")
+	if err != nil || outcome.Kind != harness.OutcomeSettled {
+		t.Fatalf("resumed turn = %+v, %v", outcome, err)
+	}
+}
+
+func TestStartLoadsConfiguredSession(t *testing.T) {
+	drv, _ := newDriver(t, "resume-work", func(opts *acp.Options) { opts.SessionID = "restored-session" })
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := drv.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := drv.SessionStats(ctx)
+	if err != nil || stats.SessionID != "restored-session" {
+		t.Fatalf("Start created a replacement thread: %+v, %v", stats, err)
+	}
+}
+
+func TestLoadSessionDistinguishesMissingConversationFromInfrastructureFailure(t *testing.T) {
+	for _, tt := range []struct {
+		behavior string
+		missing  bool
+	}{{"resume-missing", true}, {"resume-empty-rollout", true}, {"resume-internal-error", false}} {
+		t.Run(tt.behavior, func(t *testing.T) {
+			drv, _ := newDriver(t, tt.behavior, func(opts *acp.Options) { opts.SessionID = "saved-id" })
+			err := drv.Start(t.Context())
+			if err == nil || errors.Is(err, acp.ErrSessionNotFound) != tt.missing {
+				t.Fatalf("session/load error misclassified: %v", err)
+			}
+		})
+	}
+}
+
+func TestResumedTurnDoesNotTreatReplayAsNewOutput(t *testing.T) {
+	drv, events := newDriver(t, "resume-work", func(opts *acp.Options) { opts.SessionID = "saved-session" })
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if _, err := drv.Run(ctx, "continue"); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		ev := waitEvent(t, events, time.Second, func(harness.Event) bool { return true })
+		switch tool := ev.(type) {
+		case harness.ToolExecutionStartedEvent:
+			if tool.ToolName == "historical tool" {
+				t.Fatal("replayed tool appeared as live work")
+			}
+		case harness.ToolExecutionEndedEvent:
+			if tool.ToolName == "historical tool" {
+				t.Fatal("replayed tool completion appeared as live work")
+			}
+		}
+		if message, ok := ev.(harness.MessageCompletedEvent); ok && strings.Contains(message.Text, "old replayed") {
+			t.Fatal("replayed history was emitted as a new turn message")
+		}
+		if _, ok := ev.(harness.AgentSettledEvent); ok {
+			break
+		}
+	}
+}
+
+func TestResumeWithoutHistoryAndAdvertisedMethodFallback(t *testing.T) {
+	for _, behavior := range []string{"resume-native", "resume-no-method"} {
+		t.Run(behavior, func(t *testing.T) {
+			drv, _ := newDriver(t, behavior, func(opts *acp.Options) { opts.SessionID = "persisted-session" })
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			if err := drv.Start(ctx); err != nil {
+				t.Fatal(err)
+			}
+			result, err := drv.Run(ctx, "continue")
+			stats, statsErr := drv.SessionStats(ctx)
+			if err != nil || statsErr != nil || result.Kind != harness.OutcomeSettled || stats.SessionID != "persisted-session" {
+				t.Fatalf("resume negotiation failed: %+v, %+v, %v, %v", result, stats, err, statsErr)
+			}
+		})
+	}
+}
+
+func TestInstalledCodexRestoresSavedSession(t *testing.T) {
+	if os.Getenv("LAMBE_TEST_CODEX") != "1" {
+		t.Skip("set LAMBE_TEST_CODEX=1 with a saved smoke session")
+	}
+	id, dir := os.Getenv("LAMBE_CODEX_SESSION"), os.Getenv("LAMBE_CODEX_CWD")
+	if id == "" || dir == "" {
+		t.Fatal("LAMBE_CODEX_SESSION and LAMBE_CODEX_CWD are required")
+	}
+	if _, err := exec.LookPath("codex-acp"); err != nil {
+		t.Fatal(err)
+	}
+	drv, _ := newDriver(t, "", func(opts *acp.Options) {
+		opts.Argv = []string{"codex-acp"}
+		opts.SessionID = id
+		opts.Dir = dir
+		opts.CallTimeout = 30 * time.Second
+		opts.Stderr = os.Stderr
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 35*time.Second)
+	defer cancel()
+	if err := drv.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := drv.SessionStats(ctx)
+	if err != nil || stats.SessionID != id {
+		t.Fatalf("installed adapter lost saved conversation: %+v, %v", stats, err)
+	}
+}
+
+func TestCanceledRunDoesNotSpawnAgent(t *testing.T) {
+	drv, _ := newDriver(t, "work", func(opts *acp.Options) {
+		opts.Persist = func(int, string) error { t.Fatal("spawned an agent for a canceled turn"); return nil }
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := drv.Run(ctx, "should never be sent")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled run error=%v", err)
+	}
+}
+
+func TestStartRejectsMissingBackendSessionIdentity(t *testing.T) {
+	drv, _ := newDriver(t, "empty-session", nil)
+	if err := drv.Start(t.Context()); err == nil {
+		t.Fatal("accepted an agent with no resumable session identity")
 	}
 }
