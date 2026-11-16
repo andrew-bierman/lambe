@@ -1,7 +1,9 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"sync"
@@ -10,9 +12,28 @@ import (
 	"time"
 
 	"github.com/andrew-bierman/lambe/internal/harness"
+	"github.com/andrew-bierman/lambe/internal/logging"
 	"github.com/andrew-bierman/lambe/internal/symphony"
 	"github.com/andrew-bierman/lambe/internal/tracker"
 )
+
+func TestAgentStderrKeepsStructuredSessionDiagnostics(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	w := agentStderr{log: logging.New(&out, slog.LevelInfo).With("session", "smoke-1")}
+	diagnostic := "Node startup failed\nsecond line\n"
+	n, err := w.Write([]byte(diagnostic))
+	if err != nil || n != len(diagnostic) {
+		t.Fatalf("write = %d, %v", n, err)
+	}
+	var record map[string]string
+	if err := json.Unmarshal(out.Bytes(), &record); err != nil {
+		t.Fatalf("diagnostic must remain JSON: %v", err)
+	}
+	if record["msg"] != "agent stderr" || record["session"] != "smoke-1" || record["output"] != diagnostic {
+		t.Fatalf("diagnostic lost context or output: %v", record)
+	}
+}
 
 // fakeDriver is a scriptable harness.Driver for wire tests. Events mirrors
 // the real drivers' 1024-buffered stream, so a run that emits more events

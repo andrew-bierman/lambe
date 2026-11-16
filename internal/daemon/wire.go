@@ -118,6 +118,13 @@ type supervisedDriver struct {
 	lastAssistant string
 }
 
+type agentStderr struct{ log *slog.Logger }
+
+func (w agentStderr) Write(p []byte) (int, error) {
+	w.log.Warn("agent stderr", "output", string(p))
+	return len(p), nil
+}
+
 func newSupervisedDriver(drv harness.Driver) *supervisedDriver {
 	return &supervisedDriver{drv: drv, done: make(chan struct{}), msgSignal: make(chan struct{}, 1)}
 }
@@ -299,6 +306,7 @@ func (r *harnessRunner) newDriver(req symphony.TurnRequest) (harness.Driver, err
 	// Loop dispatch is top-level: supervised agents run at depth 1 so the
 	// MCP server's recursion pre-check sees them and refuses their spawns.
 	env := append(os.Environ(), mcp.DepthEnvVar+"=1")
+	stderr := agentStderr{log: logging.Default().With("session", sess)}
 	switch r.name {
 	case "acp":
 		return acpdrv.New(acpdrv.Options{
@@ -306,6 +314,7 @@ func (r *harnessRunner) newDriver(req symphony.TurnRequest) (harness.Driver, err
 			Dir:          req.Workspace,
 			Env:          env,
 			Logger:       logging.Default(),
+			Stderr:       stderr,
 			Persist:      persist,
 			SilenceAfter: silenceTimeout(r.cfg),
 			MaxRun:       turnTimeout(r.cfg),
@@ -316,6 +325,7 @@ func (r *harnessRunner) newDriver(req symphony.TurnRequest) (harness.Driver, err
 			Dir:          req.Workspace,
 			Env:          env,
 			Logger:       logging.Default(),
+			Stderr:       stderr,
 			Persist:      persist,
 			SilenceAfter: silenceTimeout(r.cfg),
 			MaxRun:       turnTimeout(r.cfg),

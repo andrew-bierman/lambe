@@ -137,6 +137,7 @@ func Load(opts Options) (*Config, error) {
 
 func defaultsProvider() *confmap.Confmap {
 	return confmap.Provider(map[string]any{
+		"trackers": []any{map[string]any{"name": "local", "type": "repo", "path": "."}},
 		"supervisor": map[string]any{
 			"tick_seconds":         defaultTickSeconds,
 			"attempt_cap":          defaultAttemptCap,

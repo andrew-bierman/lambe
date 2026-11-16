@@ -583,19 +583,22 @@ func TestDaemonShutdownLadderAndLockRelease(t *testing.T) {
 	lockPath := filepath.Join(stateDir, "lambe.lock")
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		probe, err := AcquireStateLock(lockPath)
-		if errors.Is(err, ErrLockHeld) {
+		// The PID hint is written after acquisition. Probing before it
+		// exists can win the lock and make the daemon exit at startup.
+		if _, err := os.Stat(lockPath + ".pid"); err == nil {
 			break
-		}
-		// A successful probe must release immediately: a leaked probe
-		// lock would block the daemon's own acquire.
-		if probe != nil {
-			_ = probe.Release()
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("daemon never took the state lock")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	probe, err := AcquireStateLock(lockPath)
+	if probe != nil {
+		_ = probe.Release()
+	}
+	if !errors.Is(err, ErrLockHeld) {
+		t.Fatalf("daemon lock: want ErrLockHeld, got %v", err)
 	}
 	// The holder must be the daemon, not a leftover: it is still running.
 	select {
@@ -775,22 +778,24 @@ func TestDaemonRunKeepsStartingWhenRecoveryReadFails(t *testing.T) {
 	runDone := make(chan error, 1)
 	go func() { runDone <- d.Run(ctx) }()
 
-	// The lock being held proves the daemon got past the failing recovery
-	// read and settled into its run loop.
+	// Wait for acquisition without racing the daemon for its lock.
 	lockPath := filepath.Join(stateDir, "lambe.lock")
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		probe, perr := AcquireStateLock(lockPath)
-		if errors.Is(perr, ErrLockHeld) {
+		if _, err := os.Stat(lockPath + ".pid"); err == nil {
 			break
-		}
-		if probe != nil {
-			_ = probe.Release()
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("daemon never took the state lock after recovery read failure")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	probe, err := AcquireStateLock(lockPath)
+	if probe != nil {
+		_ = probe.Release()
+	}
+	if !errors.Is(err, ErrLockHeld) {
+		t.Fatalf("daemon lock: want ErrLockHeld, got %v", err)
 	}
 
 	cancel()

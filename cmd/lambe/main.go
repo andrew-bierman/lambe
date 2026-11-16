@@ -81,17 +81,14 @@ func parseCommon(args []string) (*config.Config, string) {
 // runDaemon assembles and runs the daemon until a terminating signal.
 func runDaemon(args []string) error {
 	cfg, configPath := parseCommon(args)
-	log := logging.Default()
+	if err := requireLocalTracker(configPath); err != nil {
+		return err
+	}
+	if _, err := os.Stat("WORKFLOW.md"); err != nil {
+		return fmt.Errorf("read WORKFLOW.md: %w; create the agent workflow first (see https://github.com/andrew-bierman/lambe#quickstart)", err)
+	}
 
-	d, err := daemon.New(daemon.Options{
-		Config:       cfg,
-		ConfigPath:   configPath,
-		StateDir:     daemon.DefaultStateDir(),
-		Machine:      daemon.DefaultMachine(),
-		WorkflowPath: "WORKFLOW.md",
-		Log:          log,
-		Wire:         daemon.DefaultWire(cfg, "", daemon.DefaultMachine()),
-	})
+	d, err := daemon.New(daemonOptions(cfg, configPath))
 	if err != nil {
 		return err
 	}
@@ -101,9 +98,27 @@ func runDaemon(args []string) error {
 	return d.Run(ctx)
 }
 
+func daemonOptions(cfg *config.Config, configPath string) daemon.Options {
+	machine := daemon.DefaultMachine()
+	actor := "lambe@" + machine
+	return daemon.Options{
+		Config:       cfg,
+		ConfigPath:   configPath,
+		StateDir:     daemon.DefaultStateDir(),
+		Machine:      machine,
+		Actor:        actor,
+		WorkflowPath: "WORKFLOW.md",
+		Log:          logging.Default(),
+		Wire:         daemon.DefaultWire(cfg, "", actor),
+	}
+}
+
 // runStatus prints the morning report from the local tracker.
 func runStatus(args []string) error {
-	cfg, _ := parseCommon(args)
+	cfg, configPath := parseCommon(args)
+	if err := requireLocalTracker(configPath); err != nil {
+		return err
+	}
 	return daemon.Status(os.Stdout, cfg, daemon.DefaultMachine())
 }
 
@@ -112,7 +127,10 @@ func runStatus(args []string) error {
 // tick loop, then proxies tool calls into it. The daemon proper may be
 // running separately; spawns register runs its next tick dispatches.
 func runMCP(args []string) error {
-	cfg, _ := parseCommon(args)
+	cfg, configPath := parseCommon(args)
+	if err := requireLocalTracker(configPath); err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	control, release, err := daemon.OpenControl(ctx, daemon.Options{
@@ -126,6 +144,16 @@ func runMCP(args []string) error {
 	}
 	defer release()
 	return mcp.New(control, mcp.Options{Env: os.Environ()}).ServeStdio(ctx, os.Stdin, os.Stdout)
+}
+
+func requireLocalTracker(configPath string) error {
+	if configPath != "" {
+		return nil
+	}
+	if _, err := os.Stat(".beads"); err != nil {
+		return fmt.Errorf("read local .beads tracker: %w; run bd init in the project root, or pass -config FILE to select another tracker", err)
+	}
+	return nil
 }
 
 // exitCodeFor maps daemon errors to process exit codes: lock contention is

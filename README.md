@@ -34,12 +34,46 @@ go install github.com/andrew-bierman/lambe/cmd/lambe@latest
 Prebuilt static binaries for macOS and Linux are published via GoReleaser on
 the releases page; a Homebrew tap is planned.
 
-Zero-config, single machine — lambe defaults to the current directory's Beads
-layout:
+Install `bd` and `pi` and authenticate Pi with your model provider first.
+Pi needs a current Node.js runtime; check `node --version` and `pi --help`
+in the same shell you will use to start lambe.
+
+Single machine — lambe defaults to the current directory's Beads tracker.
+Run from the project root containing `.beads` (initialize it with `bd init`
+if needed), then create `WORKFLOW.md` with the
+agent instructions and a completion gate before starting:
 
 ```sh
-cd ~/code/my-beads-hub
+cd ~/Code/my-beads-repo
+curl -fsSL https://raw.githubusercontent.com/andrew-bierman/lambe/master/WORKFLOW.md -o WORKFLOW.md
+mkdir -p .beads/formulas
+# Go example: replace the command with your project's actual checks.
+cat > .beads/formulas/verify.formula.toml <<'EOF'
+[gate]
+type = "shell"
+command = "go test ./..."
+EOF
 lambe run
+```
+
+Edit `WORKFLOW.md` for your project before dispatching work. A gate is
+required: without one, lambe cannot verify completion and parks the task.
+Agents work in separate directories; use the workflow's `after_create`
+hook to clone your project into each workspace before running project checks.
+
+To use a tracker elsewhere, create a config file and pass it to both commands:
+
+```yaml
+# lambe.yaml
+trackers:
+  - name: main
+    type: hub
+    path: /absolute/path/to/beads-hub
+```
+
+```sh
+lambe run -config lambe.yaml
+lambe status -config lambe.yaml
 ```
 
 The morning read:
@@ -68,6 +102,7 @@ lambe is built around a small set of seams. What exists today:
 
 Precedence: defaults < config file < environment < flags. Environment variables
 flatten config paths with underscores (`sync_interval` → `LAMBE_SYNC_INTERVAL`).
+Config files inherit the local tracker default unless they set `trackers`.
 
 Key knobs and defaults:
 
