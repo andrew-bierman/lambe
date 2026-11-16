@@ -1,0 +1,50 @@
+# Formula: keep-tests-green (the flagship responsibility)
+#
+# Responsibility: the main branch's CI must always be green. When it is not,
+# this formula materializes an issue so an agent diagnoses the failure and
+# lands a fix on a pull request. Done means CI on the PR head is green —
+# never the agent's local test output.
+#
+# Anatomy (what lambe actually parses):
+#   [trigger] command — run under `sh -lc` with the formula's directory as
+#     cwd; a NON-ZERO exit means the trigger fired. Exit 0 = all quiet.
+#   [gate] type/pr — the verified-completion gate judged on a settled turn.
+#     type "gh:pr" requires `pr` (a pull-request number, url, or branch);
+#     the CI status of the PR head is what counts.
+#
+# Parameterize per repo by exporting LAMBE_GH_REPO (default: this repo's
+# origin) and LAMBE_CI_BRANCH (default: main). The trigger is a single
+# quoted shell command; $VAR expansion happens in the shell, not TOML.
+#
+# Steps below are consumed by `bd cook` when the trigger materializes the
+# issue; lambe's own parsers read only [trigger] and [gate].
+
+[trigger]
+# Fires when the latest CI run on the watched branch is anything other than
+# "success" (failure, cancelled, or no runs at all — jq yields null, which
+# fails the string compare and fires).
+command = 'test "$(gh run list --repo "${LAMBE_GH_REPO:-.}" --branch "${LAMBE_CI_BRANCH:-main}" --limit 1 --json conclusion --jq ".[0].conclusion")" = "success"'
+
+[steps]
+# Step 1: diagnose. Read the failing run's logs and identify the root cause.
+[[steps.diagnose]]
+run = 'gh run list --repo "${LAMBE_GH_REPO:-.}" --branch "${LAMBE_CI_BRANCH:-main}" --limit 1 --status failure --json databaseId --jq ".[0].databaseId"'
+
+# Step 2: fix. Branch off the failing commit, land the minimal fix, open a
+# PR back to the watched branch. The gate below is what proves it worked.
+[[steps.fix]]
+run = "git checkout -b fix/ci-${LAMBE_CI_BRANCH:-main}-$$ && commit-fix && gh pr create --fill"
+
+[gate]
+# Verified completion: the GitHub Actions checks on the PR head must
+# conclude successfully. Judging CI on the pushed head — not on the agent's
+# word or its local test run — is what prevents same-commit gaming: the
+# check runs on GitHub's machines against the exact merge candidate.
+#
+# NOTE: unlike the trigger (which runs under sh -lc and so expands $VAR),
+# the gate pr is passed verbatim to `gh pr view`. Use a literal branch
+# name here — no environment parameterization. This default points at the
+# repo's working branch; set it to the branch (or number/url) of the PR
+# the fix attempt actually opens.
+type = "gh:pr"
+pr = "feat/lambe-slice-one"

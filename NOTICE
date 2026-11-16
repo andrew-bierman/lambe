@@ -1,0 +1,12 @@
+lambe
+Copyright 2026 Andrew Bierman. Licensed under the MIT License (see LICENSE).
+
+This product implements the OpenAI Symphony specification, as published in
+SPEC.md at commit 8001b52 of the openai/symphony repository (Licensed under
+the Apache License, Version 2.0, Copyright 2025 OpenAI). Attribution is given
+here for that specification; its inclusion or implementation in this project
+does not imply endorsement by OpenAI of lambe, and no claim is made on any
+OpenAI trademark.
+
+lambe is designed for use with Beads (github.com/gastownhall/beads), licensed
+under the MIT License.

@@ -1,0 +1,35 @@
+# Formula: backlog-worker (the finite-work pattern)
+#
+# Responsibility: burn down the ready backlog one issue at a time. This
+# formula has NO trigger — it is never auto-fired by a CI signal. The work
+# is finite and pre-existing (issues already carry the label below); you
+# pour it manually when you want a worker session:
+#
+#     bd cook backlog-worker
+#     bd mol pour --dry-run   # rehearse first, then drop --dry-run
+#
+# Once poured, the issues enter the same two-read dispatch as any other
+# work: the loop claims the next ready issue whose label matches, runs an
+# attempt, and gates it.
+#
+# Parsed anatomy: lambe reads [trigger].command (required by LoadFormulas)
+# and the [gate] table. The steps/label keys below are for bd cook/pour.
+
+[trigger]
+# Manual pour pattern: a trigger that never fires on its own. `exit 0`
+# always means "not fired", so the loop only ever materializes this
+# formula when a human runs bd cook + bd mol pour by hand.
+command = "exit 0"
+
+[steps]
+# Claim the next ready issue carrying the worker label. Exactly one issue
+# per pour keeps the batch finite and reviewable.
+[[steps.claim]]
+run = 'bd ready --label "${LAMBE_WORKER_LABEL:-lambe-worker}" --limit 1'
+
+[gate]
+# Verified completion: the workspace must pass the full local verification
+# suite. The command runs with the workspace as cwd; non-zero exit is a
+# red verdict and the failure output goes back to the agent as guidance.
+type = "shell"
+command = "mise exec go -- go test ./... && mise exec go -- go build ./... && test -z \"$(go run mvdan.cc/gofumpt -l .)\" && go run honnef.co/go/tools/cmd/staticcheck ./..."
