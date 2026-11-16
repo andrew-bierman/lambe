@@ -124,6 +124,12 @@ Key knobs and defaults:
 | Turn timeout | 1h | Hard cap on a single agent turn |
 | Heartbeat | 150s | Liveness interval written to the tracker |
 
+Agent turns use the turn and silence limits above. Hub synchronization, formula
+evaluation, and gate evaluation have separate control deadlines (half the silence
+timeout, with a one-minute minimum). Tracker subprocesses also have a one-minute
+per-command bound. A gate timeout retries the gate on the same settled output;
+it does not consume another agent attempt.
+
 ## OS-level restart (production)
 
 The recommended production setup is to let the operating system keep `lambe

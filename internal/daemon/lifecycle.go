@@ -114,6 +114,7 @@ type Daemon struct {
 	log     *slog.Logger
 	lock    *StateLock
 	cancel  context.CancelFunc
+	runCtx  context.Context
 	primary tracker.Tracker
 	loop    Ticker
 	flusher Flusher
@@ -156,7 +157,7 @@ func OpenControl(ctx context.Context, opts Options) (mcp.Control, func(), error)
 		return nil, nil, err
 	}
 	control := &ControlAdapter{Registry: d.asm.Registry, Tracker: trackers[0], Log: d.log}
-	return control, func() {}, nil
+	return control, d.cancel, nil
 }
 
 // StateSource returns the httpstate.StateSource adapter over the daemon's
@@ -223,7 +224,8 @@ func New(opts Options) (*Daemon, error) {
 		asm.Registry.SetSurface(asm.Surface, log)
 	}
 
-	return &Daemon{opts: opts, asm: asm, log: log}, nil
+	runCtx, cancel := context.WithCancel(context.Background())
+	return &Daemon{opts: opts, asm: asm, log: log, runCtx: runCtx, cancel: cancel}, nil
 }
 
 // Trackers opens the configured trackers as shell-transport locals over bd,
@@ -256,9 +258,10 @@ func (d *Daemon) trackers(ctx context.Context) ([]tracker.Tracker, error) {
 // child, releases the lock, and returns. A held lock returns an error
 // wrapping ErrLockHeld immediately, with the holder unaffected.
 func (d *Daemon) Run(ctx context.Context) error {
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	d.cancel = cancel
+	runCtx := d.runCtx
+	defer d.cancel()
+	stopCancel := context.AfterFunc(ctx, d.cancel)
+	defer stopCancel()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
@@ -313,6 +316,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 		spaces := symphony.NewWorkspaceManager(filepath.Join(d.opts.StateDir, "workspaces"), d.log)
 		l := symphony.NewLoop(filtered, loader, d.asm.Runner, d.asm.Gates, spaces, d.log)
+		l.ControlTimeout = d.cycleBound()
 		// Load responsibility formulas from the tracker's conventional
 		// .beads/formulas directory and wire the bd materializer so
 		// triggers materialize finite issues into the dispatch front.
@@ -451,19 +455,18 @@ func (d *Daemon) tickCycle(ctx context.Context) {
 // and report refresh run unconditionally, while the tick path skips the
 // hub push when the tick queued no writes and refreshes the report cache
 // only on the reportRefreshTicks cadence. Cycles are serialized (the loop
-// requires non-interleaved ticks) and wall-clock bounded by cycleBound so a
-// hung tracker call cannot wedge the cadence. Every failure is logged with
-// its category and the daemon keeps running.
+// requires non-interleaved ticks). Hub I/O is bounded separately from agent
+// execution, whose runner owns the turn and silence deadlines. Every failure
+// is logged with its category and the daemon keeps running.
 func (d *Daemon) cycle(ctx context.Context, prefix string, immediate bool) {
 	d.cycleMu.Lock()
 	defer d.cycleMu.Unlock()
 	cctx, cancel := context.WithTimeout(ctx, d.cycleBound())
-	defer cancel()
-	ctx = cctx
-	if err := d.asm.Sync.Pull(ctx); err != nil {
+	if err := d.asm.Sync.Pull(cctx); err != nil {
 		d.log.Warn(prefix+": hub pull failed, continuing on local state",
 			"category", ErrorCategory(err), "error", err)
 	}
+	cancel()
 	if d.loop != nil {
 		d.log.Debug(prefix + ": loop tick starting")
 		if err := d.loop.Tick(ctx); err != nil {
@@ -473,6 +476,9 @@ func (d *Daemon) cycle(ctx context.Context, prefix string, immediate bool) {
 	} else {
 		d.log.Warn(prefix + ": loop is nil, skipping tick")
 	}
+	wctx, wcancel := context.WithTimeout(ctx, d.cycleBound())
+	defer wcancel()
+	ctx = wctx
 	hasWrites := immediate
 	if !immediate {
 		if c, ok := d.flusher.(WriteCounter); !ok || c.BufferedWrites() > 0 {
@@ -496,14 +502,15 @@ func (d *Daemon) cycle(ctx context.Context, prefix string, immediate bool) {
 	}
 }
 
-// cycleBound is the wall-clock bound of one daemon cycle: half the silence
-// timeout, never below a minute, so a hung tracker or hub call fails the
-// cycle instead of wedging the tick cadence. A daemon without a resolved
-// config uses the minute floor.
-func (d *Daemon) cycleBound() time.Duration {
+// cycleBound bounds control operations, not agent execution: half the
+// silence timeout, never below a minute. A daemon without resolved config
+// uses the minute floor.
+func (d *Daemon) cycleBound() time.Duration { return controlTimeout(d.opts.Config) }
+
+func controlTimeout(cfg *config.Config) time.Duration {
 	bound := time.Duration(0)
-	if d.opts.Config != nil {
-		bound = d.opts.Config.Supervisor.SilenceTimeout / 2
+	if cfg != nil {
+		bound = cfg.Supervisor.SilenceTimeout / 2
 	}
 	if bound < time.Minute {
 		bound = time.Minute
@@ -535,9 +542,7 @@ func (d *Daemon) poke() {
 	}
 	go func() {
 		defer d.poking.Store(false)
-		ctx, cancel := context.WithTimeout(context.Background(), ShutdownBound)
-		defer cancel()
-		d.cycle(ctx, "poke", true)
+		d.cycle(d.runCtx, "poke", true)
 	}()
 }
 

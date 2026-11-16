@@ -53,7 +53,9 @@ func DefaultWire(cfg *config.Config, bdBin, actor string) func(*Assembly) error 
 			return fmt.Errorf("wire gate hub: %w", err)
 		}
 		esc := gate.NewEscalator(hub)
-		asm.Gates = gate.NewRunner(formulaDir(primary), hub, esc, actor, log)
+		gates := gate.NewRunner(formulaDir(primary), hub, esc, actor, log)
+		gates.CheckTimeout = controlTimeout(cfg)
+		asm.Gates = gates
 
 		name := "pi"
 		if cfg.Harness != "" {

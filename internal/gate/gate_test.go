@@ -117,13 +117,19 @@ type memKV struct {
 
 func newMemKV() *memKV { return &memKV{data: map[string]map[string]string{}} }
 
-func (m *memKV) Get(_ context.Context, issue, key string) (string, error) {
+func (m *memKV) Get(ctx context.Context, issue, key string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.data[issue][key], nil
 }
 
-func (m *memKV) Put(_ context.Context, issue, key, value string) error {
+func (m *memKV) Put(ctx context.Context, issue, key, value string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.data[issue] == nil {
@@ -1361,5 +1367,40 @@ func TestBdCounterRestartSurvival(t *testing.T) {
 	}
 	if escalated, err := esc2.RecordGateError(ctx, id); err != nil || escalated {
 		t.Fatalf("after a decided gate the streak must start over: escalated=%v err=%v", escalated, err)
+	}
+}
+
+func TestOsExecTimeoutIsInfrastructureFailure(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	_, err := gate.OsExec(ctx, t.TempDir(), "sh", "-c", "exec sleep 10")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("timeout error = %v, want deadline exceeded", err)
+	}
+	var red *gate.ExitFailure
+	if errors.As(err, &red) {
+		t.Fatal("timed-out gate classified as rejection")
+	}
+}
+
+func TestLoopGateTimeoutPersistsEscalation(t *testing.T) {
+	f := newLoopFixture(t, "type = \"shell\"\ncommand = \"true\"")
+	f.gates.CheckTimeout = 20 * time.Millisecond
+	f.gates.Exec = func(ctx context.Context, _ string, _ ...string) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	for range 5 {
+		if err := f.loop.Tick(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(f.hub.needHuman) != 1 {
+		t.Fatalf("needs-human = %d, want escalation after 5 timeouts", len(f.hub.needHuman))
+	}
+	if len(f.agent.attempts) != 1 {
+		t.Fatalf("agent ran %d times, want 1", len(f.agent.attempts))
 	}
 }
