@@ -53,7 +53,7 @@ type Options struct {
 	Logger *slog.Logger
 	// Persist is the proc crash-recovery seam: it runs with the pgid and
 	// session id after the process exists and before Start returns.
-	Persist func(pgid int, session string)
+	Persist func(pgid int, session string) error
 	// WaitDelay bounds post-exit pipe waits; zero means the proc default.
 	WaitDelay time.Duration
 	// SilenceAfter arms the silence watchdog for every run; zero disables

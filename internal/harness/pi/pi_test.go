@@ -46,10 +46,11 @@ type persistCapture struct {
 }
 
 // capture implements the Persist seam.
-func (p *persistCapture) capture(pgid int, session string) {
+func (p *persistCapture) capture(pgid int, session string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.called, p.pgid, p.session = true, pgid, session
+	return nil
 }
 
 // snapshot returns the captured values.
@@ -506,4 +507,18 @@ func TestLivePi(t *testing.T) {
 		t.Fatal("live settled outcome carries no stats")
 	}
 	t.Logf("live stats: %+v", *out.Stats)
+}
+
+func TestPersistenceFailurePreventsPiStart(t *testing.T) {
+	failure := errors.New("checkpoint unavailable")
+	pid := 0
+	opts, _ := testEnv(t, scriptHappy, func(o *pi.Options) { o.Persist = func(pgid int, _ string) error { pid = pgid; return failure } })
+	d := pi.New(opts)
+	defer func() { _ = d.Close(t.Context()) }()
+	if err := d.Start(t.Context()); !errors.Is(err, failure) {
+		t.Fatalf("Pi start error = %v", err)
+	}
+	if pid <= 1 || proc.GroupAlive(pid) {
+		t.Fatalf("untracked Pi group %d survived", pid)
+	}
 }

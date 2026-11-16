@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Restart recovery restores owned attempts, turns, retry deadlines, pinned workflows,
+  and gate output from private atomic checkpoints. Surviving agents are replaced
+  only after verifying their boot and process identity; unprompted persistence
+  failures preserve the attempt, and internal records cannot become agent tasks.
+
 - Polling and reconciliation continue while independent agent workers run, with a workflow-configured concurrency limit and bounded worker shutdown. Standard `agent.max_turns` and `agent.max_concurrent_agents` settings are validated.
 
 - Agent turns now use their configured turn and silence limits instead of inheriting the daemon polling deadline. Formula and gate timeouts remain bounded; timed-out triggers do not create work and timed-out gates retry without consuming an agent attempt.

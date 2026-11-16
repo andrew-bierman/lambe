@@ -545,6 +545,10 @@ func TestFilteredTrackerSkipsForeignMachines(t *testing.T) {
 	if !ids["local-1"] || !ids["pinned-here"] {
 		t.Errorf("local issues must stay dispatchable, got %v", ids)
 	}
+	refreshed, err := filtered.Dispatchable(t.Context(), tracker.DispatchQuery{IDs: []string{"foreign"}})
+	if err != nil || len(refreshed) != 1 || refreshed[0].ID != "foreign" {
+		t.Fatalf("routing hid an ID refresh from recovery/reconciliation: %+v, %v", refreshed, err)
+	}
 }
 
 func TestDaemonShutdownLadderAndLockRelease(t *testing.T) {

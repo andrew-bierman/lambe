@@ -39,6 +39,12 @@ type SessionCloser interface {
 	CloseSession(ctx context.Context, sessionID string)
 }
 
+// CompletionFinalizer finishes durable bookkeeping after a gate closed an issue
+// just before the supervisor stopped. It must be safe to call repeatedly.
+type CompletionFinalizer interface {
+	FinalizeCompletion(ctx context.Context, issueID string) error
+}
+
 // TurnRequest is one turn of an attempt.
 type TurnRequest struct {
 	SessionID string
@@ -336,6 +342,11 @@ type Loop struct {
 	// Non-positive values use the tracker command timeout; agent turns
 	// retain their own runner deadlines.
 	ControlTimeout time.Duration
+	// CheckpointDir enables private durable continuation records for this instance.
+	CheckpointDir string
+	recoveryScan  bool
+	recoveryActor string
+	recovery      map[string]checkpoint
 	// FailureDelay overrides the failure backoff computation; the default
 	// wraps FailureBackoff with RetryCap.
 	FailureDelay func(attempt int) time.Duration
@@ -371,6 +382,7 @@ func NewLoop(tr tracker.Tracker, loader *Loader, runner AgentRunner, gates GateE
 		Log:               log,
 		sessions:          map[string]*session{},
 		active:            map[string]*worker{},
+		recovery:          map[string]checkpoint{},
 		retries:           &Queue{},
 		materialized:      map[string]bool{},
 	}
@@ -392,6 +404,7 @@ func (l *Loop) Tick(ctx context.Context) error {
 		return err
 	}
 	l.collect(ctx)
+	l.recoverPending(ctx)
 	l.reconcileWorkers(ctx)
 	l.runFormulas(ctx)
 	if err := l.serviceRetries(ctx); err != nil {
@@ -538,6 +551,10 @@ func (l *Loop) dispatch(ctx context.Context) error {
 		return fmt.Errorf("dispatch read: %w", err)
 	}
 	for _, issue := range issues {
+		// Record creation and its blocked-state update are separate tracker writes.
+		if issue.Metadata[tracker.MetaKind] != "" {
+			continue
+		}
 		// Template beads from `bd cook --persist` (ids "<formula>.<step>")
 		// are read-only specifications; pours create tracker-mol-* work
 		// items (issue #7). Skip them before the claim attempt: bd rejects
@@ -555,6 +572,35 @@ func (l *Loop) dispatch(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if _, recovering := l.recovery[issue.ID]; recovering {
+			continue
+		}
+		wf := l.Loader.Current()
+		s := &session{issue: issue, wf: wf, key: issue.ID}
+		kind := RetryFailure
+		if l.CheckpointDir != "" {
+			saved, readErr := l.readCheckpoint(l.checkpointPath(issue.ID))
+			if readErr == nil {
+				s = checkpointSession(saved)
+				kind = RetryContinuation
+				if saved.Retry != nil {
+					if saved.Retry.At.After(time.Now()) {
+						continue
+					}
+					kind = saved.Retry.Kind
+				}
+				if saved.Attempt == 0 {
+					kind = RetryFailure
+				}
+			} else if !os.IsNotExist(readErr) {
+				l.Log.Error("cannot read continuation; refusing fresh attempt", "issue", issue.ID, "error", readErr)
+				continue
+			}
+		}
+		if err := l.saveCheckpoint(s, checkpointClaiming, &Retry{IssueID: issue.ID, Kind: kind, At: time.Now()}); err != nil {
+			l.Log.Error("cannot persist prospective claim", "issue", issue.ID, "error", err)
+			continue
+		}
 		claimed, err := l.Tracker.Claim(ctx, issue.ID)
 		if err != nil {
 			if errors.Is(err, tracker.ErrLostRace) || errors.Is(err, tracker.ErrFrozen) {
@@ -566,11 +612,17 @@ func (l *Loop) dispatch(ctx context.Context) error {
 			logging.WithIssue(l.Log, issue.ID).Error("claim failed, continuing with remaining issues", "category", "dispatch", "error", err)
 			continue
 		}
-		wf := l.Loader.Current()
-		s := &session{issue: claimed, wf: wf, key: claimed.ID, turn: 0, attempt: 0}
+		s.issue = claimed
+		if l.CheckpointDir != "" {
+			if err := l.stopRecordedAgent(ctx, claimed.ID); err != nil {
+				l.recovery[claimed.ID] = checkpoint{Version: 1, Phase: checkpointClaiming, Issue: claimed, Workflow: s.wf, Attempt: s.attempt, Turn: s.turn, Thread: s.thread, Key: s.key, Workspace: s.workspace, Retry: &Retry{IssueID: claimed.ID, Kind: kind, At: time.Now()}}
+				l.Log.Error("claim recovery blocked", "issue", claimed.ID, "error", err)
+				continue
+			}
+		}
 		l.sessions[claimed.ID] = s
 		l.Log.Info("issue claimed", "issue", claimed.ID, "revision", wf.Revision)
-		l.start(ctx, s, RetryFailure)
+		l.start(ctx, s, kind)
 	}
 	return nil
 }
@@ -582,15 +634,35 @@ func (w *worker) runAttempt(ctx context.Context, s *session, nextAttempt bool) {
 	l := w.loop
 	log := logging.WithIssue(l.Log, s.issue.ID)
 	if nextAttempt {
+		// Retire the previous process before its binding ceases to be the latest attempt.
+		if s.attempt > 0 {
+			l.closeRunnerSession(ctx, s.issue.ID)
+			if l.CheckpointDir != "" {
+				if err := l.stopRecordedAgent(ctx, s.issue.ID); err != nil {
+					log.Error("previous attempt not safely stopped", "error", err)
+					w.schedule(s, RetryFailure, l.failureDelay(s.attempt))
+					return
+				}
+			}
+		}
 		s.attempt++
 		s.turn = 0
 	}
 	wf := s.wf
+	if err := l.saveCheckpoint(s, checkpointPreparing, &Retry{IssueID: s.issue.ID, Kind: RetryContinuation, At: time.Now()}); err != nil {
+		log.Error("cannot persist attempt before hooks", "error", err)
+		w.schedule(s, RetryContinuation, l.ContinuationDelay)
+		return
+	}
 
 	ws, err := l.Spaces.Ensure(ctx, s.key, wf.Hooks)
 	if err != nil {
 		log.Error("workspace creation failed, retrying later", "error", err)
-		w.schedule(s, RetryFailure, l.failureDelay(s.attempt))
+		if ctx.Err() != nil {
+			w.schedule(s, RetryContinuation, l.ContinuationDelay)
+		} else {
+			w.schedule(s, RetryFailure, l.failureDelay(s.attempt))
+		}
 		return
 	}
 	s.workspace = ws.Dir
@@ -598,7 +670,11 @@ func (w *worker) runAttempt(ctx context.Context, s *session, nextAttempt bool) {
 	if err := l.Spaces.RunBeforeRun(ctx, ws.Dir, wf.Hooks); err != nil {
 		log.Error("before_run failed, attempt aborted", "error", err)
 		l.Spaces.RunAfterRun(ctx, ws.Dir, wf.Hooks)
-		w.schedule(s, RetryFailure, l.failureDelay(s.attempt))
+		if ctx.Err() != nil {
+			w.schedule(s, RetryContinuation, l.ContinuationDelay)
+		} else {
+			w.schedule(s, RetryFailure, l.failureDelay(s.attempt))
+		}
 		return
 	}
 
@@ -606,7 +682,9 @@ func (w *worker) runAttempt(ctx context.Context, s *session, nextAttempt bool) {
 		SessionID: s.issue.ID,
 		Number:    s.attempt,
 	}); err != nil {
-		log.Error("record attempt failed", "error", err)
+		log.Error("record attempt failed; not prompting agent", "error", err)
+		w.schedule(s, RetryContinuation, l.ContinuationDelay)
+		return
 	}
 
 	for s.turn < wf.MaxTurns {
@@ -633,6 +711,12 @@ func (w *worker) runTurn(ctx context.Context, s *session, ws *Workspace, log *sl
 		w.schedule(s, RetryFailure, l.failureDelay(s.attempt))
 		return true
 	}
+	if err := l.saveCheckpoint(s, checkpointRunning, nil); err != nil {
+		log.Error("checkpoint failed; not prompting agent", "error", err)
+		s.turn--
+		w.schedule(s, RetryContinuation, l.ContinuationDelay)
+		return true
+	}
 	res, err := l.Runner.RunTurn(ctx, TurnRequest{
 		SessionID: s.issue.ID,
 		ThreadID:  s.thread,
@@ -643,13 +727,22 @@ func (w *worker) runTurn(ctx context.Context, s *session, ws *Workspace, log *sl
 		Workspace: ws.Dir,
 		Revision:  wf.Revision,
 	})
-	if err == nil && ctx.Err() != nil {
+	w.interrupted = ctx.Err() != nil
+	if err == nil && w.interrupted {
 		err = ctx.Err()
 	}
 	if res.ThreadID != "" {
 		s.thread = res.ThreadID
 	}
 	l.Spaces.RunAfterRun(ctx, ws.Dir, wf.Hooks)
+
+	if errors.Is(err, proc.ErrBindingUnavailable) {
+		// The child never received a prompt; preserve the attempt and replay this turn.
+		s.turn--
+		w.interrupted = false
+		w.schedule(s, RetryContinuation, l.ContinuationDelay)
+		return true
+	}
 
 	if res.Exit == TurnDeferred {
 		until := res.WakeAt
@@ -663,6 +756,12 @@ func (w *worker) runTurn(ctx context.Context, s *session, ws *Workspace, log *sl
 		}
 		log.Info("turn deferred, attempt preserved", "turn", s.turn, "wake_at", until.UTC().Format(time.RFC3339))
 		l.closeRunnerSession(ctx, s.issue.ID)
+		if s.turn > 0 {
+			s.turn--
+		}
+		if err := l.saveCheckpoint(s, checkpointDeferred, &Retry{IssueID: s.issue.ID, Kind: RetryContinuation, At: until}); err != nil {
+			log.Error("persist deferred continuation", "error", err)
+		}
 		w.finished = true
 		return true
 	}
@@ -714,6 +813,7 @@ func (l *Loop) turnPrompt(s *session) (string, error) {
 // layer.
 func (l *Loop) terminal(ctx context.Context, s *session, reason string) {
 	l.cleanup(ctx, s, reason)
+	l.removeCheckpoint(s.issue.ID)
 	delete(l.sessions, s.issue.ID)
 }
 
@@ -732,6 +832,13 @@ func (l *Loop) cleanup(ctx context.Context, s *session, reason string) {
 // schedule arms the retry queue for a session's issue.
 func (w *worker) schedule(s *session, kind RetryKind, delay time.Duration) {
 	w.retry = &Retry{IssueID: s.issue.ID, Kind: kind, At: time.Now().Add(delay)}
+	phase := checkpointRetry
+	if w.interrupted && kind != RetryGate {
+		phase = checkpointInterrupted
+	}
+	if err := w.loop.saveCheckpoint(s, phase, w.retry); err != nil {
+		w.loop.Log.Error("persist pending retry", "issue", s.issue.ID, "error", err)
+	}
 }
 
 // closeRunnerSession releases the runner's per-session resources (agent
@@ -746,6 +853,12 @@ func (w *worker) evaluateGate(ctx context.Context, s *session, output string, lo
 	// Closing the issue precedes tombstone writes and cleanup; a poll must let them finish.
 	w.settling.Store(true)
 	l := w.loop
+	s.gateOutput = output
+	if err := l.saveCheckpoint(s, checkpointGate, &Retry{IssueID: s.issue.ID, Kind: RetryGate, At: time.Now()}); err != nil {
+		log.Error("checkpoint failed; not evaluating gate", "error", err)
+		w.schedule(s, RetryGate, l.ContinuationDelay)
+		return true
+	}
 	outcome, gerr := l.Gates.Evaluate(ctx, GateRequest{
 		Issue:     s.issue,
 		Attempt:   s.attempt,

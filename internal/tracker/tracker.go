@@ -121,10 +121,11 @@ type IssueSpec struct {
 // Attempt is one supervised execution attempt of a session, recorded as a
 // pinned-id bead so crash recovery can find it.
 type Attempt struct {
-	SessionID string
-	Number    int
-	PGID      int
-	WakeAt    time.Time // zero means no wake timer armed
+	SessionID       string
+	Number          int
+	PGID            int
+	ProcessIdentity string    // kernel identity of the recorded group leader
+	WakeAt          time.Time // zero means no wake timer armed
 }
 
 // Event is one journaled mutation.

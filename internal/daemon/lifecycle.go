@@ -325,6 +325,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 		spaces := symphony.NewWorkspaceManager(filepath.Join(d.opts.StateDir, "workspaces"), d.log)
 		l := symphony.NewLoop(filtered, loader, d.asm.Runner, d.asm.Gates, spaces, d.log)
 		l.ControlTimeout = d.cycleBound()
+		l.CheckpointDir = filepath.Join(d.opts.StateDir, "sessions", strings.TrimSuffix(lockName, ".lock"))
+		if err := l.Restore(runCtx, d.opts.Actor); err != nil {
+			d.log.Error("session recovery incomplete; healthy sessions continue", "error", err)
+		}
 		// Load responsibility formulas from the tracker's conventional
 		// .beads/formulas directory and wire the bd materializer so
 		// triggers materialize finite issues into the dispatch front.

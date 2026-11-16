@@ -3,6 +3,7 @@ package proc_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"syscall"
@@ -330,10 +331,11 @@ func TestPersistSeesPgidAndSession(t *testing.T) {
 	var mu sync.Mutex
 	var calls []procCall
 	child := start(t, testchild.BehaviorExit0, func(o *proc.Options) {
-		o.Persist = func(pgid int, session string) {
+		o.Persist = func(pgid int, session string) error {
 			mu.Lock()
 			defer mu.Unlock()
 			calls = append(calls, procCall{pgid: pgid, session: session})
+			return nil
 		}
 	})
 	_ = collectFrames(t, child.Frames())
@@ -358,4 +360,16 @@ func TestPersistSeesPgidAndSession(t *testing.T) {
 type procCall struct {
 	pgid    int
 	session string
+}
+
+func TestPersistFailureKillsAndReapsUntrackedChild(t *testing.T) {
+	failure := errors.New("checkpoint unavailable")
+	pid := 0
+	child, err := proc.Start(proc.Options{Path: testBin, Env: append(os.Environ(), testchild.EnvVar+"="+testchild.BehaviorHang), Persist: func(pgid int, _ string) error { pid = pgid; return failure }})
+	if child != nil || !errors.Is(err, failure) {
+		t.Fatalf("spawn after failed persistence = %v, %v", child, err)
+	}
+	if pid <= 1 || proc.GroupAlive(pid) {
+		t.Fatalf("untracked child group %d survived", pid)
+	}
 }

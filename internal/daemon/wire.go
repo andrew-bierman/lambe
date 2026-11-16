@@ -6,6 +6,7 @@ package daemon
 // DefaultWire is the Options.Wire implementation the lambe binary installs.
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,6 +20,7 @@ import (
 	pidrv "github.com/andrew-bierman/lambe/internal/harness/pi"
 	"github.com/andrew-bierman/lambe/internal/logging"
 	"github.com/andrew-bierman/lambe/internal/mcp"
+	"github.com/andrew-bierman/lambe/internal/proc"
 	"github.com/andrew-bierman/lambe/internal/symphony"
 	"github.com/andrew-bierman/lambe/internal/tracker"
 )
@@ -78,20 +80,15 @@ func formulaDir(trackerDir string) string {
 }
 
 // harnessRunner adapts harness drivers to the symphony AgentRunner seam.
-// One driver instance is created per supervised issue: a driver's session
-// and working directory belong to a single workspace. The backend session
-// id is derived from the issue id, and both shipped drivers treat starting
-// with an existing session id as resuming it, so a daemon restart picks up
-// the same backend session where one exists. Retiring a driver (death or
-// session close) preserves those resume semantics: the next turn simply
-// constructs a fresh driver on the same derived session id.
+// One driver belongs to one issue workspace. Pi reopens the stable backend
+// session; ACP currently creates a new conversation after process retirement.
 type harnessRunner struct {
 	name string
 	cfg  *config.Config
 
 	// persist records an agent process group id onto the session's
 	// latest attempt bead for crash recovery; nil disables the seam.
-	persist func(sessionID string, pgid int)
+	persist func(sessionID string, pgid int) error
 	// factory constructs drivers; nil means newDriver. Tests substitute
 	// fakes here.
 	factory func(req symphony.TurnRequest) (harness.Driver, error)
@@ -350,11 +347,11 @@ func (r *harnessRunner) newDriver(req symphony.TurnRequest) (harness.Driver, err
 // persistFor binds the runner's persist seam to one issue. It returns nil
 // when no persist function is configured, leaving the drivers'
 // crash-recovery seam dormant.
-func (r *harnessRunner) persistFor(issueID string) func(pgid int, session string) {
+func (r *harnessRunner) persistFor(issueID string) func(pgid int, session string) error {
 	if r.persist == nil {
 		return nil
 	}
-	return func(pgid int, _ string) { r.persist(issueID, pgid) }
+	return func(pgid int, _ string) error { return r.persist(issueID, pgid) }
 }
 
 // newAttemptPersister returns the persist seam DefaultWire installs: when
@@ -372,7 +369,7 @@ func (r *harnessRunner) persistFor(issueID string) func(pgid int, session string
 // The tracker is opened lazily because the wire hook runs before the
 // daemon opens its own trackers; bd's shell transport makes a second local
 // over the same directory safe.
-func newAttemptPersister(bdBin, dir, actor string, log *slog.Logger) func(sessionID string, pgid int) {
+func newAttemptPersister(bdBin, dir, actor string, log *slog.Logger) func(sessionID string, pgid int) error {
 	return newAttemptPersisterFrom(func() (tracker.Tracker, error) {
 		local, err := tracker.NewLocal(bdBin, dir, actor)
 		if err != nil {
@@ -384,37 +381,42 @@ func newAttemptPersister(bdBin, dir, actor string, log *slog.Logger) func(sessio
 			return nil, err
 		}
 		return local, nil
-	}, log)
+	}, log, proc.ProcessIdentity)
 }
 
 // newAttemptPersisterFrom is newAttemptPersister with the tracker opener
 // injected, so tests can substitute an in-memory tracker.
-func newAttemptPersisterFrom(openTracker func() (tracker.Tracker, error), log *slog.Logger) func(sessionID string, pgid int) {
-	var (
-		once    sync.Once
-		tr      tracker.Tracker
-		openErr error
-	)
-	open := func() {
-		local, err := openTracker()
+func newAttemptPersisterFrom(openTracker func() (tracker.Tracker, error), log *slog.Logger, identity func(int) (string, error)) func(sessionID string, pgid int) error {
+	var mu sync.Mutex
+	var opened tracker.Tracker
+	open := func() (tracker.Tracker, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if opened != nil {
+			return opened, nil
+		}
+		tr, err := openTracker()
 		if err != nil {
-			openErr = err
-			return
+			return nil, err
 		}
-		tr = local
-	}
-	return func(sessionID string, pgid int) {
-		once.Do(open)
 		if tr == nil {
-			log.Error("persist seam unavailable", "session", sessionID, "error", openErr)
-			return
+			return nil, errors.New("process binding tracker unavailable")
 		}
+		opened = tr
+		return tr, nil
+	}
+	return func(sessionID string, pgid int) error {
+		tr, err := open()
+		if err != nil {
+			return err
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), persistBound)
 		defer cancel()
 		attempts, err := tr.Attempts(ctx, sessionID)
 		if err != nil {
 			log.Error("persist: read attempts", "session", sessionID, "error", err)
-			return
+			return err
 		}
 		number := 0
 		for _, a := range attempts {
@@ -425,9 +427,15 @@ func newAttemptPersisterFrom(openTracker func() (tracker.Tracker, error), log *s
 		if number == 0 {
 			number = 1
 		}
-		if err := tr.PutAttempt(ctx, tracker.Attempt{SessionID: sessionID, Number: number, PGID: pgid}); err != nil {
-			log.Error("persist: record pgid", "session", sessionID, "error", err)
+		token, err := identity(pgid)
+		if err != nil {
+			return fmt.Errorf("read process identity: %w", err)
 		}
+		if err := tr.PutAttempt(ctx, tracker.Attempt{SessionID: sessionID, Number: number, PGID: pgid, ProcessIdentity: token}); err != nil {
+			log.Error("persist: record pgid", "session", sessionID, "error", err)
+			return err
+		}
+		return nil
 	}
 }
 

@@ -328,7 +328,7 @@ func TestSilentAgentWatchdogKills(t *testing.T) {
 	var pgids sync.Map
 	drv, _ := newDriver(t, "silent", func(o *acp.Options) {
 		o.SilenceAfter = 400 * time.Millisecond
-		o.Persist = func(pgid int, _ string) { pgids.Store(pgid, true) }
+		o.Persist = func(pgid int, _ string) error { pgids.Store(pgid, true); return nil }
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -369,7 +369,7 @@ func TestRunCancelStillKillsGroup(t *testing.T) {
 	var pgidOf sync.Map
 	drv, _ := newDriver(t, "silent", func(o *acp.Options) {
 		o.SilenceAfter = 10 * time.Second // only the cancel path may kill
-		o.Persist = func(pgid int, _ string) { pgidOf.Store(pgid, true) }
+		o.Persist = func(pgid int, _ string) error { pgidOf.Store(pgid, true); return nil }
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -564,5 +564,17 @@ func TestCloseIsIdempotent(t *testing.T) {
 	}
 	if err := drv.Close(ctx); err != nil {
 		t.Fatalf("second Close: %v", err)
+	}
+}
+
+func TestPersistenceFailurePreventsACPStart(t *testing.T) {
+	failure := errors.New("checkpoint unavailable")
+	pid := 0
+	drv, _ := newDriver(t, "work", func(o *acp.Options) { o.Persist = func(pgid int, _ string) error { pid = pgid; return failure } })
+	if err := drv.Start(t.Context()); !errors.Is(err, failure) {
+		t.Fatalf("ACP start error = %v", err)
+	}
+	if pid <= 1 || syscall.Kill(-pid, 0) == nil {
+		t.Fatalf("untracked ACP group %d survived", pid)
 	}
 }

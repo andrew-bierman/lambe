@@ -25,6 +25,8 @@ type Orphan struct {
 	// starttime was recorded, in which case recovery cannot verify the
 	// group and stands down without killing.
 	StartTime uint64
+	// ProcessIdentity is the native kernel identity recorded at spawn.
+	ProcessIdentity string
 }
 
 // OrphanSource yields the persisted pgid/session bindings left behind by a
@@ -65,6 +67,10 @@ func Recover(ctx context.Context, src OrphanSource, tr tracker.Tracker, actor st
 			log.Error("orphan ownership unverified, standing down",
 				"pgid", o.PGID, "session", o.SessionID,
 				"category", CategoryUnavailable, "error", err)
+			continue
+		}
+		if ok && issue.Assignee != "" && issue.Assignee != actor {
+			log.Info("orphan owned by another actor; preserving group", "session", o.SessionID)
 			continue
 		}
 		if !ok || !symphony.StatusActive(issue.Status) {
@@ -115,6 +121,10 @@ func Recover(ctx context.Context, src OrphanSource, tr tracker.Tracker, actor st
 // also a stand-down (the ladder is unnecessary but unprovable; a later
 // reap or the next boot clears it).
 func orphanIdentityHolds(log *slog.Logger, o Orphan) bool {
+	if o.ProcessIdentity != "" {
+		live, err := proc.ProcessIdentity(o.PGID)
+		return err == nil && live == o.ProcessIdentity
+	}
 	if o.StartTime == 0 {
 		log.Warn("orphan kill refused: no recorded starttime to verify pgid against, standing down",
 			"pgid", o.PGID, "session", o.SessionID)
@@ -178,11 +188,14 @@ func (t TrackerOrphans) Orphans(ctx context.Context) ([]Orphan, error) {
 				"session", issue.ID, "category", ErrorCategory(err), "error", err)
 			continue
 		}
-		for i := len(attempts) - 1; i >= 0; i-- {
-			if attempts[i].PGID > 0 {
-				orphans = append(orphans, Orphan{PGID: attempts[i].PGID, SessionID: issue.ID})
-				break
+		var latest tracker.Attempt
+		for _, attempt := range attempts {
+			if attempt.Number > latest.Number {
+				latest = attempt
 			}
+		}
+		if latest.PGID > 0 {
+			orphans = append(orphans, Orphan{PGID: latest.PGID, SessionID: issue.ID, ProcessIdentity: latest.ProcessIdentity})
 		}
 	}
 	return orphans, nil
