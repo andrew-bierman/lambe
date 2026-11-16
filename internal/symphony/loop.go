@@ -14,6 +14,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/andrew-bierman/lambe/internal/logging"
+	"github.com/andrew-bierman/lambe/internal/proc"
 	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
@@ -168,9 +169,10 @@ func LoadFormulas(dir string) ([]Formula, error) {
 // trigger: they return an error so the caller logs the trigger
 // unavailable instead of materializing work on every tick.
 func TriggerFired(ctx context.Context, f Formula) (bool, error) {
-	cmd := exec.CommandContext(ctx, "sh", "-lc", f.Command) // #nosec G204 -- trigger commands are operator-authored formula configuration
-	cmd.Dir = filepath.Dir(f.Path)
-	if err := cmd.Run(); err != nil {
+	if _, err := proc.RunCommand(ctx, filepath.Dir(f.Path), "sh", "-lc", f.Command); err != nil {
+		if ctx.Err() != nil {
+			return false, fmt.Errorf("trigger %s unavailable: %w", f.Name, ctx.Err())
+		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			switch exitErr.ExitCode() {
@@ -209,10 +211,8 @@ func (m *BeadsMaterializer) Materialize(ctx context.Context, f Formula) error {
 	if m.DryRun {
 		args = append(args, "--dry-run")
 	}
-	cmd := exec.CommandContext(ctx, m.Bin, args...) // #nosec G204 -- fixed argv over a configured binary
-	cmd.Dir = m.Dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("bd mol pour %s: %w: %s", f.Name, err, string(out))
+	if out, err := proc.RunCommand(ctx, m.Dir, append([]string{m.Bin}, args...)...); err != nil {
+		return fmt.Errorf("bd mol pour %s: %w: %s", f.Name, err, out)
 	}
 	return nil
 }
@@ -248,6 +248,10 @@ type Loop struct {
 	Materializer     FormulaMaterializer
 	DispatchStatuses []string
 	RetryCap         time.Duration
+	// ControlTimeout bounds each formula trigger and materialization.
+	// Non-positive values use the tracker command timeout; agent turns
+	// retain their own runner deadlines.
+	ControlTimeout time.Duration
 	// FailureDelay overrides the failure backoff computation; the default
 	// wraps FailureBackoff with RetryCap.
 	FailureDelay func(attempt int) time.Duration
@@ -312,21 +316,35 @@ func (l *Loop) runFormulas(ctx context.Context) {
 		return
 	}
 	for _, f := range l.Formulas {
-		fired, err := TriggerFired(ctx, f)
-		if err != nil {
-			l.Log.Warn("formula trigger errored", "formula", f.Name, "error", err)
-			continue
-		}
-		l.Log.Debug("formula trigger evaluated", "formula", f.Name, "fired", fired)
-		if !fired {
-			continue
-		}
-		if err := l.Materializer.Materialize(ctx, f); err != nil {
-			l.Log.Error("formula materialization failed", "formula", f.Name, "error", err)
-			continue
-		}
-		l.Log.Info("formula materialized", "formula", f.Name)
+		l.runFormula(ctx, f)
 	}
+}
+
+func (l *Loop) controlContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	bound := l.ControlTimeout
+	if bound <= 0 {
+		bound = tracker.DefaultCommandTimeout
+	}
+	return context.WithTimeout(ctx, bound)
+}
+
+func (l *Loop) runFormula(ctx context.Context, f Formula) {
+	ctx, cancel := l.controlContext(ctx)
+	defer cancel()
+	fired, err := TriggerFired(ctx, f)
+	if err != nil {
+		l.Log.Warn("formula trigger errored", "formula", f.Name, "error", err)
+		return
+	}
+	l.Log.Debug("formula trigger evaluated", "formula", f.Name, "fired", fired)
+	if !fired {
+		return
+	}
+	if err := l.Materializer.Materialize(ctx, f); err != nil {
+		l.Log.Error("formula materialization failed", "formula", f.Name, "error", err)
+		return
+	}
+	l.Log.Info("formula materialized", "formula", f.Name)
 }
 
 // serviceRetries reconciles due retry entries by ID: terminal issues get

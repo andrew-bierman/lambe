@@ -682,3 +682,58 @@ func TestFormulaTriggerUnavailableDoesNotMaterialize(t *testing.T) {
 		t.Errorf("materialized = %v, want none", got)
 	}
 }
+
+func TestTriggerTimeoutDoesNotFireResponsibility(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	fired, err := TriggerFired(ctx, Formula{Name: "timeout", Path: filepath.Join(t.TempDir(), "timeout.formula.toml"), Command: "exec sleep 10"})
+	if fired || err == nil {
+		t.Fatalf("timed-out trigger = %v, %v; want unavailable, not fired", fired, err)
+	}
+}
+
+type contextMaterializer func(context.Context, Formula) error
+
+func (f contextMaterializer) Materialize(ctx context.Context, formula Formula) error {
+	return f(ctx, formula)
+}
+
+func TestFormulaTimeoutStillDispatchesReadyWork(t *testing.T) {
+	for _, stage := range []string{"trigger", "materializer"} {
+		t.Run(stage, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, "work {{ issue }}", settle)
+			f.loop.ControlTimeout = 50 * time.Millisecond
+			command := "exit 1"
+			if stage == "trigger" {
+				command = "exec sleep 10"
+			}
+			f.loop.Formulas = []Formula{{Name: "slow", Path: filepath.Join(f.dir, "slow.formula.toml"), Command: command}}
+			calls := 0
+			f.loop.Materializer = contextMaterializer(func(ctx context.Context, _ Formula) error {
+				calls++
+				<-ctx.Done()
+				return ctx.Err()
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			if err := f.loop.Tick(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if ctx.Err() != nil {
+				t.Fatalf("control operation blocked dispatch: %v", ctx.Err())
+			}
+			want := 1
+			if stage == "trigger" {
+				want = 0
+			}
+			if calls != want {
+				t.Errorf("materializer calls = %d, want %d", calls, want)
+			}
+			if len(f.runner.recorded()) != 1 {
+				t.Fatal("ready issue was not run after control timeout")
+			}
+		})
+	}
+}

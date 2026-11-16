@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/andrew-bierman/lambe/internal/config"
 	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
@@ -298,5 +299,48 @@ func TestStatusAgainstBdTracker(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("report missing %q; got:\n%s", want, out)
 		}
+	}
+}
+
+type contextTicker func(context.Context) error
+
+func (f contextTicker) Tick(ctx context.Context) error { return f(ctx) }
+
+func TestDaemonCycleDoesNotImposePollingDeadlineOnAgent(t *testing.T) {
+	t.Parallel()
+	tr := &flushCountingTracker{fakeTracker: newFakeTracker()}
+	d := newCycleDaemon(tr, &orderedSyncer{})
+	parent, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	d.loop = contextTicker(func(ctx context.Context) error {
+		if deadline, ok := ctx.Deadline(); ok {
+			t.Errorf("agent inherited polling deadline %s", deadline)
+		}
+		cancel()
+		if ctx.Err() != context.Canceled {
+			t.Error("agent must still observe daemon cancellation")
+		}
+		return nil
+	})
+	d.cycle(parent, "tick", false)
+}
+
+func TestPokeDoesNotImposeRefreshDeadlineOnAgent(t *testing.T) {
+	t.Parallel()
+	d, err := New(Options{Config: &config.Config{}, StateDir: t.TempDir(), Machine: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.cancel)
+	deadline := make(chan bool, 1)
+	d.loop = contextTicker(func(ctx context.Context) error { _, ok := ctx.Deadline(); deadline <- ok; return nil })
+	d.poke()
+	select {
+	case limited := <-deadline:
+		if limited {
+			t.Fatal("refresh request imposed a deadline on agent execution")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("refresh did not run")
 	}
 }

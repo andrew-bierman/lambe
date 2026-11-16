@@ -1,15 +1,17 @@
 package gate
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os/exec"
 	"sync"
+	"time"
 
+	"github.com/andrew-bierman/lambe/internal/proc"
 	"github.com/andrew-bierman/lambe/internal/symphony"
+	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
 // ExitFailure reports a gate command that ran and exited non-zero. It is
@@ -32,19 +34,15 @@ type ExecFunc func(ctx context.Context, dir string, argv ...string) (string, err
 
 // OsExec is the process-level ExecFunc.
 func OsExec(ctx context.Context, dir string, argv ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- gate commands are operator-authored formula configuration
-	cmd.Dir = dir
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
+	out, err := proc.RunCommand(ctx, dir, argv...)
+	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			return out.String(), &ExitFailure{Code: exitErr.ExitCode(), Output: out.String()}
+			return out, &ExitFailure{Code: exitErr.ExitCode(), Output: out}
 		}
-		return out.String(), fmt.Errorf("run %s: %w", argv[0], err)
+		return out, fmt.Errorf("run %s: %w", argv[0], err)
 	}
-	return out.String(), nil
+	return out, nil
 }
 
 // GHResult is the GitHub-side condition of a gh gate.
@@ -206,6 +204,9 @@ type Runner struct {
 	Gh GHChecker
 	// Exec runs shell gate commands; nil uses OsExec.
 	Exec ExecFunc
+	// CheckTimeout bounds each external gate check, separately from tracker writeback.
+	// Non-positive values use the tracker command timeout.
+	CheckTimeout time.Duration
 	// Log is the diagnostics sink.
 	Log *slog.Logger
 
@@ -343,6 +344,12 @@ func (r *Runner) Evaluate(ctx context.Context, req symphony.GateRequest) (sympho
 // whether a GateErr verdict was an infra failure (as opposed to a pending
 // external condition).
 func (r *Runner) evaluateSpec(ctx context.Context, cfg Config, req symphony.GateRequest) (symphony.GateVerdict, string, bool) {
+	bound := r.CheckTimeout
+	if bound <= 0 {
+		bound = tracker.DefaultCommandTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, bound)
+	defer cancel()
 	switch cfg.Kind {
 	case KindShell:
 		fn := r.Exec
