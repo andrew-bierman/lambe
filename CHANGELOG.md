@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-16
+
+- Publish tagged release archives and checksums; keep local development binaries and state separate from production.
+- Explain how to view an existing daemon and that quitting the TUI does not stop it.
+
 - Resolve mise-managed Codex adapters before selecting and checking their Node runtime.
 
 - Complete gate bookkeeping when Beads omits closed records from default reads, and reject changed workspace roots before restoring saved work.

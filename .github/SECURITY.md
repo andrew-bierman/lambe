@@ -2,9 +2,8 @@
 
 ## Supported versions
 
-Only the `main` branch is supported. lambe is in early development with no
-stable releases yet; security fixes land on `main` and are cut into the next
-release.
+The latest tagged release is supported. Lambe is in early development; security
+fixes land on `master` and are included in the next release.
 
 ## Reporting a vulnerability
 

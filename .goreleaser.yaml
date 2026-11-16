@@ -22,7 +22,7 @@ builds:
 
 archives:
   - id: lambe
-    builds: [lambe]
+    ids: [lambe]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
