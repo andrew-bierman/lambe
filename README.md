@@ -31,6 +31,13 @@ Install (Go 1.26+):
 go install github.com/andrew-bierman/lambe/cmd/lambe@latest
 ```
 
+While the repository is private, Git must have access to it (for example,
+through `gh auth login` and `gh auth setup-git`). Install with:
+
+```sh
+GOPRIVATE=github.com/andrew-bierman/lambe go install github.com/andrew-bierman/lambe/cmd/lambe@latest
+```
+
 Prebuilt static binaries for macOS and Linux are published via GoReleaser on
 the releases page; a Homebrew tap is planned.
 
@@ -45,10 +52,13 @@ agent instructions and a completion gate before starting:
 
 ```sh
 cd ~/Code/my-beads-repo
-curl -fsSL https://raw.githubusercontent.com/andrew-bierman/lambe/master/WORKFLOW.md -o WORKFLOW.md
+gh api repos/andrew-bierman/lambe/contents/WORKFLOW.md -H 'Accept: application/vnd.github.raw' > WORKFLOW.md
 mkdir -p .beads/formulas
 # Go example: replace the command with your project's actual checks.
 cat > .beads/formulas/verify.formula.toml <<'EOF'
+[trigger]
+command = "exit 0" # Manual tasks only; no automatic materialization.
+
 [gate]
 type = "shell"
 command = "go test ./..."

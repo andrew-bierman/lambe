@@ -114,4 +114,7 @@ func TestDaemonOptionsGateClosesOwnClaim(t *testing.T) {
 	if err != nil || len(closed) != 1 || closed[0].Status != tracker.StatusClosed {
 		t.Fatalf("completed issue: %+v, error: %v", closed, err)
 	}
+	if err := local.Release(ctx, issue.ID); !errors.Is(err, tracker.ErrNotOwner) {
+		t.Fatalf("closed issue has no claim to release: %v", err)
+	}
 }
