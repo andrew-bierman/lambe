@@ -84,8 +84,9 @@ func runDaemon(args []string) error {
 	if err := requireLocalTracker(configPath); err != nil {
 		return err
 	}
-	if _, err := os.Stat("WORKFLOW.md"); err != nil {
-		return fmt.Errorf("read WORKFLOW.md: %w; create the agent workflow first (see https://github.com/andrew-bierman/lambe#quickstart)", err)
+	workflowPath := daemon.ResolveWorkflowPath(cfg)
+	if _, err := os.Stat(workflowPath); err != nil {
+		return fmt.Errorf("read %s: %w; create the agent workflow first (see https://github.com/andrew-bierman/lambe#quickstart)", workflowPath, err)
 	}
 
 	d, err := daemon.New(daemonOptions(cfg, configPath))
@@ -107,7 +108,8 @@ func daemonOptions(cfg *config.Config, configPath string) daemon.Options {
 		StateDir:     daemon.DefaultStateDir(),
 		Machine:      machine,
 		Actor:        actor,
-		WorkflowPath: "WORKFLOW.md",
+		WorkflowPath: daemon.ResolveWorkflowPath(cfg),
+		LockName:     daemon.InstanceLockName(cfg),
 		Log:          logging.Default(),
 		Wire:         daemon.DefaultWire(cfg, "", actor),
 	}

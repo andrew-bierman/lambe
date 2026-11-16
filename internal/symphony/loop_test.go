@@ -737,3 +737,120 @@ func TestFormulaTimeoutStillDispatchesReadyWork(t *testing.T) {
 		})
 	}
 }
+
+// TestFormulaMaterializesOncePerProcess pins the loop-level dedup (issue
+// #6): a fired trigger pours once per daemon run even if the trigger keeps
+// firing; bd mol pour itself is not deduped and re-materializes a fresh
+// issue set per invocation.
+func TestFormulaMaterializesOncePerProcess(t *testing.T) {
+	t.Parallel()
+	formulaDir := filepath.Join(t.TempDir(), ".beads", "formulas")
+	if err := os.MkdirAll(formulaDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	formulaPath := filepath.Join(formulaDir, "keep-tests-green.formula.toml")
+	if err := os.WriteFile(formulaPath, []byte("[trigger]\ncommand = \"exit 3\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	f := newFixture(t, "body", settle)
+	f.loop.Formulas = []Formula{{Name: "keep-tests-green", Path: formulaPath, Command: "exit 3"}}
+	materializer := &fakeMaterializer{tr: f.tr}
+	f.loop.Materializer = materializer
+
+	for i := 0; i < 3; i++ {
+		if err := f.loop.Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := materializer.materialized(); len(got) != 1 {
+		t.Fatalf("materialized calls = %v, want exactly 1 (loop dedup must skip fired re-materializations)", got)
+	}
+}
+
+// TestDispatchSkipsFormulaTemplateIDs pins the dispatch filter (issue #7):
+// `bd cook --persist` template beads (ids "<formula>.<step>") are read-only
+// and must never reach Claim, while mol-poured work items dispatch normally.
+func TestDispatchSkipsFormulaTemplateIDs(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "body", settle)
+	delete(f.tr.issues, "i-1")
+	f.tr.issues["keep-tests-green.activate"] = tracker.Issue{ID: "keep-tests-green.activate", Title: "template", Status: "ready"}
+	f.tr.issues["tracker-mol-1"] = tracker.Issue{ID: "tracker-mol-1", Title: "poured step", Status: "ready"}
+	f.gate.outcomes = []GateOutcome{{Verdict: GateGreen}}
+	f.loop.Formulas = []Formula{{Name: "keep-tests-green"}}
+
+	if err := f.loop.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.runner.recorded()
+	if len(calls) != 1 || calls[0].Issue.ID != "tracker-mol-1" {
+		t.Fatalf("runner calls = %+v, want exactly one run for tracker-mol-1 (template skipped before claim)", calls)
+	}
+}
+
+// TestBeadsMaterializerLedgerSkipsOpenRoot pins the durable dedup (issue
+// #6): a second pour is skipped while the recorded root mol is open, and
+// allowed once it closes.
+func TestBeadsMaterializerLedgerSkipsOpenRoot(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".beads", "formulas"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	formulaJSON := filepath.Join(dir, ".beads", "formulas", "latus-1436.formula.json")
+	body := `{"formula":"latus-1436","title":"t","steps":[{"id":"s","title":"s","run":"true"}]}`
+	if err := os.WriteFile(formulaJSON, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stateFile := filepath.Join(dir, "fake-bd-state")
+	poursFile := filepath.Join(dir, "fake-bd-pours")
+	script := filepath.Join(dir, "fake-bd")
+	scriptBody := fmt.Sprintf(`#!/bin/bash
+case "$1" in
+  mol) echo "Root issue: test-mol-9"; echo "poured" >> %q ;;
+  show)
+    if [ -f %q ]; then echo '{"status":"closed"}'; else echo '{"status":"open"}'; fi ;;
+esac`, poursFile, stateFile)
+	if err := os.WriteFile(script, []byte(scriptBody), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &BeadsMaterializer{Bin: script, Dir: dir, Log: slog.New(slog.NewTextHandler(&strings.Builder{}, nil))}
+	fixture := Formula{Name: "latus-1436"}
+
+	if err := m.Materialize(context.Background(), fixture); err != nil {
+		onDisk, _ := os.ReadFile(script)
+		t.Fatalf("first materialize: %v | script on disk:\n%s", err, onDisk)
+	}
+	if _, err := os.Stat(poursFile); err != nil {
+		ledger := m.loadLedger()
+		onDisk, _ := os.ReadFile(script)
+		out, runErr := m.run(context.Background(), "mol", "pour", "latus-1436")
+		t.Fatalf("pours missing after first pour: stat=%v ledger=%+v manual-run-out=%q manual-err=%v | script on disk:\n%s", err, ledger, out, runErr, onDisk)
+	}
+	if err := m.Materialize(context.Background(), fixture); err != nil {
+		t.Fatal(err)
+	}
+	if string(mustRead(t, poursFile)) != "poured\n" {
+		t.Fatalf("pours = %q, want exactly one while the root mol is open", mustRead(t, poursFile))
+	}
+	if err := os.WriteFile(stateFile, []byte("closed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Materialize(context.Background(), fixture); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(strings.Split(strings.TrimRight(mustRead(t, poursFile), "\n"), "\n")); n != 2 {
+		t.Fatalf("pours after close = %d, want 2 (ledger re-arms once the root closes)", n)
+	}
+}
+
+func mustRead(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}

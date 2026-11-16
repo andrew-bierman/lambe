@@ -2,6 +2,7 @@ package symphony
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -194,8 +195,12 @@ type FormulaMaterializer interface {
 }
 
 // BeadsMaterializer materializes through the bd CLI in the tracker
-// directory. Protos are ephemeral by default; both cook and pour support
-// --dry-run, which callers can enable for a rehearsal pass.
+// directory. A durable ledger (.beads/lambe-materialized.json) records the
+// poured root issue id per formula: bd mol pour is not deduped by bd itself
+// (each invocation materializes a fresh issue set — issue #6), so the
+// materializer skips a pour while the recorded root mol is still open and
+// re-allowed once it closes. Protos are ephemeral by default; both cook and
+// pour support --dry-run, which callers can enable for a rehearsal pass.
 type BeadsMaterializer struct {
 	Bin    string
 	Dir    string
@@ -203,16 +208,95 @@ type BeadsMaterializer struct {
 	Log    *slog.Logger
 }
 
-// Materialize implements FormulaMaterializer. The formula name doubles
-// as the proto id for bd mol pour, which resolves the formula file and
-// creates the step issues in one command.
-func (m *BeadsMaterializer) Materialize(ctx context.Context, f Formula) error {
-	args := []string{"mol", "pour", f.Name}
-	if m.DryRun {
-		args = append(args, "--dry-run")
+// materializedEntry is one ledger record: the poured root mol and when.
+type materializedEntry struct {
+	RootID   string `json:"root_id"`
+	PouredAt string `json:"poured_at"`
+}
+
+func (m *BeadsMaterializer) ledgerPath() string {
+	return filepath.Join(m.Dir, ".beads", "lambe-materialized.json")
+}
+
+func (m *BeadsMaterializer) loadLedger() map[string]materializedEntry {
+	out := map[string]materializedEntry{}
+	raw, err := os.ReadFile(m.ledgerPath()) // #nosec G304 -- path is derived from the configured tracker dir
+	if err != nil {
+		return out
 	}
-	if out, err := proc.RunCommand(ctx, m.Dir, append([]string{m.Bin}, args...)...); err != nil {
+	_ = json.Unmarshal(raw, &out)
+	return out
+}
+
+func (m *BeadsMaterializer) saveLedger(entries map[string]materializedEntry) {
+	raw, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return
+	}
+	path := m.ledgerPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(path, raw, 0o644) // #nosec G304 -- operator-owned tracker dir
+}
+
+// pouredRootOpen reports the ledger's root issue id for name and whether it
+// is still live (not closed). A tracker read failure counts as live: a
+// flaky read must never cause a duplicate pour, and retries converge.
+func (m *BeadsMaterializer) pouredRootOpen(ctx context.Context, name string) (string, bool) {
+	entry, ok := m.loadLedger()[name]
+	if !ok || entry.RootID == "" {
+		return "", false
+	}
+	res, err := m.run(ctx, "show", entry.RootID, "--json")
+	if err != nil {
+		return entry.RootID, true
+	}
+	var payload struct {
+		Status string `json:"status"`
+	}
+	if json.Unmarshal([]byte(res), &payload) != nil {
+		return entry.RootID, true
+	}
+	return entry.RootID, payload.Status != "closed"
+}
+
+// run executes the bd CLI in the tracker directory. The first argv element
+// is the bd subcommand; the binary path is prepended here so callers pass
+// logical arguments only.
+func (m *BeadsMaterializer) run(ctx context.Context, argv ...string) (string, error) {
+	return proc.RunCommand(ctx, m.Dir, append([]string{m.Bin}, argv...)...)
+}
+
+// Materialize implements FormulaMaterializer. The formula name doubles
+// as the proto id for bd mol pour, which resolves the formula file from
+// Dir/.beads/formulas and creates the step issues in one command. bd
+// prints "Root issue: <id>" for the poured mol root; that id anchors the
+// dedup ledger.
+func (m *BeadsMaterializer) Materialize(ctx context.Context, f Formula) error {
+	if m.DryRun {
+		// Rehearsal pass: surface the pour command without side effects.
+		_, _ = m.run(ctx, "mol", "pour", f.Name, "--dry-run")
+		return nil
+	}
+	if _, live := m.pouredRootOpen(ctx, f.Name); live {
+		m.Log.Info("formula already materialized; root mol still open", "formula", f.Name)
+		return nil
+	}
+	out, err := m.run(ctx, "mol", "pour", f.Name)
+	if err != nil {
 		return fmt.Errorf("bd mol pour %s: %w: %s", f.Name, err, out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "Root issue: ")
+		if !ok {
+			continue
+		}
+		rootID := strings.Trim(rest, "`")
+		entries := m.loadLedger()
+		entries[f.Name] = materializedEntry{RootID: rootID, PouredAt: time.Now().UTC().Format(time.RFC3339)}
+		m.saveLedger(entries)
+		break
 	}
 	return nil
 }
@@ -261,6 +345,10 @@ type Loop struct {
 
 	sessions map[string]*session
 	retries  *Queue
+	// materialized records formula names already materialized by this
+	// process: the durable guard is the materializer's ledger, this map is
+	// the fast path so a fired trigger pours at most once per daemon run.
+	materialized map[string]bool
 }
 
 // NewLoop assembles the loop with spec defaults: dispatch reads the ready
@@ -282,6 +370,7 @@ func NewLoop(tr tracker.Tracker, loader *Loader, runner AgentRunner, gates GateE
 		Log:               log,
 		sessions:          map[string]*session{},
 		retries:           &Queue{},
+		materialized:      map[string]bool{},
 	}
 }
 
@@ -316,10 +405,28 @@ func (l *Loop) runFormulas(ctx context.Context) {
 		return
 	}
 	for _, f := range l.Formulas {
-		l.runFormula(ctx, f)
+		// One active mol per formula: pours are not deduped by bd (each
+		// pour materializes a fresh issue set — issue #6), so a firing
+		// trigger would otherwise re-pour on every tick. The gate or a
+		// human closes the mol's issues; when that happens the ledger
+		// clears and the next firing materializes a fresh cycle.
+		if l.materialized[f.Name] {
+			l.Log.Debug("formula already materialized", "formula", f.Name)
+			continue
+		}
+		if err := l.runFormula(ctx, f); err != nil {
+			l.Log.Error("formula run failed", "formula", f.Name, "error", err)
+			continue
+		}
+		if fired := l.formulaFired(ctx, f); fired {
+			l.materialized[f.Name] = true
+			l.Log.Info("formula materialized", "formula", f.Name)
+		}
 	}
 }
 
+// controlContext bounds each formula trigger and materialization to the
+// loop's ControlTimeout (agent turns carry their own runner deadlines).
 func (l *Loop) controlContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	bound := l.ControlTimeout
 	if bound <= 0 {
@@ -328,23 +435,49 @@ func (l *Loop) controlContext(ctx context.Context) (context.Context, context.Can
 	return context.WithTimeout(ctx, bound)
 }
 
-func (l *Loop) runFormula(ctx context.Context, f Formula) {
+// formulaFired reports whether f's trigger currently fires. The caller
+// dedupes fired formulas via l.materialized (issue #6); unfired triggers
+// stay unmarked so a later firing can still materialize.
+func (l *Loop) formulaFired(ctx context.Context, f Formula) bool {
 	ctx, cancel := l.controlContext(ctx)
 	defer cancel()
 	fired, err := TriggerFired(ctx, f)
 	if err != nil {
 		l.Log.Warn("formula trigger errored", "formula", f.Name, "error", err)
-		return
+		return false
+	}
+	return fired
+}
+
+// runFormula evaluates one fired responsibility under the loop's control
+// timeout and materializes its finite issues into the dispatch front.
+func (l *Loop) runFormula(ctx context.Context, f Formula) error {
+	ctx, cancel := l.controlContext(ctx)
+	defer cancel()
+	fired, err := TriggerFired(ctx, f)
+	if err != nil {
+		return fmt.Errorf("formula trigger errored: %w", err)
 	}
 	l.Log.Debug("formula trigger evaluated", "formula", f.Name, "fired", fired)
 	if !fired {
-		return
+		return nil
 	}
 	if err := l.Materializer.Materialize(ctx, f); err != nil {
-		l.Log.Error("formula materialization failed", "formula", f.Name, "error", err)
-		return
+		return fmt.Errorf("formula materialization failed: %w", err)
 	}
 	l.Log.Info("formula materialized", "formula", f.Name)
+	return nil
+}
+
+// isTemplateID reports whether the issue id looks like a cook --persist
+// template bead ("<formula-name>.<step-id>"), which bd holds read-only.
+func (l *Loop) isTemplateID(id string) bool {
+	for _, f := range l.Formulas {
+		if strings.HasPrefix(id, f.Name+".") {
+			return true
+		}
+	}
+	return false
 }
 
 // serviceRetries reconciles due retry entries by ID: terminal issues get
@@ -394,6 +527,14 @@ func (l *Loop) dispatch(ctx context.Context) error {
 		return fmt.Errorf("dispatch read: %w", err)
 	}
 	for _, issue := range issues {
+		// Template beads from `bd cook --persist` (ids "<formula>.<step>")
+		// are read-only specifications; pours create tracker-mol-* work
+		// items (issue #7). Skip them before the claim attempt: bd rejects
+		// the claim and the error would repeat every tick.
+		if l.isTemplateID(issue.ID) {
+			logging.WithIssue(l.Log, issue.ID).Debug("dispatch skip: formula template bead")
+			continue
+		}
 		if _, busy := l.sessions[issue.ID]; busy {
 			continue
 		}

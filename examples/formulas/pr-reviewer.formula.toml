@@ -14,20 +14,26 @@
 # and the loop's retry/escalation machinery (attempt caps, needs-human)
 # handles the waiting. Swap in your own approval signal (a label, a
 # comment convention, a file) if GitHub reviews are not your flow.
+#
+# Schema (bd-native, validated by `bd cook <file> --dry-run`): the root
+# `formula` field is the name (convention mol-<name>); steps are a
+# [[steps]] slice with id/title/run. See internal/formula/types.go in bd.
+
+formula = "pr-reviewer"
+title = "Review every open pull request"
 
 [trigger]
 # Fires when any PR is sitting in review-pending state.
 command = 'test -n "$(gh pr list --repo "${LAMBE_GH_REPO:-.}" --review-pending --state open --json number --jq ".[].number")"'
 
-[steps]
-# Step 1: summarize the diff for the reviewer — what changed, why, and the
-# riskiest parts. Posted as a PR comment so the human review starts warm.
-[[steps.summarize]]
+[[steps]]
+id = "summarize"
+title = "Summarize the diff for the reviewer"
 run = 'gh pr diff "${LAMBE_PR_NUMBER:?}" > /tmp/pr.diff && review-summarize /tmp/pr.diff | gh pr comment "${LAMBE_PR_NUMBER}" --body-file -'
 
-# Step 2: leave line-level review comments on anything questionable, then
-# request a human review. The agent proposes; it does not approve.
-[[steps.request_review]]
+[[steps]]
+id = "request_review"
+title = "Request human review"
 run = 'gh pr ready "${LAMBE_PR_NUMBER:?}" && gh pr edit "${LAMBE_PR_NUMBER:?}" --add-reviewer "${LAMBE_REVIEWER:?}"'
 
 [gate]

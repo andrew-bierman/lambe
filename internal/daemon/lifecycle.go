@@ -33,6 +33,10 @@ type Options struct {
 	Config *config.Config
 	// StateDir holds the lock file and workspaces; it is created as needed.
 	StateDir string
+	// LockName is the single-instance lock file name inside StateDir.
+	// Empty defaults to "lambe.lock"; InstanceLockName derives a
+	// per-tracker name so disjoint configs can run concurrent instances.
+	LockName string
 	// Machine is this machine's configured identity for the label-skip rule.
 	Machine string
 	// Actor is the daemon's tracker identity for claims and heartbeats.
@@ -267,7 +271,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	defer signal.Stop(sig)
 
-	lock, err := AcquireStateLock(filepath.Join(d.opts.StateDir, "lambe.lock"))
+	lockName := d.opts.LockName
+	if lockName == "" {
+		lockName = "lambe.lock"
+	}
+	lock, err := AcquireStateLock(filepath.Join(d.opts.StateDir, lockName))
 	if err != nil {
 		return err
 	}
