@@ -820,7 +820,6 @@ case "$1" in
     if [ -f %q ]; then echo '{"status":"closed"}'; else echo '{"status":"open"}'; fi ;;
 esac`, poursFile, stateFile)
 	if err := os.WriteFile(script, []byte(scriptBody), 0o700); err != nil { // #nosec G306 -- executable fixture in a private test directory
-	if err := os.WriteFile(script, []byte(scriptBody), 0o700); err != nil { // #nosec G306 -- test script must be executable
 		t.Fatal(err)
 	}
 
@@ -829,13 +828,11 @@ esac`, poursFile, stateFile)
 
 	if err := m.Materialize(context.Background(), fixture); err != nil {
 		onDisk, _ := os.ReadFile(script) // #nosec G304 -- test-owned executable fixture
-		onDisk, _ := os.ReadFile(script) // #nosec G304 -- test-owned temp path
 		t.Fatalf("first materialize: %v | script on disk:\n%s", err, onDisk)
 	}
 	if _, err := os.Stat(poursFile); err != nil {
 		ledger := m.loadLedger()
 		onDisk, _ := os.ReadFile(script) // #nosec G304 -- test-owned executable fixture
-		onDisk, _ := os.ReadFile(script) // #nosec G304 -- test-owned temp path
 		out, runErr := m.run(context.Background(), "mol", "pour", "latus-1436")
 		t.Fatalf("pours missing after first pour: stat=%v ledger=%+v manual-run-out=%q manual-err=%v | script on disk:\n%s", err, ledger, out, runErr, onDisk)
 	}
@@ -876,7 +873,7 @@ case "$1" in
   mol) echo "Root issue: test-mol-4"; echo "poured" >> %q ;;
   show) echo '{"status":"closed"}' ;;
 esac`, poursFile)
-	if err := os.WriteFile(script, []byte(scriptBody), 0o700); err != nil { // #nosec G306 -- test script must be executable // #nosec G306 -- test script must stay executable
+	if err := os.WriteFile(script, []byte(scriptBody), 0o700); err != nil { // #nosec G306 -- test script must be executable
 		t.Fatal(err)
 	}
 
@@ -922,7 +919,6 @@ func backdateLedger(t *testing.T, m *BeadsMaterializer, name string) {
 func mustRead(t *testing.T, path string) string {
 	t.Helper()
 	raw, err := os.ReadFile(path) // #nosec G304 -- test-owned fixture path
-	raw, err := os.ReadFile(path) // #nosec G304 -- test-owned temp path
 	if err != nil {
 		t.Fatal(err)
 	}

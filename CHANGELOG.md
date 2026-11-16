@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Agent turns now use their configured turn and silence limits instead of inheriting the daemon polling deadline. Formula and gate timeouts remain bounded; timed-out triggers do not create work and timed-out gates retry without consuming an agent attempt.
 
+### Development
+
+- Setup tests isolate platform-specific configuration directories on macOS and
+  Linux, and duplicated formula test statements no longer prevent compilation.
+
 ### Added
 
 - Project scaffold: configuration loading with precedence and env flattening

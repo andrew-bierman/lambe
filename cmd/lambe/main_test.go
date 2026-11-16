@@ -39,7 +39,7 @@ func TestExitCodeFor(t *testing.T) {
 }
 
 func TestRunDaemonWithoutConfig(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolatedConfigDir(t)
 	t.Chdir(t.TempDir())
 	if err := os.Mkdir(".beads", 0o750); err != nil {
 		t.Fatal(err)
@@ -51,7 +51,7 @@ func TestRunDaemonWithoutConfig(t *testing.T) {
 }
 
 func TestRunDaemonMissingWorkflow(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolatedConfigDir(t)
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, ".beads"), 0o750); err != nil {
 		t.Fatal(err)
@@ -74,7 +74,7 @@ func TestCommandsMissingTracker(t *testing.T) {
 		want string
 	}{{"run", runDaemon, "lambe init"}, {"status", runStatus, "bd init"}, {"mcp", runMCP, "bd init"}} {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			isolatedConfigDir(t)
 			t.Chdir(t.TempDir())
 			err := tt.run(nil)
 			if !errors.Is(err, os.ErrNotExist) || !strings.Contains(err.Error(), tt.want) {
@@ -88,8 +88,7 @@ func TestCommandsMissingTracker(t *testing.T) {
 }
 
 func TestInitNonInteractive(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", home)
+	home := isolatedConfigDir(t)
 	project := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(project, ".beads"), 0o750); err != nil {
 		t.Fatal(err)
@@ -142,8 +141,7 @@ func TestInitNonInteractive(t *testing.T) {
 }
 
 func TestInitDetectsParentTracker(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", home)
+	home := isolatedConfigDir(t)
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".beads"), 0o750); err != nil {
 		t.Fatal(err)
@@ -171,8 +169,7 @@ func TestInitDetectsParentTracker(t *testing.T) {
 }
 
 func TestInitNonInteractiveWithoutTracker(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", home)
+	home := isolatedConfigDir(t)
 	project := t.TempDir()
 	t.Chdir(project)
 
@@ -196,6 +193,9 @@ func TestDaemonOptionsGateClosesOwnClaim(t *testing.T) {
 	if os.Getenv("LAMBE_TEST_BD") != "1" {
 		t.Skip("set LAMBE_TEST_BD=1 for real tracker integration")
 	}
+	isolatedConfigDir(t)
+	t.Setenv("LAMBE_STATE_DIR", t.TempDir())
+
 	dir := t.TempDir()
 	cmd := exec.Command("bd", "init", "--prefix", "smoke", "--non-interactive")
 	cmd.Dir = dir
@@ -243,4 +243,22 @@ func TestDaemonOptionsGateClosesOwnClaim(t *testing.T) {
 	if err := local.Release(ctx, issue.ID); !errors.Is(err, tracker.ErrNotOwner) {
 		t.Fatalf("closed issue has no claim to release: %v", err)
 	}
+}
+
+// isolatedConfigDir keeps platform-specific defaults inside the test's temporary home.
+func isolatedConfigDir(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("APPDATA", home)
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(home, dir)
+	if err != nil || !filepath.IsLocal(rel) {
+		t.Fatalf("user config directory %q escapes isolated home %q", dir, home)
+	}
+	return dir
 }
