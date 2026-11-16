@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Allow a separate `workspace.root` so trial and production instances can keep their coding directories isolated.
+
 - Bare CLI commands load the configuration written by init and share the configured tracker’s live-view namespace.
 
 - Show live supervisor phases and agent output with `lambe tui` and `lambe logs`, and use the current Rex status protocol and CLI.

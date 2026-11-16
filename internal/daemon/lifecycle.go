@@ -322,7 +322,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 		if filtered.Labels == nil {
 			filtered.Labels = MetadataLabelSource{Tracker: primary}
 		}
-		spaces := symphony.NewWorkspaceManager(filepath.Join(d.opts.StateDir, "workspaces"), d.log)
+		workspaceRoot := filepath.Join(d.opts.StateDir, "workspaces")
+		if d.opts.Config != nil && d.opts.Config.WorkspaceRoot != "" {
+			workspaceRoot = d.opts.Config.WorkspaceRoot
+		}
+		spaces := symphony.NewWorkspaceManager(workspaceRoot, d.log)
 		l := symphony.NewLoop(filtered, loader, d.asm.Runner, d.asm.Gates, spaces, d.log)
 		view := newLiveView(LivePath(d.opts.StateDir, d.opts.Config), func(err error) { d.log.Warn("live view update failed", "error", err) })
 		view.registry = d.asm.Registry

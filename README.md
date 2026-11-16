@@ -152,6 +152,17 @@ claiming work. Backends advertising `session/resume` reopen without replaying ol
 only when Lambe can supply the full task prompt, with a diagnostic. Lambe records the actual
 backend thread before prompting. Pi reopens its saved workspace session.
 
+To keep coding workspaces separate from application state, configure a root
+before starting work:
+
+```yaml
+workspace:
+  root: /absolute/path/to/your/code/lambe-workspaces
+```
+
+Relative roots resolve from the configuration file’s directory.
+`LAMBE_WORKSPACE_ROOT` overrides the file setting.
+
 ## Watching agent work
 
 Keep `lambe run` running, then open another terminal:

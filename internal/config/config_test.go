@@ -254,3 +254,22 @@ acp:
 		t.Fatalf("NUL argv was not rejected at configuration loading: %v", err)
 	}
 }
+
+func TestWorkspaceRootResolvesRelativeToConfigurationAndHonorsEnvironment(t *testing.T) {
+	path := writeTemp(t, "workspace:\n  root: isolated-workspaces\n")
+	cfg, err := Load(Options{File: path, Env: []string{}})
+	if err != nil || cfg.WorkspaceRoot != filepath.Join(filepath.Dir(path), "isolated-workspaces") {
+		t.Fatalf("wrong workspace root: %+v %v", cfg, err)
+	}
+	override := t.TempDir()
+	cfg, err = Load(Options{File: path, Env: []string{"LAMBE_WORKSPACE_ROOT=" + override}})
+	if err != nil || cfg.WorkspaceRoot != override {
+		t.Fatalf("workspace environment override lost: %+v %v", cfg, err)
+	}
+}
+
+func TestWorkspaceRootRejectsNUL(t *testing.T) {
+	if _, err := Load(Options{Env: []string{"LAMBE_WORKSPACE_ROOT=bad\x00path"}}); err == nil {
+		t.Fatal("invalid workspace path accepted")
+	}
+}

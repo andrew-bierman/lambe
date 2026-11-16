@@ -53,6 +53,9 @@ type ACP struct {
 
 // Config is the fully resolved daemon configuration.
 type Config struct {
+	// WorkspaceRoot overrides the per-issue workspace directory; empty uses the state directory.
+	WorkspaceRoot string
+
 	Supervisor Supervisor
 	// Harness selects "pi", "codex", or a configurable "acp" backend.
 	Harness  string
@@ -132,7 +135,8 @@ func Load(opts Options) (*Config, error) {
 			HeartbeatInterval:  k.Duration("supervisor.heartbeat_interval"),
 			HeartbeatTTLSecond: k.Int("supervisor.heartbeat_ttl_second"),
 		},
-		WorkflowPath: strings.TrimSpace(k.String("workflow_path")),
+		WorkflowPath:  strings.TrimSpace(k.String("workflow_path")),
+		WorkspaceRoot: strings.TrimSpace(k.String("workspace.root")),
 	}
 
 	if cfg.ACP.Agent == "" {
@@ -174,6 +178,20 @@ func Load(opts Options) (*Config, error) {
 		})
 	}
 
+	if cfg.WorkspaceRoot != "" {
+		if strings.IndexByte(cfg.WorkspaceRoot, 0) >= 0 {
+			return nil, fmt.Errorf("workspace.root must not contain NUL")
+		}
+		if !filepath.IsAbs(cfg.WorkspaceRoot) && opts.File != "" {
+			cfg.WorkspaceRoot = filepath.Join(filepath.Dir(opts.File), cfg.WorkspaceRoot)
+		}
+		absolute, err := filepath.Abs(cfg.WorkspaceRoot)
+		if err != nil {
+			return nil, err
+		}
+		cfg.WorkspaceRoot = absolute
+	}
+
 	if cfg.WorkflowPath == "" {
 		cfg.WorkflowPath = DefaultWorkflowPath(cfg.Trackers)
 	}
@@ -186,7 +204,8 @@ func Load(opts Options) (*Config, error) {
 
 func defaultsProvider() *confmap.Confmap {
 	return confmap.Provider(map[string]any{
-		"trackers": []any{map[string]any{"name": "local", "type": "repo", "path": "."}},
+		"workspace": map[string]any{"root": ""},
+		"trackers":  []any{map[string]any{"name": "local", "type": "repo", "path": "."}},
 		"supervisor": map[string]any{
 			"tick_seconds":         defaultTickSeconds,
 			"attempt_cap":          defaultAttemptCap,
