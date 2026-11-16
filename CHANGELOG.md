@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Show live supervisor phases and agent output with `lambe tui` and `lambe logs`, and use the current Rex status protocol and CLI.
 - Select and validate the npm Codex adapter’s Node runtime before claiming work.
 - Pin generated workflow paths, provide a native Beads starter with automatic triggering disabled during setup, and show upstream module versions in `lambe version`.
+- Re-arm recurring responsibilities after their recorded root closes, decode native Beads status arrays, and persist pour intent to prevent duplicate work after ambiguous failures.
 
 
 ### Fixed

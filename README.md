@@ -296,6 +296,18 @@ Later / exploring:
 - [ ] Gas-City interop
 - [ ] `ghx` caching proxy at multi-agent scale
 
+## Recurring responsibilities
+
+Recurring responsibilities are checked each tick. The materialization ledger
+keeps one recorded root active per formula and permits another cycle after
+that root closes and the refire interval expires. A corrupt ledger or a pour
+whose result is unknown stops that formula from issuing duplicates. Inspect
+the tracker before repairing `.beads/lambe-materialized.json`: stop the daemon,
+then either set that formula’s `root_id` to the root that was actually created
+and clear `pending` (keeping its valid `poured_at`), or delete only that formula’s
+entry after confirming no root was created. Preserve other entries, then restart.
+Restarting alone does not discard that safety record.
+
 ## License
 
 MIT. The OpenAI Symphony specification (Apache-2.0) is attributed in a

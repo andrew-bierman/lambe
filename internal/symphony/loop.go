@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -205,8 +206,8 @@ func TriggerFired(ctx context.Context, f Formula) (bool, error) {
 }
 
 // FormulaMaterializer materializes a formula's finite issues into the
-// tracker (bd cook followed by bd mol pour) so they enter the same two-read
-// dispatch as any other work.
+// tracker so they enter the same two-read
+// dispatch as any other work. Implementations own durable deduplication and re-arming.
 type FormulaMaterializer interface {
 	Materialize(ctx context.Context, f Formula) error
 }
@@ -239,6 +240,7 @@ const DefaultRefireInterval = 30 * time.Second
 
 // materializedEntry is one ledger record: the poured root mol and when.
 type materializedEntry struct {
+	Pending  bool   `json:"pending,omitempty"`
 	RootID   string `json:"root_id"`
 	PouredAt string `json:"poured_at"`
 }
@@ -247,47 +249,108 @@ func (m *BeadsMaterializer) ledgerPath() string {
 	return filepath.Join(m.Dir, ".beads", "lambe-materialized.json")
 }
 
-func (m *BeadsMaterializer) loadLedger() map[string]materializedEntry {
+func (m *BeadsMaterializer) loadLedger() (map[string]materializedEntry, error) {
 	out := map[string]materializedEntry{}
-	raw, err := os.ReadFile(m.ledgerPath()) // #nosec G304 -- path is derived from the configured tracker dir
-	if err != nil {
-		return out
+	raw, err := os.ReadFile(m.ledgerPath()) // #nosec G304 -- operator configured tracker state
+	if errors.Is(err, os.ErrNotExist) {
+		return out, nil
 	}
-	_ = json.Unmarshal(raw, &out)
-	return out
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		return nil, errors.New("materialization ledger is null")
+	}
+	return out, nil
 }
 
-func (m *BeadsMaterializer) saveLedger(entries map[string]materializedEntry) {
+func (m *BeadsMaterializer) saveLedger(entries map[string]materializedEntry) error {
 	raw, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
-		return
+		return err
 	}
 	path := m.ledgerPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
 	}
-	_ = os.WriteFile(path, raw, 0o600) // #nosec G304 -- operator-owned tracker dir
+	file, err := os.CreateTemp(filepath.Dir(path), ".materialized-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(file.Name()) }()
+	if _, err = file.Write(raw); err == nil {
+		err = file.Sync()
+	}
+	closeErr := file.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if err := os.Rename(file.Name(), path); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	return dir.Sync()
 }
 
 // pouredRootOpen reports the ledger's root issue id for name and whether it
 // is still live (not closed). A tracker read failure counts as live: a
 // flaky read must never cause a duplicate pour, and retries converge.
-func (m *BeadsMaterializer) pouredRootOpen(ctx context.Context, name string) (string, bool) {
-	entry, ok := m.loadLedger()[name]
-	if !ok || entry.RootID == "" {
-		return "", false
+func (m *BeadsMaterializer) pouredRootOpen(ctx context.Context, entry materializedEntry) (string, bool, error) {
+	if entry.RootID == "" {
+		return "", false, nil
 	}
-	res, err := m.run(ctx, "show", entry.RootID, "--json")
+	transport := tracker.NewShellTransport(m.Bin, m.Dir, "")
+	result, err := transport.Show(ctx, entry.RootID)
 	if err != nil {
-		return entry.RootID, true
+		var exit *tracker.ExitError
+		if errors.As(err, &exit) {
+			for _, out := range []string{exit.Stdout, exit.Stderr} {
+				var failure struct {
+					Error  string `json:"error"`
+					Schema int    `json:"schema_version"`
+				}
+				if json.Unmarshal([]byte(out), &failure) == nil && failure.Schema == 1 && failure.Error == "no issues found matching the provided IDs" {
+					return entry.RootID, false, nil
+				}
+			}
+		}
+		return entry.RootID, true, fmt.Errorf("read materialized root %s: %w", entry.RootID, err)
 	}
+	res := string(result.Data)
 	var payload struct {
 		Status string `json:"status"`
 	}
-	if json.Unmarshal([]byte(res), &payload) != nil {
-		return entry.RootID, true
+	if strings.HasPrefix(strings.TrimSpace(res), "[") {
+		var rows []struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal([]byte(res), &rows); err != nil {
+			return entry.RootID, true, err
+		}
+		if len(rows) == 0 {
+			return entry.RootID, false, nil
+		}
+		if len(rows) != 1 {
+			return entry.RootID, true, fmt.Errorf("materialized root lookup returned %d rows", len(rows))
+		}
+		payload.Status = rows[0].Status
+	} else if err := json.Unmarshal([]byte(res), &payload); err != nil {
+		return entry.RootID, true, err
 	}
-	return entry.RootID, payload.Status != "closed"
+	if payload.Status == "" {
+		return entry.RootID, true, errors.New("materialized root lookup omitted status")
+	}
+	return entry.RootID, payload.Status != "closed", nil
 }
 
 // run executes the bd CLI in the tracker directory. The first argv element
@@ -308,11 +371,7 @@ func (m *BeadsMaterializer) refireInterval() time.Duration {
 // withinRefireWindow reports whether the formula's last pour happened
 // less than the re-fire interval ago, so a root that just closed cannot
 // trigger an immediate re-pour.
-func (m *BeadsMaterializer) withinRefireWindow(name string) bool {
-	entry, ok := m.loadLedger()[name]
-	if !ok {
-		return false
-	}
+func (m *BeadsMaterializer) withinRefireWindow(entry materializedEntry) bool {
 	pouredAt, err := time.Parse(time.RFC3339, entry.PouredAt)
 	if err != nil {
 		return false
@@ -326,20 +385,81 @@ func (m *BeadsMaterializer) withinRefireWindow(name string) bool {
 // prints "Root issue: <id>" for the poured mol root; that id anchors the
 // dedup ledger.
 func (m *BeadsMaterializer) Materialize(ctx context.Context, f Formula) error {
+	deadline, limited := ctx.Deadline()
+	minimumPourBudget := time.Until(deadline) / 2
+	enoughTime := func() bool { return !limited || time.Until(deadline) >= minimumPourBudget }
 	if m.DryRun {
 		// Rehearsal pass: surface the pour command without side effects.
-		_, _ = m.run(ctx, "mol", "pour", f.Name, "--dry-run")
-		return nil
+		_, err := m.run(ctx, "mol", "pour", f.Name, "--dry-run")
+		return err
 	}
-	if rootID, live := m.pouredRootOpen(ctx, f.Name); live {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	lock, err := m.materializationLock()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
+
+	entries, err := m.loadLedger()
+	if err != nil {
+		return fmt.Errorf("read materialization ledger: %w", err)
+	}
+	entry, exists := entries[f.Name]
+	if exists {
+		if !entry.Pending && entry.RootID == "" {
+			return fmt.Errorf("invalid materialization root for %s", f.Name)
+		}
+		if _, err := time.Parse(time.RFC3339, entry.PouredAt); err != nil {
+			return fmt.Errorf("invalid materialization timestamp for %s: %w", f.Name, err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if entry.Pending {
+		return fmt.Errorf("formula %s has an unresolved pour; inspect tracker and reconcile %s before retrying", f.Name, m.ledgerPath())
+	}
+	if rootID, live, err := m.pouredRootOpen(ctx, entry); err != nil {
+		return err
+	} else if live {
 		m.Log.Info("formula already materialized; root mol still open", "formula", f.Name)
 		return nil
-	} else if rootID != "" && m.withinRefireWindow(f.Name) {
+	} else if rootID != "" && m.withinRefireWindow(entry) {
 		m.Log.Info("formula root closed but the last pour is inside the refire interval; skipping this cycle", "formula", f.Name, "root", rootID)
 		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !enoughTime() {
+		return errors.New("insufficient control time to start a pour; retrying without side effects")
+	}
+	entries[f.Name] = materializedEntry{Pending: true, PouredAt: time.Now().UTC().Format(time.RFC3339)}
+	if err := m.saveLedger(entries); err != nil {
+		return fmt.Errorf("record pour intent: %w", err)
+	}
+	if !enoughTime() {
+		if exists {
+			entries[f.Name] = entry
+		} else {
+			delete(entries, f.Name)
+		}
+		return errors.Join(errors.New("insufficient control time after recording pour intent"), m.saveLedger(entries))
+	}
 	out, err := m.run(ctx, "mol", "pour", f.Name)
 	if err != nil {
+		if errors.Is(err, proc.ErrCommandNotStarted) {
+			if exists {
+				entries[f.Name] = entry
+			} else {
+				delete(entries, f.Name)
+			}
+			if saveErr := m.saveLedger(entries); saveErr != nil {
+				return errors.Join(err, fmt.Errorf("restore unstarted pour intent: %w", saveErr))
+			}
+		}
 		return fmt.Errorf("bd mol pour %s: %w: %s", f.Name, err, out)
 	}
 	for _, line := range strings.Split(out, "\n") {
@@ -347,13 +467,18 @@ func (m *BeadsMaterializer) Materialize(ctx context.Context, f Formula) error {
 		if !ok {
 			continue
 		}
-		rootID := strings.Trim(rest, "`")
-		entries := m.loadLedger()
+		rootID := strings.Trim(strings.TrimSpace(rest), "`")
+		if rootID == "" {
+			continue
+		}
 		entries[f.Name] = materializedEntry{RootID: rootID, PouredAt: time.Now().UTC().Format(time.RFC3339)}
-		m.saveLedger(entries)
-		break
+		if err := m.saveLedger(entries); err != nil {
+			return err
+		}
+		m.Log.Info("formula materialized", "formula", f.Name, "root", rootID)
+		return nil
 	}
-	return nil
+	return fmt.Errorf("pour returned no root issue; inspect tracker and reconcile %s", m.ledgerPath())
 }
 
 // session is one supervised issue: the pinned workflow revision, the
@@ -410,10 +535,6 @@ type Loop struct {
 	sessions map[string]*session
 	retries  *Queue
 	active   map[string]*worker
-	// materialized records formula names already materialized by this
-	// process: the durable guard is the materializer's ledger, this map is
-	// the fast path so a fired trigger pours at most once per daemon run.
-	materialized map[string]bool
 }
 
 // NewLoop assembles the loop with spec defaults: dispatch reads the ready
@@ -437,7 +558,6 @@ func NewLoop(tr tracker.Tracker, loader *Loader, runner AgentRunner, gates GateE
 		active:            map[string]*worker{},
 		recovery:          map[string]checkpoint{},
 		retries:           &Queue{},
-		materialized:      map[string]bool{},
 	}
 }
 
@@ -478,22 +598,10 @@ func (l *Loop) runFormulas(ctx context.Context) {
 		return
 	}
 	for _, f := range l.Formulas {
-		// One active mol per formula: pours are not deduped by bd (each
-		// pour materializes a fresh issue set — issue #6), so a firing
-		// trigger would otherwise re-pour on every tick. The gate or a
-		// human closes the mol's issues; when that happens the ledger
-		// clears and the next firing materializes a fresh cycle.
-		if l.materialized[f.Name] {
-			l.Log.Debug("formula already materialized", "formula", f.Name)
-			continue
-		}
+		// The materializer owns durable deduplication and re-arming.
 		if err := l.runFormula(ctx, f); err != nil {
 			l.Log.Error("formula run failed", "formula", f.Name, "error", err)
 			continue
-		}
-		if fired := l.formulaFired(ctx, f); fired {
-			l.materialized[f.Name] = true
-			l.Log.Info("formula materialized", "formula", f.Name)
 		}
 	}
 }
@@ -508,36 +616,23 @@ func (l *Loop) controlContext(ctx context.Context) (context.Context, context.Can
 	return context.WithTimeout(ctx, bound)
 }
 
-// formulaFired reports whether f's trigger currently fires. The caller
-// dedupes fired formulas via l.materialized (issue #6); unfired triggers
-// stay unmarked so a later firing can still materialize.
-func (l *Loop) formulaFired(ctx context.Context, f Formula) bool {
-	ctx, cancel := l.controlContext(ctx)
-	defer cancel()
-	fired, err := TriggerFired(ctx, f)
-	if err != nil {
-		l.Log.Warn("formula trigger errored", "formula", f.Name, "error", err)
-		return false
-	}
-	return fired
-}
-
 // runFormula evaluates one fired responsibility under the loop's control
 // timeout and materializes its finite issues into the dispatch front.
 func (l *Loop) runFormula(ctx context.Context, f Formula) error {
-	ctx, cancel := l.controlContext(ctx)
-	defer cancel()
-	fired, err := TriggerFired(ctx, f)
+	triggerCtx, cancel := l.controlContext(ctx)
+	fired, err := TriggerFired(triggerCtx, f)
+	cancel()
 	if err != nil {
 		return fmt.Errorf("formula trigger errored: %w", err)
 	}
 	if !fired {
 		return nil
 	}
-	if err := l.Materializer.Materialize(ctx, f); err != nil {
+	materializeCtx, cancel := l.controlContext(ctx)
+	defer cancel()
+	if err := l.Materializer.Materialize(materializeCtx, f); err != nil {
 		return fmt.Errorf("formula materialization failed: %w", err)
 	}
-	l.Log.Info("formula materialized", "formula", f.Name)
 	return nil
 }
 
@@ -958,4 +1053,20 @@ func (l *Loop) closeRunnerSession(ctx context.Context, issueID string) {
 	if closer, ok := l.Runner.(SessionCloser); ok {
 		closer.CloseSession(ctx, issueID)
 	}
+}
+
+func (m *BeadsMaterializer) materializationLock() (*os.File, error) {
+	path := m.ledgerPath() + ".lock"
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) // #nosec G304 -- configured private materialization ledger lock
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("another process is materializing responsibilities: %w", err)
+	}
+	return file, nil
 }
