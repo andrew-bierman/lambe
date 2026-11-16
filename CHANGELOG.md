@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Resolve mise-managed Codex adapters before selecting and checking their Node runtime.
+
 - Complete gate bookkeeping when Beads omits closed records from default reads, and reject changed workspace roots before restoring saved work.
 
 - Allow a separate `workspace.root` so trial and production instances can keep their coding directories isolated.

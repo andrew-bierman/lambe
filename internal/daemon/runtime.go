@@ -26,6 +26,18 @@ func launchCommand(cfg *config.Config) ([]string, error) {
 	if argv[0] != "codex-acp" || len(cfg.ACP.Command) > 0 {
 		return argv, nil
 	}
+	if resolved, err := filepath.EvalSymlinks(bin); err == nil && filepath.Base(resolved) == "mise" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, resolved, "which", "codex-acp").Output() // #nosec G204 -- invoke the selected installed shim's manager.
+		if err != nil {
+			return nil, fmt.Errorf("resolve codex mise shim: %w", err)
+		}
+		bin = strings.TrimSpace(string(out))
+		if !filepath.IsAbs(bin) || filepath.Clean(bin) == filepath.Clean(resolved) {
+			return nil, fmt.Errorf("mise returned an invalid codex adapter path %q", bin)
+		}
+	}
 	file, err := os.Open(bin) // #nosec G304 -- resolved configured executable
 	if err != nil {
 		return nil, err

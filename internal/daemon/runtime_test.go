@@ -45,6 +45,35 @@ func TestNativeCodexAdapterDoesNotRequireNode(t *testing.T) {
 	}
 }
 
+func TestCodexResolvesMiseShimBeforeSelectingNode(t *testing.T) {
+	dir := t.TempDir()
+	shim := filepath.Join(dir, "shims")
+	modern := filepath.Join(dir, "modern")
+	for _, path := range []string{shim, modern} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manager := filepath.Join(dir, "mise")
+	for path, body := range map[string]string{
+		manager:                            "#!/bin/sh\nprintf '%s\\n' '" + filepath.Join(modern, "codex-acp") + "'\n",
+		filepath.Join(modern, "node"):      "#!/bin/sh\nexit 0\n",
+		filepath.Join(modern, "codex-acp"): "#!/usr/bin/env node\n",
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o700); err != nil { // #nosec G306 -- private executable test fixture
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(manager, filepath.Join(shim, "codex-acp")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", shim+string(os.PathListSeparator)+modern)
+	argv, err := launchCommand(&config.Config{Harness: "codex"})
+	if err != nil || len(argv) != 2 || argv[0] != filepath.Join(modern, "node") || argv[1] != filepath.Join(modern, "codex-acp") {
+		t.Fatalf("shim hid the adapter runtime: %v %v", argv, err)
+	}
+}
+
 func TestInstalledCodexAdapterRuntimePreflight(t *testing.T) {
 	if os.Getenv("LAMBE_TEST_CODEX") != "1" {
 		t.Skip("set LAMBE_TEST_CODEX=1 to check the installed adapter")
