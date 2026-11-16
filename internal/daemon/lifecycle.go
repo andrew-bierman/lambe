@@ -322,8 +322,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 			d.log.Warn("formula loading failed; running without responsibilities", "dir", formulaDir, "error", err)
 		} else {
 			l.Formulas = formulas
+			bdBin := d.opts.BdBin
+			if bdBin == "" {
+				if resolved, err := tracker.ResolveBdBin(""); err == nil {
+					bdBin = resolved
+				}
+			}
 			l.Materializer = &symphony.BeadsMaterializer{
-				Bin: d.opts.BdBin,
+				Bin: bdBin,
 				Dir: primaryDir,
 				Log: d.log,
 			}
@@ -459,10 +465,13 @@ func (d *Daemon) cycle(ctx context.Context, prefix string, immediate bool) {
 			"category", ErrorCategory(err), "error", err)
 	}
 	if d.loop != nil {
+		d.log.Debug(prefix + ": loop tick starting")
 		if err := d.loop.Tick(ctx); err != nil {
 			d.log.Warn(prefix+": tick failed, continuing",
 				"category", ErrorCategory(err), "error", err)
 		}
+	} else {
+		d.log.Warn(prefix + ": loop is nil, skipping tick")
 	}
 	hasWrites := immediate
 	if !immediate {

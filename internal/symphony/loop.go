@@ -201,20 +201,18 @@ type BeadsMaterializer struct {
 	Log    *slog.Logger
 }
 
-// Materialize implements FormulaMaterializer.
+// Materialize implements FormulaMaterializer. The formula name doubles
+// as the proto id for bd mol pour, which resolves the formula file and
+// creates the step issues in one command.
 func (m *BeadsMaterializer) Materialize(ctx context.Context, f Formula) error {
-	cook := []string{"cook", f.Name}
-	pour := []string{"mol", "pour"}
+	args := []string{"mol", "pour", f.Name}
 	if m.DryRun {
-		cook = append(cook, "--dry-run")
-		pour = append(pour, "--dry-run")
+		args = append(args, "--dry-run")
 	}
-	for _, args := range [][]string{cook, pour} {
-		cmd := exec.CommandContext(ctx, m.Bin, args...) // #nosec G204 -- fixed argv over a configured binary
-		cmd.Dir = m.Dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("bd %s %s: %w: %s", args[0], f.Name, err, string(out))
-		}
+	cmd := exec.CommandContext(ctx, m.Bin, args...) // #nosec G204 -- fixed argv over a configured binary
+	cmd.Dir = m.Dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("bd mol pour %s: %w: %s", f.Name, err, string(out))
 	}
 	return nil
 }
@@ -305,15 +303,21 @@ func (l *Loop) Tick(ctx context.Context) error {
 // runFormulas evaluates every configured trigger and materializes the
 // fired ones so their finite issues flow into this tick's dispatch read.
 func (l *Loop) runFormulas(ctx context.Context) {
+	if len(l.Formulas) == 0 {
+		l.Log.Debug("no formulas configured")
+		return
+	}
+	if l.Materializer == nil {
+		l.Log.Warn("formulas configured but materializer is nil")
+		return
+	}
 	for _, f := range l.Formulas {
-		if l.Materializer == nil {
-			continue
-		}
 		fired, err := TriggerFired(ctx, f)
 		if err != nil {
 			l.Log.Warn("formula trigger errored", "formula", f.Name, "error", err)
 			continue
 		}
+		l.Log.Debug("formula trigger evaluated", "formula", f.Name, "fired", fired)
 		if !fired {
 			continue
 		}
