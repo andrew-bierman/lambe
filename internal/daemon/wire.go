@@ -108,11 +108,9 @@ func newHarnessRunner(name string, cfg *config.Config) *harnessRunner {
 // and remembers the last assistant message so a settled turn can hand the
 // agent's own summary to the gate.
 type supervisedDriver struct {
-	drv  harness.Driver
-	done chan struct{} // closed when the drain goroutine exits
-	// msgSignal wakes awaitAssistantText when the drain records an
-	// assistant message.
-	msgSignal chan struct{}
+	drv      harness.Driver
+	done     chan struct{} // closed when the drain goroutine exits
+	barriers chan chan struct{}
 
 	mu            sync.Mutex
 	lastAssistant string
@@ -126,7 +124,7 @@ func (w agentStderr) Write(p []byte) (int, error) {
 }
 
 func newSupervisedDriver(drv harness.Driver) *supervisedDriver {
-	return &supervisedDriver{drv: drv, done: make(chan struct{}), msgSignal: make(chan struct{}, 1)}
+	return &supervisedDriver{drv: drv, done: make(chan struct{}), barriers: make(chan chan struct{})}
 }
 
 // drain consumes the driver's event stream until Close closes it, logging
@@ -134,18 +132,31 @@ func newSupervisedDriver(drv harness.Driver) *supervisedDriver {
 func (sd *supervisedDriver) drain(log *slog.Logger) {
 	defer close(sd.done)
 	log = log.With("component", "harness")
-	for ev := range sd.drv.Events() {
-		if msg, ok := ev.(harness.MessageCompletedEvent); ok && msg.Role == "assistant" && msg.Text != "" {
-			sd.mu.Lock()
-			sd.lastAssistant = msg.Text
-			sd.mu.Unlock()
-			select {
-			case sd.msgSignal <- struct{}{}:
-			default:
+	events := sd.drv.Events()
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				return
 			}
+			sd.recordEvent(ev, log)
+		case barrier := <-sd.barriers:
+			// Run has returned; consume its queued events before acknowledging.
+			for len(events) > 0 {
+				sd.recordEvent(<-events, log)
+			}
+			close(barrier)
 		}
-		log.Debug("agent event", "type", fmt.Sprintf("%T", ev))
 	}
+}
+
+func (sd *supervisedDriver) recordEvent(ev harness.Event, log *slog.Logger) {
+	if msg, ok := ev.(harness.MessageCompletedEvent); ok && msg.Role == "assistant" && msg.Text != "" {
+		sd.mu.Lock()
+		sd.lastAssistant = msg.Text
+		sd.mu.Unlock()
+	}
+	log.Debug("agent event", "type", fmt.Sprintf("%T", ev))
 }
 
 // resetAssistant forgets the previous turn's message so a settled turn
@@ -156,28 +167,25 @@ func (sd *supervisedDriver) resetAssistant() {
 	sd.lastAssistant = ""
 }
 
-// awaitAssistantText waits up to bound for the drain goroutine to record
-// this turn's final assistant message. Settled turns almost always have
-// one queued in the still-draining event stream; the bound only costs
-// latency when the agent settled without ever speaking.
+// awaitAssistantText synchronizes with the event reader after Run returns,
+// so the gate sees the final assistant message rather than an earlier one.
 func (sd *supervisedDriver) awaitAssistantText(bound time.Duration) string {
-	deadline := time.Now().Add(bound)
-	for {
-		sd.mu.Lock()
-		text := sd.lastAssistant
-		sd.mu.Unlock()
-		if text != "" {
-			return text
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+	barrier := make(chan struct{})
+	select {
+	case sd.barriers <- barrier:
+		select {
+		case <-barrier:
+		case <-sd.done:
+		case <-timer.C:
 		}
-		if remaining := time.Until(deadline); remaining > 0 {
-			select {
-			case <-sd.msgSignal:
-			case <-time.After(min(remaining, 50*time.Millisecond)):
-			}
-			continue
-		}
-		return ""
+	case <-sd.done:
+	case <-timer.C:
 	}
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+	return sd.lastAssistant
 }
 
 // closeDriver closes one driver under a bounded context so a wedged agent
