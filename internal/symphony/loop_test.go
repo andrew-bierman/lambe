@@ -415,7 +415,11 @@ func TestLoaderWatchAppliesValidEdit(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	deadline := time.After(3 * time.Second)
 	for loader.Current().PromptBody != "second" {
-		if err := os.WriteFile(path, []byte("---\n---\nsecond"), 0o600); err != nil {
+		edit := filepath.Join(dir, "WORKFLOW.next")
+		if err := os.WriteFile(edit, []byte("---\n---\nsecond"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(edit, path); err != nil {
 			t.Fatal(err)
 		}
 		select {
