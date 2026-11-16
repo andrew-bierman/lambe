@@ -111,8 +111,7 @@ workflow_path: /tmp/elsewhere/WORKFLOW.md
 }
 
 func TestDefaultWorkflowPathPrecedence(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", home)
+	home := isolatedConfigDir(t)
 	t.Chdir(t.TempDir())
 	trackerDir := t.TempDir()
 	trackers := []Tracker{{Name: "local", Type: "repo", Path: trackerDir}}
@@ -159,8 +158,7 @@ func TestDefaultWorkflowPathPrecedence(t *testing.T) {
 }
 
 func TestDefaultPathUnderUserConfigDir(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", home)
+	home := isolatedConfigDir(t)
 	want := filepath.Join(home, "lambe", "config.yaml")
 	if got := DefaultPath(); got != want {
 		t.Errorf("DefaultPath: got %q, want %q", got, want)
@@ -194,4 +192,22 @@ trackers:
 	if !errors.As(err, new(*errorCollection)) && !strings.Contains(err.Error(), "; ") {
 		t.Errorf("error should aggregate all problems: %v", err)
 	}
+}
+
+// isolatedConfigDir keeps platform-specific defaults inside the test's temporary home.
+func isolatedConfigDir(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("APPDATA", home)
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(home, dir)
+	if err != nil || !filepath.IsLocal(rel) {
+		t.Fatalf("user config directory %q escapes isolated home %q", dir, home)
+	}
+	return dir
 }
