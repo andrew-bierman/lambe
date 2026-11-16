@@ -38,6 +38,9 @@ func TestDefaultsApplyWithNoOverrides(t *testing.T) {
 	if cfg.Supervisor.HeartbeatInterval != 150*time.Second {
 		t.Errorf("heartbeat_interval: got %s, want 150s", cfg.Supervisor.HeartbeatInterval)
 	}
+	if len(cfg.Trackers) != 1 || cfg.Trackers[0] != (Tracker{Name: "local", Type: "repo", Path: "."}) {
+		t.Errorf("default tracker: got %+v, want current directory", cfg.Trackers)
+	}
 }
 
 func TestPrecedenceFileEnvFlag(t *testing.T) {

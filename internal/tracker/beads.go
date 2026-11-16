@@ -191,6 +191,9 @@ func (b *Beads) Release(ctx context.Context, id string) error {
 		if strings.Contains(exitText(err), "assignee mismatch") {
 			return fmt.Errorf("release %s: %w: held by another actor: %w", id, ErrNotOwner, err)
 		}
+		if strings.Contains(exitText(err), "cannot unclaim closed issue") {
+			return fmt.Errorf("release %s: %w: issue is closed: %w", id, ErrNotOwner, err)
+		}
 		return fmt.Errorf("release %s: %w", id, err)
 	}
 	return nil
