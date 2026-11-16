@@ -1,8 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/andrew-bierman/lambe/internal/daemon"
+	"github.com/andrew-bierman/lambe/internal/symphony"
 )
 
 func TestTerminalTextCannotEmitEscapeSequences(t *testing.T) {
@@ -22,5 +29,63 @@ func TestFollowTailUsesByteOffsetAfterWrap(t *testing.T) {
 	}
 	if got := tailDelta(tail, -1); got != tail {
 		t.Fatal("new daemon lost its initial output")
+	}
+}
+
+func TestBareLiveViewUsesInitializedTrackerNamespace(t *testing.T) {
+	isolatedConfigDir(t)
+	state := t.TempDir()
+	t.Setenv("LAMBE_STATE_DIR", state)
+	project := t.TempDir()
+	t.Chdir(project)
+	if err := os.Mkdir(".beads", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runInit([]string{"-non-interactive"}, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := parseCommon(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := daemon.LivePath(state, cfg)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(daemon.LiveSnapshot{Runs: []daemon.LiveRun{{Progress: symphony.Progress{IssueID: "initialized-tracker-proof"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+	out.Reset()
+	if err := runLive([]string{"-json"}, false, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "initialized-tracker-proof") {
+		t.Fatal("live view selected a different tracker namespace")
+	}
+}
+
+func TestLiveViewCanWaitForDaemonStartupAndQuit(t *testing.T) {
+	isolatedConfigDir(t)
+	t.Setenv("LAMBE_STATE_DIR", t.TempDir())
+	t.Chdir(t.TempDir())
+	if err := os.Mkdir(".beads", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runInit([]string{"-non-interactive"}, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := runLive(nil, true, strings.NewReader("q\n"), &out); err != nil {
+		t.Fatalf("view exited before daemon startup: %v", err)
+	}
+	if !strings.Contains(out.String(), "Waiting for Lambe output") {
+		t.Fatal("startup wait was invisible")
 	}
 }

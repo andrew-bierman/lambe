@@ -41,7 +41,8 @@ not start a second agent session. Queue a task with `bd create` after configurin
 its completion gate, and inspect it with `lambe status`.
 
 `lambe version` reports the installed Go module version for upstream installs,
-even when no release linker flags were supplied.
+even when no release linker flags were supplied. Bare commands read the default
+configuration written by init; `-config FILE` selects another one.
 
 ## Quickstart
 

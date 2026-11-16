@@ -368,3 +368,21 @@ func TestGatePreflightRejectsEmptyTrackerConfiguration(t *testing.T) {
 		t.Fatal("missing tracker accepted")
 	}
 }
+
+func TestBareCommandsLoadInitializedConfigurationFromAnotherDirectory(t *testing.T) {
+	home := isolatedConfigDir(t)
+	project := t.TempDir()
+	if err := os.Mkdir(filepath.Join(project, ".beads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(project)
+	var out bytes.Buffer
+	if err := runInit([]string{"-non-interactive", "-harness", "codex"}, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+	cfg, path, err := parseCommon(nil)
+	if err != nil || path != filepath.Join(home, "lambe", "config.yaml") || cfg.Harness != "codex" || cfg.Trackers[0].Path != project || cfg.WorkflowPath != filepath.Join(project, "WORKFLOW.md") {
+		t.Fatalf("bare command ignored initialized setup: path=%q cfg=%+v err=%v", path, cfg, err)
+	}
+}

@@ -41,10 +41,14 @@ func runLive(args []string, tui bool, in io.Reader, out io.Writer) error {
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %v", fs.Args())
 	}
-	if err := requireConfig(*configFile); err != nil {
+	configPath, err := cliConfigPath(*configFile)
+	if err != nil {
 		return err
 	}
-	cfg, err := config.Load(config.Options{File: *configFile})
+	if err := requireConfig(configPath); err != nil {
+		return err
+	}
+	cfg, err := config.Load(config.Options{File: configPath})
 	if err != nil {
 		return err
 	}
@@ -147,7 +151,13 @@ func runLive(args []string, tui bool, in io.Reader, out io.Writer) error {
 		return nil
 	}
 	if err := render(); err != nil {
-		return err
+		if !*asJSON && (tui || *follow) && errors.Is(err, os.ErrNotExist) {
+			if _, writeErr := fmt.Fprintln(out, "Waiting for Lambe output; start lambe run with the same configuration."); writeErr != nil {
+				return writeErr
+			}
+		} else {
+			return err
+		}
 	}
 	if *asJSON || (!tui && !*follow) {
 		return nil

@@ -89,11 +89,29 @@ func parseCommon(args []string) (*config.Config, string, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, "", err
 	}
-	cfg, err := config.Load(config.Options{File: *configFile})
+	path, err := cliConfigPath(*configFile)
+	if err != nil {
+		return nil, "", err
+	}
+	cfg, err := config.Load(config.Options{File: path})
 	if err != nil {
 		return nil, "", fmt.Errorf("configuration invalid: %w", err)
 	}
-	return cfg, *configFile, nil
+	return cfg, path, nil
+}
+
+func cliConfigPath(explicit string) (string, error) {
+	if explicit != "" {
+		return explicit, nil
+	}
+	path := config.DefaultPath()
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read default configuration %s: %w", path, err)
+	}
+	return path, nil
 }
 
 // runDaemon assembles and runs the daemon until a terminating signal.
