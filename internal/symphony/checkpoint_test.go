@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -347,5 +348,44 @@ func TestUnavailableConversationRestartsFullPromptWithinAttempt(t *testing.T) {
 	}
 	if len(calls) != 3 || calls[1].Turn != 2 || calls[2].Turn != 1 || calls[2].Attempt != calls[0].Attempt || calls[2].ThreadID != "old" || calls[2].Prompt != calls[0].Prompt {
 		t.Fatalf("lost full-prompt recovery: %+v", calls)
+	}
+}
+
+func TestChangedWorkspaceRootRefusesRecoveryAndPreservesSavedWork(t *testing.T) {
+	f := newFixture(t, "body")
+	l := f.loop.Loop
+	l.CheckpointDir = filepath.Join(f.dir, "sessions")
+	workspace, err := l.Spaces.Ensure(t.Context(), "i-1", l.Loader.Current().Hooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	precious := filepath.Join(workspace.Dir, "unfinished.txt")
+	if err := os.WriteFile(precious, []byte("uncommitted work"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	issue, _ := f.tr.get("i-1")
+	s := &session{issue: issue, wf: l.Loader.Current(), key: "i-1", workspace: workspace.Dir, attempt: 1, turn: 1, thread: "saved-native-thread"}
+	if err := l.saveCheckpoint(s, checkpointRunning, nil); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(l.checkpointPath("i-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRoot := t.TempDir()
+	l.Spaces = NewWorkspaceManager(newRoot, l.Log)
+	err = l.Restore(t.Context(), "lambe")
+	if !errors.Is(err, ErrWorkspaceRootChanged) || !strings.Contains(err.Error(), workspace.Dir) || !strings.Contains(err.Error(), newRoot) {
+		t.Fatalf("root change did not fail clearly: %v", err)
+	}
+	after, err := os.ReadFile(l.checkpointPath("i-1"))
+	if err != nil || string(after) != string(before) {
+		t.Fatal("root change destroyed continuation state")
+	}
+	if data, err := os.ReadFile(precious); err != nil || string(data) != "uncommitted work" { // #nosec G304 -- path is inside this test's temporary workspace.
+		t.Fatal("root change destroyed workspace")
+	}
+	if len(f.runner.recorded()) != 0 {
+		t.Fatal("root mismatch launched an agent")
 	}
 }

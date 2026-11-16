@@ -13,9 +13,8 @@ paste command + result summary
 ```
 
 **Symphony-spec impact**
-- [ ] None — behavior is internal to lambe.
-- [ ] Conformance-relevant — cite the SPEC.md section(s) and describe the
-      change in behavior.
+State “None” when behavior is internal to Lambe. Otherwise, cite the
+SPEC.md sections and describe the conformance-relevant behavior change.
 
 **Checklist**
 - [ ] Docs updated (or N/A).

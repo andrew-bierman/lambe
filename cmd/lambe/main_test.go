@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -113,7 +114,7 @@ func TestInitNonInteractive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("starter formula not written: %v", err)
 	}
-	for _, want := range []string{"[formula]", "[[steps]]", "[trigger]", "[gate]"} {
+	for _, want := range []string{"formula = \"keep-tests-green\"", "[[steps]]", "[trigger]"} {
 		if !strings.Contains(string(formulaBody), want) {
 			t.Errorf("formula template should contain %q", want)
 		}
@@ -132,6 +133,17 @@ func TestInitNonInteractive(t *testing.T) {
 	}
 	if cfg.WorkflowPath != workflow {
 		t.Errorf("workflow path: got %q, want %q", cfg.WorkflowPath, workflow)
+	}
+
+	// Starting from another project must not mix this tracker with its workflow.
+	other := t.TempDir()
+	if err := os.WriteFile(filepath.Join(other, "WORKFLOW.md"), []byte("another project"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(other)
+	cfg, err = config.Load(config.Options{File: configPath})
+	if err != nil || cfg.WorkflowPath != workflow {
+		t.Fatalf("configuration picked another project workflow: %+v %v", cfg, err)
 	}
 
 	// A second run must not clobber the existing config.
@@ -277,5 +289,100 @@ func TestInitChoosesCodex(t *testing.T) {
 	cfg, err := config.Load(config.Options{File: filepath.Join(home, "lambe", "config.yaml"), Env: []string{}})
 	if err != nil || cfg.Harness != "codex" {
 		t.Fatalf("Codex preference lost during setup: %+v, %v", cfg, err)
+	}
+}
+
+func TestStarterFormulaCooksWithInstalledBeads(t *testing.T) {
+	if os.Getenv("LAMBE_TEST_BD") != "1" {
+		t.Skip("set LAMBE_TEST_BD=1 for installed Beads")
+	}
+	isolatedConfigDir(t)
+	dir := t.TempDir()
+	init := exec.Command("bd", "init", "--prefix", "starter", "--non-interactive")
+	init.Dir = dir
+	if out, err := init.CombinedOutput(); err != nil {
+		t.Fatalf("bd init: %v: %s", err, out)
+	}
+	path := filepath.Join(dir, "keep-tests-green.formula.toml")
+	if err := os.WriteFile(path, []byte(formulaTemplate), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bd", "cook", path, "--json") // #nosec G204 -- fixed executable and private test-owned formula
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("starter cannot be cooked: %v: %s", err, out)
+	}
+	var cooked struct {
+		Steps []struct {
+			ID string `json:"id"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(out, &cooked); err != nil {
+		t.Fatal(err)
+	}
+	if len(cooked.Steps) != 2 || cooked.Steps[0].ID != "diagnose" || cooked.Steps[1].ID != "fix" {
+		t.Fatalf("starter lost its native steps: %s", out)
+	}
+	formulas, err := symphony.LoadFormulas(dir)
+	if err != nil || len(formulas) != 1 {
+		t.Fatalf("Lambe rejected native starter: %+v %v", formulas, err)
+	}
+	fired, err := symphony.TriggerFired(t.Context(), formulas[0])
+	if err != nil || fired {
+		t.Fatalf("starter created work before setup: fired=%t error=%v", fired, err)
+	}
+}
+
+func TestStarterNeverBlocksAnIndependentCompletionGate(t *testing.T) {
+	dir := t.TempDir()
+	formulas := filepath.Join(dir, ".beads", "formulas")
+	if err := os.MkdirAll(formulas, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(formulas, "keep-tests-green.formula.toml"), []byte(formulaTemplate), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(config.Options{Env: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Trackers[0].Path = dir
+	if err := requireGates(cfg); err == nil || !strings.Contains(err.Error(), "before starting") {
+		t.Fatalf("unsafe setup accepted: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(formulas, "verify.formula.toml"), []byte("[gate]\ntype = \"shell\"\ncommand = \"go test ./...\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireGates(cfg); err != nil {
+		t.Fatalf("starter blocked a real completion gate: %v", err)
+	}
+	loaded, err := symphony.LoadFormulas(formulas)
+	if err != nil || len(loaded) != 1 || loaded[0].Name != "keep-tests-green" {
+		t.Fatalf("gate-only file disabled responsibilities: %+v %v", loaded, err)
+	}
+}
+
+func TestGatePreflightRejectsEmptyTrackerConfiguration(t *testing.T) {
+	if err := requireGates(&config.Config{}); err == nil {
+		t.Fatal("missing tracker accepted")
+	}
+}
+
+func TestBareCommandsLoadInitializedConfigurationFromAnotherDirectory(t *testing.T) {
+	home := isolatedConfigDir(t)
+	project := t.TempDir()
+	if err := os.Mkdir(filepath.Join(project, ".beads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(project)
+	var out bytes.Buffer
+	if err := runInit([]string{"-non-interactive", "-harness", "codex"}, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+	cfg, path, err := parseCommon(nil)
+	if err != nil || path != filepath.Join(home, "lambe", "config.yaml") || cfg.Harness != "codex" || cfg.Trackers[0].Path != project || cfg.WorkflowPath != filepath.Join(project, "WORKFLOW.md") {
+		t.Fatalf("bare command ignored initialized setup: path=%q cfg=%+v err=%v", path, cfg, err)
 	}
 }

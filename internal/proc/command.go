@@ -10,6 +10,9 @@ import (
 	"time"
 )
 
+// ErrCommandNotStarted identifies a control command that never created a process.
+var ErrCommandNotStarted = errors.New("control command never started")
+
 // RunCommand runs a finite control command in its own process group, returning
 // combined output. Cancellation and completion clean up remaining descendants.
 func RunCommand(ctx context.Context, dir string, argv ...string) (string, error) {
@@ -31,6 +34,12 @@ func RunCommand(ctx context.Context, dir string, argv ...string) (string, error)
 	out, err := cmd.CombinedOutput()
 	if cmd.Process != nil {
 		_ = kill()
+	}
+	if cmd.Process == nil && err != nil {
+		if ctx.Err() != nil {
+			err = errors.Join(err, ctx.Err())
+		}
+		return string(out), fmt.Errorf("%w: %w", ErrCommandNotStarted, err)
 	}
 	if ctx.Err() != nil {
 		return string(out), ctx.Err()

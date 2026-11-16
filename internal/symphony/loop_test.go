@@ -2,15 +2,18 @@ package symphony
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/andrew-bierman/lambe/internal/proc"
 	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
@@ -711,7 +714,8 @@ func TestFormulaTimeoutStillDispatchesReadyWork(t *testing.T) {
 		t.Run(stage, func(t *testing.T) {
 			t.Parallel()
 			f := newFixture(t, "work {{ issue }}", settle)
-			f.loop.ControlTimeout = 50 * time.Millisecond
+			// Leave time for the real trigger shell to start on a loaded race-test runner.
+			f.loop.ControlTimeout = time.Second
 			command := "exit 1"
 			if stage == "trigger" {
 				command = "exec sleep 10"
@@ -723,7 +727,7 @@ func TestFormulaTimeoutStillDispatchesReadyWork(t *testing.T) {
 				<-ctx.Done()
 				return ctx.Err()
 			})
-			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			if err := f.loop.Tick(ctx); err != nil {
 				t.Fatal(err)
@@ -745,11 +749,8 @@ func TestFormulaTimeoutStillDispatchesReadyWork(t *testing.T) {
 	}
 }
 
-// TestFormulaMaterializesOncePerProcess pins the loop-level dedup (issue
-// #6): a fired trigger pours once per daemon run even if the trigger keeps
-// firing; bd mol pour itself is not deduped and re-materializes a fresh
-// issue set per invocation.
-func TestFormulaMaterializesOncePerProcess(t *testing.T) {
+// Trigger evaluation continues after materialization; the materializer owns durable dedup.
+func TestFormulaChecksEveryCycleThroughDurableMaterializer(t *testing.T) {
 	t.Parallel()
 	formulaDir := filepath.Join(t.TempDir(), ".beads", "formulas")
 	if err := os.MkdirAll(formulaDir, 0o750); err != nil {
@@ -770,8 +771,8 @@ func TestFormulaMaterializesOncePerProcess(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := materializer.materialized(); len(got) != 1 {
-		t.Fatalf("materialized calls = %v, want exactly 1 (loop dedup must skip fired re-materializations)", got)
+	if got := materializer.materialized(); len(got) != 3 {
+		t.Fatalf("materializer checks = %v, want one per cycle so closed work can re-arm", got)
 	}
 }
 
@@ -817,7 +818,7 @@ func TestBeadsMaterializerLedgerSkipsOpenRoot(t *testing.T) {
 case "$1" in
   mol) echo "Root issue: test-mol-9"; echo "poured" >> %q ;;
   show)
-    if [ -f %q ]; then echo '{"status":"closed"}'; else echo '{"status":"open"}'; fi ;;
+    if [ -f %q ]; then echo '[{"status":"closed"}]'; else echo '[{"status":"open"}]'; fi ;;
 esac`, poursFile, stateFile)
 	if err := os.WriteFile(script, []byte(scriptBody), 0o700); err != nil { // #nosec G306 -- executable fixture in a private test directory
 		t.Fatal(err)
@@ -831,7 +832,7 @@ esac`, poursFile, stateFile)
 		t.Fatalf("first materialize: %v | script on disk:\n%s", err, onDisk)
 	}
 	if _, err := os.Stat(poursFile); err != nil {
-		ledger := m.loadLedger()
+		ledger, _ := m.loadLedger()
 		onDisk, _ := os.ReadFile(script) // #nosec G304 -- test-owned executable fixture
 		out, runErr := m.run(context.Background(), "mol", "pour", "latus-1436")
 		t.Fatalf("pours missing after first pour: stat=%v ledger=%+v manual-run-out=%q manual-err=%v | script on disk:\n%s", err, ledger, out, runErr, onDisk)
@@ -906,14 +907,19 @@ esac`, poursFile)
 // into the past.
 func backdateLedger(t *testing.T, m *BeadsMaterializer, name string) {
 	t.Helper()
-	entries := m.loadLedger()
+	entries, err := m.loadLedger()
+	if err != nil {
+		t.Fatal(err)
+	}
 	entry, ok := entries[name]
 	if !ok || entry.RootID == "" {
 		t.Fatalf("no ledger entry for %s to backdate", name)
 	}
 	entry.PouredAt = time.Now().Add(-2 * DefaultRefireInterval).UTC().Format(time.RFC3339)
 	entries[name] = entry
-	m.saveLedger(entries)
+	if err := m.saveLedger(entries); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func mustRead(t *testing.T, path string) string {
@@ -933,4 +939,275 @@ func (l *waitingLoop) Tick(ctx context.Context) error {
 		return err
 	}
 	return l.Wait(ctx)
+}
+
+func TestRecurringFormulaRearmsThroughTheRunningLoop(t *testing.T) {
+	dir := t.TempDir()
+	state := filepath.Join(dir, "closed")
+	pours := filepath.Join(dir, "pours")
+	triggers := filepath.Join(dir, "triggers")
+	script := filepath.Join(dir, "bd")
+	body := fmt.Sprintf(`#!/bin/sh
+case "$1" in
+ mol) echo poured >> %q; echo 'Root issue: repeat-root';;
+ show) if test -f %q; then echo '[{"status":"closed"}]'; else echo '[{"status":"open"}]'; fi;;
+esac
+`, pours, state)
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil { // #nosec G306 -- private executable test fixture
+		t.Fatal(err)
+	}
+	f := newFixture(t, "body", settle)
+	m := &BeadsMaterializer{Bin: script, Dir: dir, Log: f.loop.Log}
+	f.loop.Materializer = m
+	f.loop.Formulas = []Formula{{Name: "repeat", Path: filepath.Join(dir, "repeat.formula.toml"), Command: fmt.Sprintf("echo checked >> %q; exit 1", triggers)}}
+	for range 2 {
+		if err := f.loop.Tick(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := string(mustRead(t, pours)); got != "poured\n" {
+		t.Fatalf("duplicate live responsibility: %q", got)
+	}
+	if err := os.WriteFile(state, []byte("closed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backdateLedger(t, m, "repeat")
+	if err := f.loop.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(mustRead(t, pours)); got != "poured\npoured\n" {
+		t.Fatalf("completed responsibility never rearmed: %q", got)
+	}
+	if got := string(mustRead(t, triggers)); got != "checked\nchecked\nchecked\n" {
+		t.Fatalf("trigger evaluated twice: %q", got)
+	}
+}
+
+func TestAmbiguousOrCorruptMaterializationNeverPoursAgain(t *testing.T) {
+	for _, mode := range []string{"failed-command", "missing-root", "corrupt-ledger"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			pours := filepath.Join(dir, "pours")
+			script := filepath.Join(dir, "bd")
+			result := "exit 1"
+			if mode == "missing-root" {
+				result = "echo 'unexpected output'; exit 0"
+			}
+			body := fmt.Sprintf("#!/bin/sh\necho poured >> %q\n%s\n", pours, result)
+			if err := os.WriteFile(script, []byte(body), 0o700); err != nil { // #nosec G306 -- private executable test fixture
+				t.Fatal(err)
+			}
+			m := &BeadsMaterializer{Bin: script, Dir: dir, Log: slog.Default()}
+			if mode == "corrupt-ledger" {
+				if err := os.MkdirAll(filepath.Join(dir, ".beads"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(m.ledgerPath(), []byte("{"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for range 2 {
+				if err := m.Materialize(t.Context(), Formula{Name: "repeat"}); err == nil {
+					t.Fatal("uncertain materialization reported success")
+				}
+			}
+			if mode == "corrupt-ledger" {
+				if _, err := os.Stat(pours); !os.IsNotExist(err) {
+					t.Fatal("corrupt ledger caused another pour")
+				}
+			} else if got := string(mustRead(t, pours)); got != "poured\n" {
+				t.Fatalf("ambiguous side effect repeated: %q", got)
+			}
+		})
+	}
+}
+
+type gateCloseRaceTracker struct {
+	tracker.Tracker
+	tr         *fakeTracker
+	closed     bool
+	omitClosed bool
+}
+
+func (tr gateCloseRaceTracker) Heartbeat(_ context.Context, id string) error {
+	if tr.closed {
+		tr.tr.set(id, tracker.StatusClosed)
+	}
+	return tracker.ErrNotOwner
+}
+
+func (tr gateCloseRaceTracker) Dispatchable(ctx context.Context, q tracker.DispatchQuery) ([]tracker.Issue, error) {
+	rows, err := tr.Tracker.Dispatchable(ctx, q)
+	if tr.omitClosed && len(q.Statuses) == 0 {
+		var filtered []tracker.Issue
+		for _, row := range rows {
+			if row.Status != tracker.StatusClosed {
+				filtered = append(filtered, row)
+			}
+		}
+		return filtered, err
+	}
+	return rows, err
+}
+
+func TestHeartbeatCloseRaceDoesNotCancelGateFinalization(t *testing.T) {
+	for _, tc := range []struct {
+		name                         string
+		settling, closed, omitClosed bool
+	}{{"ordinary takeover", false, false, false}, {"own gate close", true, true, false}, {"closed omitted from default list", true, true, true}, {"takeover during gate", true, false, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, "body")
+			f.tr.set("i-1", tracker.StatusInProgress)
+			f.loop.Tracker = gateCloseRaceTracker{Tracker: f.tr, tr: f.tr, closed: tc.closed, omitClosed: tc.omitClosed}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			w := &worker{cancel: cancel, stop: workerRunning}
+			w.settling.Store(tc.settling)
+			f.loop.active["i-1"] = w
+			defer delete(f.loop.active, "i-1")
+			f.loop.reconcileWorkers(t.Context())
+			if tc.closed {
+				if ctx.Err() != nil || w.stop != workerTerminal {
+					t.Fatal("own gate closure interrupted final bookkeeping")
+				}
+			} else if ctx.Err() == nil || w.stop != workerClaimLost {
+				t.Fatal("foreign ownership loss did not stop work")
+			}
+		})
+	}
+}
+
+func TestUnstartedPourCanRetryWithoutOperatorRepair(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "bd")
+	m := &BeadsMaterializer{Bin: script, Dir: dir, Log: slog.Default()}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := m.Materialize(ctx, Formula{Name: "repeat"}); err == nil {
+		t.Fatal("canceled pour succeeded")
+	}
+	if _, err := os.Stat(m.ledgerPath()); !os.IsNotExist(err) {
+		t.Fatal("canceled context wrote intent")
+	}
+	if err := m.Materialize(t.Context(), Formula{Name: "repeat"}); !errors.Is(err, proc.ErrCommandNotStarted) {
+		t.Fatalf("missing binary classification: %v", err)
+	}
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'Root issue: created-root'\n"), 0o700); err != nil { // #nosec G306 -- private executable test fixture
+		t.Fatal(err)
+	}
+	if err := m.Materialize(t.Context(), Formula{Name: "repeat"}); err != nil {
+		t.Fatalf("unstarted command wedged responsibility: %v", err)
+	}
+}
+
+func TestInvalidLedgerEntryDoesNotDisableOtherResponsibilities(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "bd")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'Root issue: created-root'\n"), 0o700); err != nil { // #nosec G306 -- private executable test fixture
+		t.Fatal(err)
+	}
+	m := &BeadsMaterializer{Bin: script, Dir: dir, Log: slog.Default()}
+	entries := map[string]materializedEntry{"bad": {PouredAt: time.Now().UTC().Format(time.RFC3339)}}
+	if err := m.saveLedger(entries); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Materialize(t.Context(), Formula{Name: "bad"}); err == nil {
+		t.Fatal("invalid entry accepted")
+	}
+	if err := m.Materialize(t.Context(), Formula{Name: "good"}); err != nil {
+		t.Fatalf("one bad entry disabled another formula: %v", err)
+	}
+	entries, err := m.loadLedger()
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(entries, "bad")
+	if err := m.saveLedger(entries); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Materialize(t.Context(), Formula{Name: "bad"}); err != nil {
+		t.Fatalf("operator repair failed: %v", err)
+	}
+}
+
+func TestConfirmedMissingMaterializedRootCanRearm(t *testing.T) {
+	for _, reply := range []string{"echo '[]'", "echo 'Issue old-root not found' >&2; echo '{\"schema_version\":1,\"error\":\"no issues found matching the provided IDs\"}'; exit 1"} {
+		t.Run(reply, func(t *testing.T) {
+			dir := t.TempDir()
+			script := filepath.Join(dir, "bd")
+			body := "#!/bin/sh\ncase \"$1\" in\n show) " + reply + ";;\n mol) echo 'Root issue: next-root';;\nesac\n"
+			if err := os.WriteFile(script, []byte(body), 0o700); err != nil { // #nosec G306 -- private executable test fixture
+				t.Fatal(err)
+			}
+			m := &BeadsMaterializer{Bin: script, Dir: dir, Log: slog.Default()}
+			entries := map[string]materializedEntry{"repeat": {RootID: "old-root", PouredAt: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)}}
+			if err := m.saveLedger(entries); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.Materialize(t.Context(), Formula{Name: "repeat"}); err != nil {
+				t.Fatalf("deleted root stalled formula: %v", err)
+			}
+			entries, err := m.loadLedger()
+			if err != nil || entries["repeat"].RootID != "next-root" {
+				t.Fatalf("no replacement root recorded: %+v %v", entries, err)
+			}
+		})
+	}
+}
+
+func TestMaterializationLockGuardsTheWholeLedger(t *testing.T) {
+	m := &BeadsMaterializer{Dir: t.TempDir(), Bin: "unused", Log: slog.Default()}
+	lock, err := m.materializationLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Close() }()
+	if err := m.Materialize(t.Context(), Formula{Name: "repeat"}); !errors.Is(err, syscall.EWOULDBLOCK) {
+		t.Fatalf("concurrent ledger writer allowed: %v", err)
+	}
+	if _, err := os.Stat(m.ledgerPath()); !os.IsNotExist(err) {
+		t.Fatal("contender wrote a pour intent")
+	}
+}
+
+func TestTrackerWarningsDoNotPreventClosedRootRearming(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "bd")
+	body := "#!/bin/sh\ncase \"$1\" in\n show) echo 'Notice: local import checked' >&2; echo '[{\"status\":\"closed\"}]';;\n mol) echo 'Root issue: new-root';;\nesac\n"
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	} // #nosec G306 -- private executable test fixture
+	m := &BeadsMaterializer{Bin: script, Dir: dir, Log: slog.Default()}
+	if err := m.saveLedger(map[string]materializedEntry{"repeat": {RootID: "old-root", PouredAt: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Materialize(t.Context(), Formula{Name: "repeat"}); err != nil {
+		t.Fatalf("stderr warning stalled responsibility: %v", err)
+	}
+}
+
+func TestSlowRootLookupDoesNotStartAStarvedPour(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "bd")
+	poured := filepath.Join(dir, "poured")
+	body := fmt.Sprintf("#!/bin/sh\ncase \"$1\" in\n show) sleep 0.65; echo '[{\"status\":\"closed\"}]';;\n mol) echo yes > %q; echo 'Root issue: new-root';;\nesac\n", poured)
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	} // #nosec G306 -- private executable test fixture
+	m := &BeadsMaterializer{Bin: script, Dir: dir, Log: slog.Default()}
+	if err := m.saveLedger(map[string]materializedEntry{"repeat": {RootID: "old-root", PouredAt: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if err := m.Materialize(ctx, Formula{Name: "repeat"}); err == nil {
+		t.Fatal("started a pour after its lookup consumed the budget")
+	}
+	entries, err := m.loadLedger()
+	if err != nil || entries["repeat"].Pending {
+		t.Fatalf("read-only delay left ambiguous intent: %+v %v", entries, err)
+	}
+	if _, err := os.Stat(poured); !os.IsNotExist(err) {
+		t.Fatal("starved pour was executed")
+	}
 }

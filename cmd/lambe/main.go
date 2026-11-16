@@ -12,11 +12,13 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 
 	"github.com/andrew-bierman/lambe/internal/config"
 	"github.com/andrew-bierman/lambe/internal/daemon"
+	"github.com/andrew-bierman/lambe/internal/gate"
 	"github.com/andrew-bierman/lambe/internal/logging"
 	"github.com/andrew-bierman/lambe/internal/mcp"
 )
@@ -48,7 +50,7 @@ func main() {
 	}
 	switch args[0] {
 	case "version":
-		fmt.Printf("lambe %s (commit %s, built %s)\n", version, commit, date)
+		fmt.Println(buildVersion())
 	case "init":
 		if err := runInit(args[1:], os.Stdin, os.Stdout); err != nil {
 			logging.Default().Error("lambe init failed", "error", err.Error())
@@ -87,11 +89,29 @@ func parseCommon(args []string) (*config.Config, string, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, "", err
 	}
-	cfg, err := config.Load(config.Options{File: *configFile})
+	path, err := cliConfigPath(*configFile)
+	if err != nil {
+		return nil, "", err
+	}
+	cfg, err := config.Load(config.Options{File: path})
 	if err != nil {
 		return nil, "", fmt.Errorf("configuration invalid: %w", err)
 	}
-	return cfg, *configFile, nil
+	return cfg, path, nil
+}
+
+func cliConfigPath(explicit string) (string, error) {
+	if explicit != "" {
+		return explicit, nil
+	}
+	path := config.DefaultPath()
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read default configuration %s: %w", path, err)
+	}
+	return path, nil
 }
 
 // runDaemon assembles and runs the daemon until a terminating signal.
@@ -115,6 +135,9 @@ func runDaemon(args []string) error {
 		return err
 	}
 
+	if err := requireGates(cfg); err != nil {
+		return err
+	}
 	d, err := daemon.New(daemonOptions(cfg, configPath))
 	if err != nil {
 		return err
@@ -259,44 +282,32 @@ Working rules:
 
 // formulaTemplate is the starter formula `lambe init` writes to
 // .beads/formulas/keep-tests-green.formula.toml.
-const formulaTemplate = `# Formula: keep-tests-green (starter template)
-#
-# Responsibility: the main branch's CI must always be green. When it is
-# not, this formula materializes an issue so an agent diagnoses the failure
-# and lands a fix on a pull request. Done means the gate below is green —
-# never the agent's word.
-#
-# lambe parses [trigger] (a shell command; non-zero exit means "fired")
-# and [gate] (verified completion judged on a settled turn). The [formula]
-# and [[steps]] tables are consumed by bd cook when the trigger
-# materializes the issue.
+const formulaTemplate = `# Starter responsibility. Enable its trigger only after configuring the
+# workflow workspace hooks, a repository-specific check, and completion gate.
+# Exit 0 keeps automatic materialization disabled during setup.
 
-[formula]
-name = "keep-tests-green"
-description = "Diagnose and fix a red CI run on the watched branch"
+formula = "keep-tests-green"
+version = 1
+type = "workflow"
+description = "Diagnose a failing repository check and submit a verified fix"
 
 [trigger]
-# Fires when the latest CI run on the watched branch is anything other
-# than "success". Parameterize with LAMBE_GH_REPO and LAMBE_CI_BRANCH.
-command = 'test "$(gh run list --repo "${LAMBE_GH_REPO:-.}" --branch "${LAMBE_CI_BRANCH:-main}" --limit 1 --json conclusion --jq ".[0].conclusion")" = "success"'
+command = "exit 0"
 
 [[steps]]
-# Step 1: diagnose. Capture the failing run so the issue records it.
-name = "diagnose"
-run = 'gh run list --repo "${LAMBE_GH_REPO:-.}" --branch "${LAMBE_CI_BRANCH:-main}" --limit 1 --status failure --json databaseId --jq ".[0].databaseId"'
+id = "diagnose"
+title = "Diagnose the failing repository check"
+description = "Run the configured check and identify the cause in the issue workspace."
 
 [[steps]]
-# Step 2: fix. Branch off the failing commit, land the minimal fix, open a
-# PR back to the watched branch.
-name = "fix"
-run = "git checkout -b fix/${LAMBE_CI_BRANCH:-main}-$$ && commit-fix && gh pr create --fill"
+id = "fix"
+title = "Fix and verify the failing repository check"
+description = "Implement the smallest fix, run local checks, and create a pull request."
+needs = ["diagnose"]
 
-[gate]
-# Verified completion: replace this with the check that proves the fix —
-# for PR-gated work prefer type = "gh:pr" with a pr ref. Non-zero exit is
-# a red verdict; the failure output goes back to the agent as guidance.
-type = "shell"
-command = "exit 1  # replace me: the command that proves the work is done"
+# Add a [gate] table here or in a separate *.formula.toml before running
+# Lambe. All configured gates apply to every issue in this tracker.
+# A gate must verify the task independently of the agent's final message.
 `
 
 // say prints init progress output; a broken terminal pipe is not a setup
@@ -351,10 +362,11 @@ func runInit(args []string, in io.Reader, out io.Writer) error {
 	cfgYAML := fmt.Sprintf("# lambe configuration written by lambe init.\n"+
 		"# See https://github.com/andrew-bierman/lambe for every key.\n"+
 		"harness: %s\n"+
+		"workflow_path: %q\n"+
 		"trackers:\n"+
 		"  - name: local\n"+
 		"    type: repo\n"+
-		"    path: %q\n", *harness, absTracker)
+		"    path: %q\n", *harness, filepath.Join(absTracker, "WORKFLOW.md"), absTracker)
 	if err := os.WriteFile(configPath, []byte(cfgYAML), 0o600); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
@@ -387,7 +399,10 @@ func runInit(args []string, in io.Reader, out io.Writer) error {
 		say(out, "  cd %s && bd init   # create the tracker `lambe init` could not find\n", absTracker)
 	}
 	say(out, "  edit %s to taste (prompt, hooks, gates)\n", workflowDst)
-	say(out, "  lambe run      # start the supervisor daemon\n")
+	say(out, "  add a [gate] completion check to %s (or a separate formula); all gates apply to every task\n", formulaDst)
+	say(out, "  configure the gate before starting: existing ready issues are dispatched automatically; the starter trigger is disabled\n")
+	say(out, "  lambe run      # Lambe starts and supervises the configured agent itself\n")
+	say(out, "  bd create \"Your task, with acceptance criteria\" --type task  # queue work after configuring the gate\n")
 	say(out, "  lambe status   # print the morning report\n")
 	return nil
 }
@@ -444,4 +459,41 @@ func maybeInitTracker(dir string, nonInteractive bool, in io.Reader, out io.Writ
 	}
 	say(out, "initialized tracker in %s\n", dir)
 	return dir, true, nil
+}
+
+func buildVersion() string {
+	v, c, d := version, commit, date
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if v == "dev" && info.Main.Version != "" && info.Main.Version != "(devel)" {
+			v = info.Main.Version
+		}
+		for _, setting := range info.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				if c == "none" {
+					c = setting.Value
+				}
+			case "vcs.time":
+				if d == "unknown" {
+					d = setting.Value
+				}
+			}
+		}
+	}
+	return fmt.Sprintf("lambe %s (commit %s, built %s)", v, c, d)
+}
+
+func requireGates(cfg *config.Config) error {
+	if len(cfg.Trackers) == 0 {
+		return errors.New("no trackers configured; run lambe init or configure a local tracker")
+	}
+	dir := filepath.Join(cfg.Trackers[0].Path, ".beads", "formulas")
+	specs, err := gate.LoadDir(dir)
+	if err != nil {
+		return fmt.Errorf("completion gates invalid: %w", err)
+	}
+	if len(specs) == 0 {
+		return fmt.Errorf("no completion gate configured in %s; add a [gate] table with a check that proves completion before starting Lambe", dir)
+	}
+	return nil
 }

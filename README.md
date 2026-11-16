@@ -25,6 +25,25 @@ through work item by work item, and treats a task as done only when external
 checks are green — never because a process exited zero. That last property,
 verified completion, is the product.
 
+## First-run setup
+
+Run `lambe init` from the repository you want to supervise. It writes a config
+that pins that repository’s `WORKFLOW.md`, so running Lambe from another folder
+does not accidentally select a different prompt. Existing files are preserved.
+
+Before dispatching real work, configure the workflow’s workspace hooks and the
+completion check in a `[gate]` table in that starter or a separate formula file.
+Every configured gate applies to every task in this tracker. Lambe refuses to
+start without a completion gate, before claiming existing work. The starter’s automatic
+trigger starts disabled; the starter uses native Beads formula and step fields.
+Lambe starts the configured agent itself when an eligible task appears—you do
+not start a second agent session. Queue a task with `bd create` after configuring
+its completion gate, and inspect it with `lambe status`.
+
+`lambe version` reports the installed Go module version for upstream installs,
+even when no release linker flags were supplied. Bare commands read the default
+configuration written by init; `-config FILE` selects another one.
+
 ## Quickstart
 
 Install (Go 1.27+):
@@ -105,6 +124,11 @@ npm install -g @agentclientprotocol/codex-acp
 lambe init -harness codex
 ```
 
+For an npm-installed Codex adapter, Lambe uses the Node executable beside
+the adapter when available, then checks the required runtime API before
+claiming work. An older shell Node cannot silently break the first prompt.
+Native adapters and explicit custom commands retain their own runtime.
+
 Authenticate Codex before running Lambe, then review the generated workflow
 and completion gate. Existing configurations can set `harness: codex` instead
 of running init again. Codex runs through the maintained
@@ -127,6 +151,20 @@ claiming work. Backends advertising `session/resume` reopen without replaying ol
 `loadSession` is the fallback. A backend without either capability restarts
 only when Lambe can supply the full task prompt, with a diagnostic. Lambe records the actual
 backend thread before prompting. Pi reopens its saved workspace session.
+
+To keep coding workspaces separate from application state, configure a root
+before starting work:
+
+```yaml
+workspace:
+  root: /absolute/path/to/your/code/lambe-workspaces
+```
+
+Relative roots resolve from the configuration file’s directory.
+`LAMBE_WORKSPACE_ROOT` overrides the file setting. Configure it before starting
+work; if saved checkpoints use another root, startup names both paths and
+refuses to resume until the previous root is restored or the workspace and
+checkpoint are deliberately migrated.
 
 ## Watching agent work
 
@@ -272,6 +310,18 @@ Later / exploring:
 
 - [ ] Gas-City interop
 - [ ] `ghx` caching proxy at multi-agent scale
+
+## Recurring responsibilities
+
+Recurring responsibilities are checked each tick. The materialization ledger
+keeps one recorded root active per formula and permits another cycle after
+that root closes and the refire interval expires. A corrupt ledger or a pour
+whose result is unknown stops that formula from issuing duplicates. Inspect
+the tracker before repairing `.beads/lambe-materialized.json`: stop the daemon,
+then either set that formula’s `root_id` to the root that was actually created
+and clear `pending` (keeping its valid `poured_at`), or delete only that formula’s
+entry after confirming no root was created. Preserve other entries, then restart.
+Restarting alone does not discard that safety record.
 
 ## License
 

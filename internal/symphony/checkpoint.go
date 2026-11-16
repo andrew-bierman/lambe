@@ -15,6 +15,9 @@ import (
 	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
+// ErrWorkspaceRootChanged prevents restarting saved work under a different root.
+var ErrWorkspaceRootChanged = errors.New("workspace root differs from saved checkpoint")
+
 type checkpointPhase string
 
 const (
@@ -116,8 +119,11 @@ func (l *Loop) readCheckpoint(path string) (checkpoint, error) {
 		return saved, fmt.Errorf("checkpoint id does not match its filename")
 	}
 	expected, err := l.Spaces.dirFor(SanitizeKey(saved.Key))
-	if err != nil || (saved.Workspace != "" && saved.Workspace != expected) {
-		return saved, fmt.Errorf("checkpoint workspace escapes its manager")
+	if err != nil {
+		return saved, err
+	}
+	if saved.Workspace != "" && saved.Workspace != expected {
+		return saved, fmt.Errorf("%w: %s saved workspace %q, configured workspace %q; restore the previous root or migrate the checkpoint and workspace before restarting", ErrWorkspaceRootChanged, path, saved.Workspace, expected)
 	}
 	return saved, nil
 }
@@ -159,9 +165,13 @@ func (l *Loop) Restore(ctx context.Context, actor string) error {
 		}
 		l.recovery[saved.Issue.ID] = saved
 	}
+	failure := errors.Join(failures...)
+	if errors.Is(failure, ErrWorkspaceRootChanged) {
+		return failure
+	}
 	l.recoveryScan = true
 	l.recoverPending(ctx)
-	return errors.Join(failures...)
+	return failure
 }
 
 func (l *Loop) discoverLegacy(ctx context.Context) error {

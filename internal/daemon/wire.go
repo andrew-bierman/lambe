@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -396,9 +395,12 @@ func (r *harnessRunner) newDriver(req symphony.TurnRequest) (harness.Driver, err
 	if r.name == "pi" {
 		return pidrv.New(pidrv.Options{SessionID: sess, Dir: req.Workspace, Env: env, Logger: logging.Default(), Stderr: stderr, Persist: persist, SilenceAfter: silenceTimeout(r.cfg), MaxRun: turnTimeout(r.cfg)}), nil
 	}
-	argv, err := HarnessCommand(r.cfg)
+	argv, err := launchCommand(r.cfg)
 	if err != nil {
 		return nil, err
+	}
+	if len(r.cfg.ACP.Command) == 0 {
+		env = runtimeEnv(argv, env)
 	}
 	return acpdrv.New(acpdrv.Options{SessionID: req.ThreadID, Argv: argv, Dir: req.Workspace, Env: env, Logger: logging.Default(), Stderr: stderr, Persist: persist, SilenceAfter: silenceTimeout(r.cfg), MaxRun: turnTimeout(r.cfg)})
 }
@@ -530,14 +532,14 @@ func HarnessCommand(cfg *config.Config) ([]string, error) {
 
 // CheckHarness fails startup before claiming work when the backend executable is missing.
 func CheckHarness(cfg *config.Config) error {
-	argv, err := HarnessCommand(cfg)
+	argv, err := launchCommand(cfg)
 	if err != nil {
 		return err
 	}
-	if _, err := exec.LookPath(argv[0]); err != nil {
-		return fmt.Errorf("cannot find agent executable %q for harness %q: %w; install the harness, or select harness: acp and configure acp.command", argv[0], cfg.Harness, err)
+	if len(cfg.ACP.Command) > 0 {
+		return nil
 	}
-	return nil
+	return checkAdapterRuntime(argv)
 }
 
 // backendKey keeps saved conversations attached to their originating agent command.

@@ -64,3 +64,17 @@ func TestRunCommandCleansDescendants(t *testing.T) {
 		})
 	}
 }
+
+func TestRunCommandIdentifiesACommandThatNeverStarted(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := proc.RunCommand(ctx, t.TempDir(), "sh", "-c", "exit 0"); !errors.Is(err, proc.ErrCommandNotStarted) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("unstarted cancellation lost identity: %v", err)
+	}
+	if _, err := proc.RunCommand(t.Context(), t.TempDir(), filepath.Join(t.TempDir(), "missing")); !errors.Is(err, proc.ErrCommandNotStarted) {
+		t.Fatalf("missing binary classified as started: %v", err)
+	}
+	if _, err := proc.RunCommand(t.Context(), t.TempDir(), "sh", "-c", "exit 1"); err == nil || errors.Is(err, proc.ErrCommandNotStarted) {
+		t.Fatalf("executed failure classified as unstarted: %v", err)
+	}
+}

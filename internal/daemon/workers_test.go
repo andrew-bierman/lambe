@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,12 +32,16 @@ func TestDaemonRefreshesWhileWorkersRunAndJoinsThemAtShutdown(t *testing.T) {
 	entered, stopped := make(chan string, 2), make(chan string, 2)
 	reports := &ReportCache{}
 	d, err := New(Options{
-		Config:   &config.Config{Supervisor: config.Supervisor{TickSeconds: 1, HeartbeatInterval: time.Hour}},
+		Config:   &config.Config{WorkspaceRoot: filepath.Join(dir, "isolated-workspaces"), Supervisor: config.Supervisor{TickSeconds: 1, HeartbeatInterval: time.Hour}},
 		StateDir: filepath.Join(dir, "state"), Machine: "test", WorkflowPath: workflow,
 		Wire: func(a *Assembly) error {
 			a.Trackers = []tracker.Tracker{tr}
 			a.Reports = reports
 			a.Runner = daemonTurnFunc(func(ctx context.Context, req symphony.TurnRequest) (symphony.TurnResult, error) {
+				relative, err := filepath.Rel(filepath.Join(dir, "isolated-workspaces"), req.Workspace)
+				if err != nil || !filepath.IsLocal(relative) {
+					return symphony.TurnResult{Exit: symphony.TurnFailure}, fmt.Errorf("workspace escaped configured root: %s", req.Workspace)
+				}
 				entered <- req.Issue.ID
 				<-ctx.Done()
 				stopped <- req.Issue.ID
