@@ -256,7 +256,11 @@ func (r *harnessRunner) CloseSession(ctx context.Context, sessionID string) {
 	if !ok {
 		return
 	}
-	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), driverCloseBound)
+	bound := driverCloseBound
+	if deadline, ok := ctx.Deadline(); ok {
+		bound = min(bound, time.Until(deadline))
+	}
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bound)
 	defer cancel()
 	_ = sd.drv.Close(cctx)
 }

@@ -152,11 +152,11 @@ func newLoader(t *testing.T, dir, body string) *symphony.Loader {
 
 // newLoop assembles a real symphony loop over tr with zero retry delays so
 // every scheduled retry is due on the next tick.
-func newLoop(tr tracker.Tracker, loader *symphony.Loader, runner symphony.AgentRunner, gates symphony.GateEvaluator, dir string) *symphony.Loop {
+func newLoop(tr tracker.Tracker, loader *symphony.Loader, runner symphony.AgentRunner, gates symphony.GateEvaluator, dir string) *waitingLoop {
 	loop := symphony.NewLoop(tr, loader, runner, gates, symphony.NewWorkspaceManager(filepath.Join(dir, "workspaces"), quietLog()), quietLog())
 	loop.FailureDelay = func(int) time.Duration { return 0 }
 	loop.ContinuationDelay = 0
-	return loop
+	return &waitingLoop{loop}
 }
 
 // turnRecorder is an AgentRunner that records every turn request and
@@ -591,4 +591,14 @@ func exitBySignal(waitErr error, sig syscall.Signal) bool {
 	}
 	status, ok := exitErr.Sys().(syscall.WaitStatus)
 	return ok && status.Signaled() && status.Signal() == sig
+}
+
+// waitingLoop joins dispatched workers for turn/gate protocol assertions.
+type waitingLoop struct{ *symphony.Loop }
+
+func (l *waitingLoop) Tick(ctx context.Context) error {
+	if err := l.Loop.Tick(ctx); err != nil {
+		return err
+	}
+	return l.Wait(ctx)
 }

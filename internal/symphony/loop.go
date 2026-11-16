@@ -234,10 +234,10 @@ func (m *BeadsMaterializer) saveLedger(entries map[string]materializedEntry) {
 		return
 	}
 	path := m.ledgerPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return
 	}
-	_ = os.WriteFile(path, raw, 0o644) // #nosec G304 -- operator-owned tracker dir
+	_ = os.WriteFile(path, raw, 0o600) // #nosec G304 -- operator-owned tracker dir
 }
 
 // pouredRootOpen reports the ledger's root issue id for name and whether it
@@ -320,8 +320,8 @@ type session struct {
 
 // Loop is the tick orchestrator: formula triggers, the two-read dispatch,
 // claims, workspaces, the turn loop, gates, retries, and reconciliation.
-// It is single-threaded per Tick; concurrent Ticks are the caller's to
-// serialize.
+// Tick coordinates independent workers without waiting for agent turns.
+// Coordinator operations (Tick, Wait, Close) must be serialized by the caller.
 type Loop struct {
 	Tracker          tracker.Tracker
 	Loader           *Loader
@@ -345,6 +345,7 @@ type Loop struct {
 
 	sessions map[string]*session
 	retries  *Queue
+	active   map[string]*worker
 	// materialized records formula names already materialized by this
 	// process: the durable guard is the materializer's ledger, this map is
 	// the fast path so a fired trigger pours at most once per daemon run.
@@ -369,6 +370,7 @@ func NewLoop(tr tracker.Tracker, loader *Loader, runner AgentRunner, gates GateE
 		FailureDelay:      nil,
 		Log:               log,
 		sessions:          map[string]*session{},
+		active:            map[string]*worker{},
 		retries:           &Queue{},
 		materialized:      map[string]bool{},
 	}
@@ -386,6 +388,11 @@ func (l *Loop) failureDelay(attempt int) time.Duration {
 // fired responsibilities, service due retries, then two-read dispatch and
 // run newly claimable issues.
 func (l *Loop) Tick(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	l.collect(ctx)
+	l.reconcileWorkers(ctx)
 	l.runFormulas(ctx)
 	if err := l.serviceRetries(ctx); err != nil {
 		return err
@@ -484,6 +491,10 @@ func (l *Loop) isTemplateID(id string) bool {
 // terminal cleanup and release; live ones re-enter the run path.
 func (l *Loop) serviceRetries(ctx context.Context) error {
 	for _, r := range l.retries.Due(time.Now()) {
+		if len(l.active) >= l.capacity() || l.active[r.IssueID] != nil {
+			l.retries.Add(r)
+			continue
+		}
 		s, ok := l.sessions[r.IssueID]
 		if !ok {
 			continue
@@ -511,10 +522,10 @@ func (l *Loop) serviceRetries(ctx context.Context) error {
 		}
 		if r.Kind == RetryGate {
 			logging.WithIssue(l.Log, s.issue.ID).Info("gate retry, re-evaluating on settled output")
-			l.evaluateGate(ctx, s, s.gateOutput, logging.WithIssue(l.Log, s.issue.ID))
+			l.start(ctx, s, RetryGate)
 			continue
 		}
-		l.runAttempt(ctx, s, r.Kind == RetryFailure)
+		l.start(ctx, s, r.Kind)
 	}
 	return nil
 }
@@ -538,6 +549,12 @@ func (l *Loop) dispatch(ctx context.Context) error {
 		if _, busy := l.sessions[issue.ID]; busy {
 			continue
 		}
+		if len(l.active) >= l.capacity() {
+			break
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		claimed, err := l.Tracker.Claim(ctx, issue.ID)
 		if err != nil {
 			if errors.Is(err, tracker.ErrLostRace) || errors.Is(err, tracker.ErrFrozen) {
@@ -553,7 +570,7 @@ func (l *Loop) dispatch(ctx context.Context) error {
 		s := &session{issue: claimed, wf: wf, key: claimed.ID, turn: 0, attempt: 0}
 		l.sessions[claimed.ID] = s
 		l.Log.Info("issue claimed", "issue", claimed.ID, "revision", wf.Revision)
-		l.runAttempt(ctx, s, true)
+		l.start(ctx, s, RetryFailure)
 	}
 	return nil
 }
@@ -561,7 +578,8 @@ func (l *Loop) dispatch(ctx context.Context) error {
 // runAttempt executes one attempt (a failure retry increments the attempt
 // number; a continuation reuses it) as a bounded turn loop: prompt, turn,
 // reconcile-or-gate, continuation guidance on the same thread.
-func (l *Loop) runAttempt(ctx context.Context, s *session, nextAttempt bool) {
+func (w *worker) runAttempt(ctx context.Context, s *session, nextAttempt bool) {
+	l := w.loop
 	log := logging.WithIssue(l.Log, s.issue.ID)
 	if nextAttempt {
 		s.attempt++
@@ -572,7 +590,7 @@ func (l *Loop) runAttempt(ctx context.Context, s *session, nextAttempt bool) {
 	ws, err := l.Spaces.Ensure(ctx, s.key, wf.Hooks)
 	if err != nil {
 		log.Error("workspace creation failed, retrying later", "error", err)
-		l.schedule(s, RetryFailure, l.failureDelay(s.attempt))
+		w.schedule(s, RetryFailure, l.failureDelay(s.attempt))
 		return
 	}
 	s.workspace = ws.Dir
@@ -580,7 +598,7 @@ func (l *Loop) runAttempt(ctx context.Context, s *session, nextAttempt bool) {
 	if err := l.Spaces.RunBeforeRun(ctx, ws.Dir, wf.Hooks); err != nil {
 		log.Error("before_run failed, attempt aborted", "error", err)
 		l.Spaces.RunAfterRun(ctx, ws.Dir, wf.Hooks)
-		l.schedule(s, RetryFailure, l.failureDelay(s.attempt))
+		w.schedule(s, RetryFailure, l.failureDelay(s.attempt))
 		return
 	}
 
@@ -593,25 +611,26 @@ func (l *Loop) runAttempt(ctx context.Context, s *session, nextAttempt bool) {
 
 	for s.turn < wf.MaxTurns {
 		s.turn++
-		if l.runTurn(ctx, s, ws, log) {
+		if w.runTurn(ctx, s, ws, log) {
 			return
 		}
 	}
 
-	l.schedule(s, RetryFailure, l.failureDelay(s.attempt))
+	w.schedule(s, RetryFailure, l.failureDelay(s.attempt))
 }
 
 // runTurn executes one turn of an attempt and reports whether the attempt
 // is finished (terminal transition or retry scheduled). Every completed
 // turn finishes the attempt in this design: continuation turns arrive on
 // the next tick through the continuation retry, on the same live thread.
-func (l *Loop) runTurn(ctx context.Context, s *session, ws *Workspace, log *slog.Logger) bool {
+func (w *worker) runTurn(ctx context.Context, s *session, ws *Workspace, log *slog.Logger) bool {
+	l := w.loop
 	wf := s.wf
 	prompt, err := l.turnPrompt(s)
 	if err != nil {
 		log.Error("prompt render failed", "error", err)
 		l.Spaces.RunAfterRun(ctx, ws.Dir, wf.Hooks)
-		l.schedule(s, RetryFailure, l.failureDelay(s.attempt))
+		w.schedule(s, RetryFailure, l.failureDelay(s.attempt))
 		return true
 	}
 	res, err := l.Runner.RunTurn(ctx, TurnRequest{
@@ -624,6 +643,9 @@ func (l *Loop) runTurn(ctx context.Context, s *session, ws *Workspace, log *slog
 		Workspace: ws.Dir,
 		Revision:  wf.Revision,
 	})
+	if err == nil && ctx.Err() != nil {
+		err = ctx.Err()
+	}
 	if res.ThreadID != "" {
 		s.thread = res.ThreadID
 	}
@@ -636,36 +658,36 @@ func (l *Loop) runTurn(ctx context.Context, s *session, ws *Workspace, log *slog
 		}
 		if err := l.Tracker.Defer(ctx, s.issue.ID, until, "runner deferred turn: "+res.Output); err != nil {
 			log.Error("defer failed, falling back to failure retry", "error", err)
-			l.schedule(s, RetryFailure, l.failureDelay(s.attempt))
+			w.schedule(s, RetryFailure, l.failureDelay(s.attempt))
 			return true
 		}
 		log.Info("turn deferred, attempt preserved", "turn", s.turn, "wake_at", until.UTC().Format(time.RFC3339))
 		l.closeRunnerSession(ctx, s.issue.ID)
-		delete(l.sessions, s.issue.ID)
+		w.finished = true
 		return true
 	}
 
 	if err != nil || res.Exit != TurnSuccess {
 		log.Info("turn failed, scheduling failure retry", "turn", s.turn, "error", err)
-		l.schedule(s, RetryFailure, l.failureDelay(s.attempt))
+		w.schedule(s, RetryFailure, l.failureDelay(s.attempt))
 		return true
 	}
 
 	if res.Settled {
-		return l.evaluateGate(ctx, s, res.Output, log)
+		return w.evaluateGate(ctx, s, res.Output, log)
 	}
 
 	stop, err := Reconcile(ctx, l.Tracker, []string{s.issue.ID})
 	if err != nil {
 		log.Error("mid-run reconcile failed", "error", err)
-		l.schedule(s, RetryContinuation, l.ContinuationDelay)
+		w.schedule(s, RetryContinuation, l.ContinuationDelay)
 		return true
 	}
 	if len(stop) > 0 {
-		l.terminal(ctx, s, "issue left active state mid-run")
+		w.terminal(ctx, s, "issue left active state mid-run")
 		return true
 	}
-	l.schedule(s, RetryContinuation, l.ContinuationDelay)
+	w.schedule(s, RetryContinuation, l.ContinuationDelay)
 	return true
 }
 
@@ -691,6 +713,11 @@ func (l *Loop) turnPrompt(s *session) (string, error) {
 // release, session teardown. Closing the bead itself belongs to the gate
 // layer.
 func (l *Loop) terminal(ctx context.Context, s *session, reason string) {
+	l.cleanup(ctx, s, reason)
+	delete(l.sessions, s.issue.ID)
+}
+
+func (l *Loop) cleanup(ctx context.Context, s *session, reason string) {
 	log := logging.WithIssue(l.Log, s.issue.ID)
 	log.Info("run terminal", "reason", reason)
 	l.closeRunnerSession(ctx, s.issue.ID)
@@ -700,12 +727,11 @@ func (l *Loop) terminal(ctx context.Context, s *session, reason string) {
 	if err := l.Tracker.Release(ctx, s.issue.ID); err != nil && !errors.Is(err, tracker.ErrNotOwner) {
 		log.Error("release failed", "error", err)
 	}
-	delete(l.sessions, s.issue.ID)
 }
 
 // schedule arms the retry queue for a session's issue.
-func (l *Loop) schedule(s *session, kind RetryKind, delay time.Duration) {
-	l.retries.Add(Retry{IssueID: s.issue.ID, Kind: kind, At: time.Now().Add(delay)})
+func (w *worker) schedule(s *session, kind RetryKind, delay time.Duration) {
+	w.retry = &Retry{IssueID: s.issue.ID, Kind: kind, At: time.Now().Add(delay)}
 }
 
 // closeRunnerSession releases the runner's per-session resources (agent
@@ -716,7 +742,10 @@ func (l *Loop) schedule(s *session, kind RetryKind, delay time.Duration) {
 // gate error schedules a gate-only re-evaluation on the SAME settled
 // output — the agent is never re-prompted for a gate that errored, and
 // the attempt is not consumed.
-func (l *Loop) evaluateGate(ctx context.Context, s *session, output string, log *slog.Logger) bool {
+func (w *worker) evaluateGate(ctx context.Context, s *session, output string, log *slog.Logger) bool {
+	// Closing the issue precedes tombstone writes and cleanup; a poll must let them finish.
+	w.settling.Store(true)
+	l := w.loop
 	outcome, gerr := l.Gates.Evaluate(ctx, GateRequest{
 		Issue:     s.issue,
 		Attempt:   s.attempt,
@@ -728,16 +757,16 @@ func (l *Loop) evaluateGate(ctx context.Context, s *session, output string, log 
 		log.Info("gate error, retrying gate without consuming attempt", "error", gerr)
 		l.closeRunnerSession(ctx, s.issue.ID)
 		s.gateOutput = output
-		l.schedule(s, RetryGate, l.ContinuationDelay)
+		w.schedule(s, RetryGate, l.ContinuationDelay)
 		return true
 	}
 	if outcome.Verdict == GateRed {
 		log.Info("gate red, scheduling failure retry with gate output")
 		s.lastGate = outcome.Output
-		l.schedule(s, RetryFailure, l.failureDelay(s.attempt))
+		w.schedule(s, RetryFailure, l.failureDelay(s.attempt))
 		return true
 	}
-	l.terminal(ctx, s, "gate green")
+	w.terminal(ctx, s, "gate green")
 	return true
 }
 

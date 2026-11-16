@@ -24,7 +24,7 @@ type fixture struct {
 	gate   *fakeGate
 	loader *Loader
 	spaces *WorkspaceManager
-	loop   *Loop
+	loop   *waitingLoop
 }
 
 func newFixture(t *testing.T, body string, steps ...func(TurnRequest) TurnResult) *fixture {
@@ -48,7 +48,14 @@ func newFixture(t *testing.T, body string, steps ...func(TurnRequest) TurnResult
 		loader: loader,
 	}
 	f.spaces = NewWorkspaceManager(filepath.Join(dir, "workspaces"), log)
-	f.loop = NewLoop(f.tr, loader, f.runner, f.gate, f.spaces, log)
+	f.loop = &waitingLoop{NewLoop(f.tr, loader, f.runner, f.gate, f.spaces, log)}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := f.loop.Close(ctx); err != nil {
+			t.Errorf("close fixture workers: %v", err)
+		}
+	})
 	f.loop.FailureDelay = func(int) time.Duration { return 0 }
 	f.loop.ContinuationDelay = 0
 	return f
@@ -812,7 +819,7 @@ case "$1" in
   show)
     if [ -f %q ]; then echo '{"status":"closed"}'; else echo '{"status":"open"}'; fi ;;
 esac`, poursFile, stateFile)
-	if err := os.WriteFile(script, []byte(scriptBody), 0o700); err != nil {
+	if err := os.WriteFile(script, []byte(scriptBody), 0o700); err != nil { // #nosec G306 -- executable fixture in a private test directory
 		t.Fatal(err)
 	}
 
@@ -820,12 +827,12 @@ esac`, poursFile, stateFile)
 	fixture := Formula{Name: "latus-1436"}
 
 	if err := m.Materialize(context.Background(), fixture); err != nil {
-		onDisk, _ := os.ReadFile(script)
+		onDisk, _ := os.ReadFile(script) // #nosec G304 -- test-owned executable fixture
 		t.Fatalf("first materialize: %v | script on disk:\n%s", err, onDisk)
 	}
 	if _, err := os.Stat(poursFile); err != nil {
 		ledger := m.loadLedger()
-		onDisk, _ := os.ReadFile(script)
+		onDisk, _ := os.ReadFile(script) // #nosec G304 -- test-owned executable fixture
 		out, runErr := m.run(context.Background(), "mol", "pour", "latus-1436")
 		t.Fatalf("pours missing after first pour: stat=%v ledger=%+v manual-run-out=%q manual-err=%v | script on disk:\n%s", err, ledger, out, runErr, onDisk)
 	}
@@ -848,9 +855,19 @@ esac`, poursFile, stateFile)
 
 func mustRead(t *testing.T, path string) string {
 	t.Helper()
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) // #nosec G304 -- test-owned fixture path
 	if err != nil {
 		t.Fatal(err)
 	}
 	return string(raw)
+}
+
+// waitingLoop keeps turn/gate protocol tests synchronous; scheduler tests use Loop directly.
+type waitingLoop struct{ *Loop }
+
+func (l *waitingLoop) Tick(ctx context.Context) error {
+	if err := l.Loop.Tick(ctx); err != nil {
+		return err
+	}
+	return l.Wait(ctx)
 }
