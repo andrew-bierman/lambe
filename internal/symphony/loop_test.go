@@ -1023,8 +1023,9 @@ func TestAmbiguousOrCorruptMaterializationNeverPoursAgain(t *testing.T) {
 
 type gateCloseRaceTracker struct {
 	tracker.Tracker
-	tr     *fakeTracker
-	closed bool
+	tr         *fakeTracker
+	closed     bool
+	omitClosed bool
 }
 
 func (tr gateCloseRaceTracker) Heartbeat(_ context.Context, id string) error {
@@ -1034,15 +1035,29 @@ func (tr gateCloseRaceTracker) Heartbeat(_ context.Context, id string) error {
 	return tracker.ErrNotOwner
 }
 
+func (tr gateCloseRaceTracker) Dispatchable(ctx context.Context, q tracker.DispatchQuery) ([]tracker.Issue, error) {
+	rows, err := tr.Tracker.Dispatchable(ctx, q)
+	if tr.omitClosed && len(q.Statuses) == 0 {
+		var filtered []tracker.Issue
+		for _, row := range rows {
+			if row.Status != tracker.StatusClosed {
+				filtered = append(filtered, row)
+			}
+		}
+		return filtered, err
+	}
+	return rows, err
+}
+
 func TestHeartbeatCloseRaceDoesNotCancelGateFinalization(t *testing.T) {
 	for _, tc := range []struct {
-		name             string
-		settling, closed bool
-	}{{"ordinary takeover", false, false}, {"own gate close", true, true}, {"takeover during gate", true, false}} {
+		name                         string
+		settling, closed, omitClosed bool
+	}{{"ordinary takeover", false, false, false}, {"own gate close", true, true, false}, {"closed omitted from default list", true, true, true}, {"takeover during gate", true, false, false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t, "body")
 			f.tr.set("i-1", tracker.StatusInProgress)
-			f.loop.Tracker = gateCloseRaceTracker{Tracker: f.tr, tr: f.tr, closed: tc.closed}
+			f.loop.Tracker = gateCloseRaceTracker{Tracker: f.tr, tr: f.tr, closed: tc.closed, omitClosed: tc.omitClosed}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			w := &worker{cancel: cancel, stop: workerRunning}

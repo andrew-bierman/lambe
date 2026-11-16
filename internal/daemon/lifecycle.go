@@ -339,6 +339,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		l.ControlTimeout = d.cycleBound()
 		l.CheckpointDir = filepath.Join(d.opts.StateDir, "sessions", strings.TrimSuffix(lockName, ".lock"))
 		if err := l.Restore(runCtx, d.opts.Actor); err != nil {
+			if errors.Is(err, symphony.ErrWorkspaceRootChanged) {
+				return err
+			}
 			d.log.Error("session recovery incomplete; healthy sessions continue", "error", err)
 		}
 		// Load responsibility formulas from the tracker's conventional

@@ -113,6 +113,9 @@ func (l *Loop) reconcileWorkers(ctx context.Context) {
 			// A gate can close its own issue after reconciliation but before heartbeat.
 			if w.settling.Load() {
 				issues, readErr := l.Tracker.Dispatchable(ctx, tracker.DispatchQuery{IDs: []string{id}})
+				if readErr == nil && len(issues) == 0 {
+					issues, readErr = l.Tracker.Dispatchable(ctx, tracker.DispatchQuery{IDs: []string{id}, Statuses: []string{tracker.StatusClosed}})
+				}
 				if readErr != nil {
 					l.Log.Warn("settling ownership recheck unavailable; keeping gate", "issue", id, "error", readErr)
 					continue

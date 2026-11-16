@@ -161,7 +161,10 @@ workspace:
 ```
 
 Relative roots resolve from the configuration file’s directory.
-`LAMBE_WORKSPACE_ROOT` overrides the file setting.
+`LAMBE_WORKSPACE_ROOT` overrides the file setting. Configure it before starting
+work; if saved checkpoints use another root, startup names both paths and
+refuses to resume until the previous root is restored or the workspace and
+checkpoint are deliberately migrated.
 
 ## Watching agent work
 
