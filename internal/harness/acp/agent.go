@@ -6,10 +6,12 @@ import "fmt"
 // that launches each agent in ACP mode over stdio. The table is deliberately
 // tiny: any other agent is reachable by passing Argv directly in Options.
 var agents = map[string][]string{
+	// The maintained adapter exposes Codex app-server over ACP.
+	"codex": {"codex-acp"},
 	// OpenCode exposes its ACP server as `opencode acp`.
 	"opencode": {"opencode", "acp"},
-	// Gemini CLI exposes its ACP server as `gemini acp`.
-	"gemini": {"gemini", "acp"},
+	// Gemini CLI exposes its ACP server as `gemini --acp`.
+	"gemini": {"gemini", "--acp"},
 }
 
 // Agents returns the harness names with a known ACP launch command.

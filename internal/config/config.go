@@ -45,11 +45,18 @@ type Tracker struct {
 	Path string
 }
 
+// ACP selects a known ACP agent or an explicit argv (command takes precedence).
+type ACP struct {
+	Agent   string
+	Command []string
+}
+
 // Config is the fully resolved daemon configuration.
 type Config struct {
 	Supervisor Supervisor
-	// Harness names the default agent backend: "pi" or "acp".
+	// Harness selects "pi", "codex", or a configurable "acp" backend.
 	Harness  string
+	ACP      ACP
 	Trackers []Tracker
 	// WorkflowPath is the resolved WORKFLOW.md location: an explicit
 	// workflow_path override if set, otherwise the first existing candidate
@@ -116,6 +123,7 @@ func Load(opts Options) (*Config, error) {
 
 	cfg := &Config{
 		Harness: harness,
+		ACP:     ACP{Agent: k.String("acp.agent")},
 		Supervisor: Supervisor{
 			TickSeconds:        k.Int("supervisor.tick_seconds"),
 			AttemptCap:         k.Int("supervisor.attempt_cap"),
@@ -125,6 +133,37 @@ func Load(opts Options) (*Config, error) {
 			HeartbeatTTLSecond: k.Int("supervisor.heartbeat_ttl_second"),
 		},
 		WorkflowPath: strings.TrimSpace(k.String("workflow_path")),
+	}
+
+	if cfg.ACP.Agent == "" {
+		cfg.ACP.Agent = "opencode"
+	}
+	if raw := k.Get("acp.command"); raw != nil {
+		items, ok := raw.([]any)
+		if !ok {
+			return nil, fmt.Errorf("acp.command must be a YAML list of arguments")
+		}
+		for i, item := range items {
+			arg, ok := item.(string)
+			if !ok || strings.IndexByte(arg, 0) >= 0 || (i == 0 && strings.TrimSpace(arg) == "") {
+				return nil, fmt.Errorf("acp.command[%d] must be a string without NUL (executable must not be empty)", i)
+			}
+			cfg.ACP.Command = append(cfg.ACP.Command, arg)
+		}
+		if len(items) == 0 {
+			return nil, fmt.Errorf("acp.command must contain an executable")
+		}
+		if strings.ContainsRune(cfg.ACP.Command[0], filepath.Separator) && !filepath.IsAbs(cfg.ACP.Command[0]) {
+			base := "."
+			if opts.File != "" {
+				base = filepath.Dir(opts.File)
+			}
+			absolute, err := filepath.Abs(filepath.Join(base, cfg.ACP.Command[0]))
+			if err != nil {
+				return nil, err
+			}
+			cfg.ACP.Command[0] = absolute
+		}
 	}
 
 	for _, raw := range k.Slices("trackers") {
@@ -249,6 +288,11 @@ func DefaultWorkflowPath(trackers []Tracker) string {
 
 func validate(cfg *Config) []error {
 	var errs []error
+	switch cfg.Harness {
+	case "pi", "codex", "acp":
+	default:
+		errs = append(errs, fmt.Errorf("harness must be pi, codex, or acp; got %q", cfg.Harness))
+	}
 
 	s := cfg.Supervisor
 	if s.TickSeconds <= 0 {

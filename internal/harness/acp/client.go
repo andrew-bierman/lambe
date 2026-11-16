@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -54,9 +55,11 @@ type inbound interface {
 // connection over its stdio (via the acp-go-sdk client side), and the
 // client-side callbacks every inbound agent request lands in.
 type client struct {
-	proc *agentProc
-	conn *acpsdk.ClientSideConnection
-	cbs  *clientCallbacks
+	proc          *agentProc
+	conn          *acpsdk.ClientSideConnection
+	cbs           *clientCallbacks
+	loadSession   bool
+	resumeSession bool
 }
 
 // agentProc is one spawned agent process in its own process group with stdin
@@ -308,7 +311,7 @@ func startClient(opts clientOptions, sink inbound) (*client, error) {
 // initialize performs the ACP initialize handshake, advertising lambe's
 // client capabilities: no fs, no terminal, no interactive auth.
 func (c *client) initialize(ctx context.Context) error {
-	_, err := c.conn.Initialize(ctx, acpsdk.InitializeRequest{
+	response, err := c.conn.Initialize(ctx, acpsdk.InitializeRequest{
 		ClientCapabilities: acpsdk.ClientCapabilities{},
 		ClientInfo:         &acpsdk.Implementation{Name: "lambe", Version: "0"},
 		ProtocolVersion:    1,
@@ -316,12 +319,12 @@ func (c *client) initialize(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("acp initialize: %w", err)
 	}
+	c.loadSession = response.AgentCapabilities.LoadSession
+	c.resumeSession = response.AgentCapabilities.SessionCapabilities.Resume != nil
 	return nil
 }
 
 // newSession creates a fresh ACP session rooted at cwd and returns its id.
-// ACP sessions live inside the agent process; there is no cross-process
-// resume, which is why the driver reports Resume as unsupported.
 func (c *client) newSession(ctx context.Context, cwd string) (string, error) {
 	resp, err := c.conn.NewSession(ctx, acpsdk.NewSessionRequest{
 		Cwd:        cwd,
@@ -329,6 +332,9 @@ func (c *client) newSession(ctx context.Context, cwd string) (string, error) {
 	})
 	if err != nil {
 		return "", fmt.Errorf("acp session/new: %w", err)
+	}
+	if resp.SessionId == "" {
+		return "", fmt.Errorf("acp session/new returned an empty session id")
 	}
 	return string(resp.SessionId), nil
 }
@@ -378,4 +384,43 @@ func (c *client) Close(ctx context.Context, grace time.Duration) error {
 	case <-ctx.Done():
 	}
 	return c.proc.Terminate(ctx, grace)
+}
+
+func (c *client) load(ctx context.Context, sessionID, cwd string) error {
+	if !c.loadSession && !c.resumeSession {
+		return ErrResumeNotSupported
+	}
+	var err error
+	if c.resumeSession {
+		_, err = c.conn.ResumeSession(ctx, acpsdk.ResumeSessionRequest{SessionId: acpsdk.SessionId(sessionID), Cwd: cwd, McpServers: []acpsdk.McpServer{}})
+		var unsupported *acpsdk.RequestError
+		if err != nil && errors.As(err, &unsupported) && unsupported.Code == -32601 && !c.loadSession {
+			return ErrResumeNotSupported
+		}
+		if err == nil || !c.loadSession || !errors.As(err, &unsupported) || unsupported.Code != -32601 {
+			return sessionRestoreError(err, sessionID)
+		}
+	}
+	_, err = c.conn.LoadSession(ctx, acpsdk.LoadSessionRequest{SessionId: acpsdk.SessionId(sessionID), Cwd: cwd, McpServers: []acpsdk.McpServer{}})
+	return sessionRestoreError(err, sessionID)
+}
+
+func sessionRestoreError(err error, sessionID string) error {
+	if err != nil {
+		var rpcErr *acpsdk.RequestError
+		if errors.As(err, &rpcErr) {
+			var data struct {
+				SessionID string `json:"sessionId"`
+				Details   string `json:"details"`
+			}
+			encoded, _ := json.Marshal(rpcErr.Data)
+			_ = json.Unmarshal(encoded, &data)
+			// shortcut: codex-acp 2.6 reports empty rollouts as InternalError; remove that case when it uses resource-not-found.
+			if (rpcErr.Code == -32002 && data.SessionID == sessionID) || (rpcErr.Code == -32603 && data.Details == "no rollout found for thread id "+sessionID) {
+				return fmt.Errorf("%w: %w", ErrSessionNotFound, err)
+			}
+		}
+		return fmt.Errorf("acp restore session %s: %w", sessionID, err)
+	}
+	return nil
 }

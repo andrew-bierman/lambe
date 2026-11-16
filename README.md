@@ -1,5 +1,7 @@
 # lambe
 
+<img src="docs/assets/lambe-mascot.png" alt="Lambe, a colorful friendly lambeosaurus" width="180">
+
 [![CI](https://github.com/andrew-bierman/lambe/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/andrew-bierman/lambe/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/andrew-bierman/lambe.svg)](https://pkg.go.dev/github.com/andrew-bierman/lambe)
 [![Go Report Card](https://goreportcard.com/badge/github.com/andrew-bierman/lambe)](https://goreportcard.com/report/github.com/andrew-bierman/lambe)
@@ -25,7 +27,7 @@ verified completion, is the product.
 
 ## Quickstart
 
-Install (Go 1.26+):
+Install (Go 1.27+):
 
 ```sh
 go install github.com/andrew-bierman/lambe/cmd/lambe@latest
@@ -38,38 +40,32 @@ through `gh auth login` and `gh auth setup-git`). Install with:
 GOPRIVATE=github.com/andrew-bierman/lambe go install github.com/andrew-bierman/lambe/cmd/lambe@latest
 ```
 
-Prebuilt static binaries for macOS and Linux are published via GoReleaser on
-the releases page; a Homebrew tap is planned.
+No GitHub releases are published yet. The commands above install from the
+upstream repository; they do not use a local checkout.
 
-Install `bd` and `pi` and authenticate Pi with your model provider first.
-Pi needs a current Node.js runtime; check `node --version` and `pi --help`
-in the same shell you will use to start lambe.
+Install `bd` and your chosen agent harness. Pi is the default; authenticate it
+with your model provider before starting Lambe. For Codex or another ACP agent,
+see [Agent harnesses](#agent-harnesses).
 
-Single machine — lambe defaults to the current directory's Beads tracker.
-Run from the project root containing `.beads` (initialize it with `bd init`
-if needed), then create `WORKFLOW.md` with the
-agent instructions and a completion gate before starting:
+On a single machine, start from the project containing your Beads tracker:
 
 ```sh
 cd ~/Code/my-beads-repo
-gh api repos/andrew-bierman/lambe/contents/WORKFLOW.md -H 'Accept: application/vnd.github.raw' > WORKFLOW.md
-mkdir -p .beads/formulas
-# Go example: replace the command with your project's actual checks.
-cat > .beads/formulas/verify.formula.toml <<'EOF'
-[trigger]
-command = "exit 0" # Manual tasks only; no automatic materialization.
+lambe init
+```
 
-[gate]
-type = "shell"
-command = "go test ./..."
-EOF
+Init creates configuration and starter workflow files, preserving existing
+workflows. Review the generated prompt, workspace hooks, responsibility trigger,
+and completion gate before running:
+
+```sh
 lambe run
 ```
 
-Edit `WORKFLOW.md` for your project before dispatching work. A gate is
-required: without one, lambe cannot verify completion and parks the task.
-Agents work in separate directories; use the workflow's `after_create`
-hook to clone your project into each workspace before running project checks.
+A gate must prove completion with your project's checks. Agents work in separate
+directories; configure the workflow's `after_create` hook to clone the project
+into each workspace before running those checks. The generated CI example
+contains placeholders you must replace for your repository.
 
 To use a tracker elsewhere, create a config file and pass it to both commands:
 
@@ -96,6 +92,42 @@ lambe status
 `lambe status` prints the current snapshot: agents, assignments, gate results,
 and anything waiting on a human. `lambe version` prints the build version.
 
+## Agent harnesses
+
+`lambe run` starts and supervises the configured agent itself. You do not need
+to start a separate Pi or Codex session. `lambe status` reads the tracker; it
+does not start another agent.
+
+Pi remains the default. To select Codex during setup:
+
+```sh
+npm install -g @agentclientprotocol/codex-acp
+lambe init -harness codex
+```
+
+Authenticate Codex before running Lambe, then review the generated workflow
+and completion gate. Existing configurations can set `harness: codex` instead
+of running init again. Codex runs through the maintained
+[Codex ACP adapter](https://github.com/agentclientprotocol/codex-acp); it uses
+the bundled Codex executable unless `CODEX_PATH` selects another one.
+
+Other ACP agents can use a known agent name or an explicit argv:
+
+```yaml
+harness: acp
+acp:
+  agent: opencode
+  # Alternatively, command overrides agent. Arguments are never shell-split.
+  # command: ["/absolute/path/to/my-agent", "--acp"]
+```
+
+Relative executable paths containing a slash resolve from the config file's
+directory. Missing executables and unknown harness names fail startup before
+claiming work. Backends advertising `session/resume` reopen without replaying old history;
+`loadSession` is the fallback. A backend without either capability restarts
+only when Lambe can supply the full task prompt, with a diagnostic. Lambe records the actual
+backend thread before prompting. Pi reopens its saved workspace session.
+
 ## Adapter seams
 
 lambe is built around a small set of seams. What exists today:
@@ -103,7 +135,7 @@ lambe is built around a small set of seams. What exists today:
 | Seam | Default | Alternatives |
 | --- | --- | --- |
 | Tracker | Beads (hub, repo, or in-repo `.beads`) | Linear / GitHub / Jira via the Symphony adapter surface |
-| Harness | Pi | ACP next |
+| Harness | Pi | Codex through ACP, configurable ACP agents |
 | Store | Embedded Beads local store | — |
 | Gates | `shell`, `gh:run`, `gh:pr` | — |
 | Surfaces | none yet | MCP, Rex planned |
@@ -162,8 +194,10 @@ versions without checkpoints require inspection before releasing them for a
 fresh run. Do not release one while its old agent is still working.
 
 Checkpoints preserve Lambe's continuation state. Backend conversation resumption
-also depends on the harness: Pi reopens its workspace session; the current ACP
-driver creates a new backend conversation. A replay can repeat an interrupted
+also depends on the harness: Pi reopens its workspace session; ACP reopens the
+recorded backend session when the agent advertises resume or load support.
+Switching harnesses preserves workspace files and starts a new conversation
+at a full-task boundary; conversation content is not translated between agents. A replay can repeat an interrupted
 tool operation, so tasks with external side effects still need idempotent steps.
 
 ## Symphony conformance and divergence

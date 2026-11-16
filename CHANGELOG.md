@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Codex through the maintained ACP adapter, configurable ACP agent commands,
+  harness selection during init, and startup checks for missing executables.
+  ACP restores advertised saved sessions and records native backend thread IDs
+  before prompting; replayed history is excluded from new turn output.
+
 - Project scaffold: configuration loading with precedence and env flattening
   (`internal/config`), structured logging (`internal/logging`), and mise-pinned
   Go toolchain.

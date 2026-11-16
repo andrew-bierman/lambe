@@ -5,13 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/andrew-bierman/lambe/internal/config"
 	"github.com/andrew-bierman/lambe/internal/harness"
+	acpdrv "github.com/andrew-bierman/lambe/internal/harness/acp"
 	"github.com/andrew-bierman/lambe/internal/logging"
 	"github.com/andrew-bierman/lambe/internal/symphony"
 	"github.com/andrew-bierman/lambe/internal/tracker"
@@ -39,9 +44,11 @@ func TestAgentStderrKeepsStructuredSessionDiagnostics(t *testing.T) {
 // the real drivers' 1024-buffered stream, so a run that emits more events
 // than the buffer holds deadlocks unless something drains the stream.
 type fakeDriver struct {
-	events  chan harness.Event
-	startFn func(*fakeDriver) error
-	runFn   func(*fakeDriver, string) harness.Outcome
+	sessionID string
+	statsFn   func() (harness.SessionStats, error)
+	events    chan harness.Event
+	startFn   func(*fakeDriver) error
+	runFn     func(*fakeDriver, string) harness.Outcome
 
 	mu     sync.Mutex
 	closes int
@@ -68,7 +75,10 @@ func (d *fakeDriver) Steer(context.Context, string) error  { return nil }
 func (d *fakeDriver) Abort(context.Context) error          { return nil }
 func (d *fakeDriver) Resume(context.Context, string) error { return nil }
 func (d *fakeDriver) SessionStats(context.Context) (harness.SessionStats, error) {
-	return harness.SessionStats{}, nil
+	if d.statsFn != nil {
+		return d.statsFn()
+	}
+	return harness.SessionStats{SessionID: d.sessionID}, nil
 }
 
 func (d *fakeDriver) Run(_ context.Context, prompt string) (harness.Outcome, error) {
@@ -451,5 +461,257 @@ func TestAttemptPersisterRetriesOpeningAfterTransientFailure(t *testing.T) {
 	}
 	if got := rec.recorded(); len(got) != 1 || got[0].ProcessIdentity != "test:identity" {
 		t.Fatalf("binding did not recover: %+v", got)
+	}
+}
+
+func TestHarnessRunnerRecordsNativeThreadBeforePrompt(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(map[bool]string{false: "persisted", true: "checkpoint-failure"}[fail], func(t *testing.T) {
+			drv := newFakeDriver()
+			drv.sessionID = "backend-native-thread"
+			saved := ""
+			prompted := false
+			drv.runFn = func(_ *fakeDriver, _ string) harness.Outcome {
+				if saved != drv.sessionID {
+					t.Fatal("prompted before persisting actual backend identity")
+				}
+				prompted = true
+				return harness.Outcome{Kind: harness.OutcomeSettled}
+			}
+			runner := newHarnessRunner("acp", nil)
+			runner.factory = func(symphony.TurnRequest) (harness.Driver, error) { return drv, nil }
+			defer runner.CloseSession(t.Context(), "issue")
+			res, err := runner.RunTurn(t.Context(), symphony.TurnRequest{SessionID: "issue", Prompt: "work", RecordThread: func(id, _ string) error {
+				if fail {
+					return errors.New("checkpoint unavailable")
+				}
+				saved = id
+				return nil
+			}})
+			if fail {
+				if err == nil || prompted || drv.closeCount() != 1 {
+					t.Fatalf("failed checkpoint started work: prompted=%v closed=%d err=%v", prompted, drv.closeCount(), err)
+				}
+			} else if err != nil || !prompted || res.ThreadID != drv.sessionID {
+				t.Fatalf("backend thread lost: %+v, %v", res, err)
+			}
+		})
+	}
+}
+
+func TestHarnessCommandSelection(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		cfg  config.Config
+		want []string
+	}{
+		{"pi", config.Config{Harness: "pi"}, []string{"pi"}},
+		{"codex", config.Config{Harness: "codex"}, []string{"codex-acp"}},
+		{"gemini", config.Config{Harness: "acp", ACP: config.ACP{Agent: "gemini"}}, []string{"gemini", "--acp"}},
+		{"custom", config.Config{Harness: "acp", ACP: config.ACP{Command: []string{"my-agent", "argument with spaces"}}}, []string{"my-agent", "argument with spaces"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := HarnessCommand(&tt.cfg)
+			if err != nil || !slices.Equal(got, tt.want) {
+				t.Fatalf("launch argv=%v, %v", got, err)
+			}
+		})
+	}
+	if _, err := HarnessCommand(&config.Config{Harness: "typo"}); err == nil {
+		t.Fatal("unknown harness silently selected Pi")
+	}
+	t.Setenv("PATH", t.TempDir())
+	if err := CheckHarness(&config.Config{Harness: "codex"}); err == nil || !strings.Contains(err.Error(), "codex-acp") {
+		t.Fatalf("missing executable lacks startup guidance: %v", err)
+	}
+}
+
+func TestMissingFirstTurnSessionRecreatesOnlyWithFullPrompt(t *testing.T) {
+	for _, turn := range []int{1, 2} {
+		t.Run(fmt.Sprintf("turn-%d", turn), func(t *testing.T) {
+			runner := newHarnessRunner("acp", nil)
+			starts := 0
+			prompted := false
+			runner.factory = func(req symphony.TurnRequest) (harness.Driver, error) {
+				starts++
+				d := newFakeDriver()
+				if req.ThreadID != "" {
+					d.startFn = func(*fakeDriver) error { return acpdrv.ErrSessionNotFound }
+				} else {
+					d.sessionID = "replacement-thread"
+					d.runFn = func(_ *fakeDriver, prompt string) harness.Outcome {
+						if prompt != "complete original task" {
+							t.Fatal("lost full first-turn prompt")
+						}
+						prompted = true
+						return harness.Outcome{Kind: harness.OutcomeSettled}
+					}
+				}
+				return d, nil
+			}
+			defer runner.CloseSession(t.Context(), "issue")
+			result, err := runner.RunTurn(t.Context(), symphony.TurnRequest{SessionID: "issue", ThreadID: "empty-thread", Turn: turn, Prompt: "complete original task"})
+			if turn == 1 {
+				if err != nil || !prompted || starts != 2 || result.ThreadID != "replacement-thread" {
+					t.Fatalf("first-turn recovery = %+v, %v, starts=%d", result, err, starts)
+				}
+			} else if err == nil || prompted || starts != 1 {
+				t.Fatalf("recreated later conversation without its history: %v, starts=%d", err, starts)
+			}
+		})
+	}
+}
+
+func TestPiThreadDoesNotDependOnUsageStats(t *testing.T) {
+	d := newFakeDriver()
+	d.statsFn = func() (harness.SessionStats, error) {
+		t.Fatal("Pi stats must not gate a prompt")
+		return harness.SessionStats{}, errors.New("stats unsupported")
+	}
+	d.runFn = func(*fakeDriver, string) harness.Outcome { return harness.Outcome{Kind: harness.OutcomeSettled} }
+	runner := newHarnessRunner("pi", nil)
+	runner.factory = func(symphony.TurnRequest) (harness.Driver, error) { return d, nil }
+	defer runner.CloseSession(t.Context(), "issue")
+	res, err := runner.RunTurn(t.Context(), symphony.TurnRequest{SessionID: "issue", ThreadID: "preserved-pi-session", Turn: 2})
+	if err != nil || res.ThreadID != "preserved-pi-session" {
+		t.Fatalf("Pi resumed a different thread: %+v, %v", res, err)
+	}
+}
+
+func TestUnsupportedResumeRestartsAtFullTaskBoundary(t *testing.T) {
+	runner := newHarnessRunner("acp", nil)
+	creates := 0
+	runner.factory = func(req symphony.TurnRequest) (harness.Driver, error) {
+		creates++
+		d := newFakeDriver()
+		d.sessionID = "replacement"
+		if req.ThreadID != "" {
+			d.startFn = func(*fakeDriver) error { return acpdrv.ErrResumeNotSupported }
+		} else {
+			d.runFn = func(_ *fakeDriver, prompt string) harness.Outcome {
+				if prompt != "full original task" {
+					t.Fatal("fresh conversation received continuation fragment")
+				}
+				return harness.Outcome{Kind: harness.OutcomeSettled}
+			}
+		}
+		return d, nil
+	}
+	defer runner.CloseSession(t.Context(), "issue")
+	res, err := runner.RunTurn(t.Context(), symphony.TurnRequest{SessionID: "issue", ThreadID: "old-session", Turn: 1, Prompt: "full original task"})
+	if err != nil || res.ThreadID != "replacement" || creates != 2 {
+		t.Fatalf("unsupported backend stuck across attempts: %+v, %v, creates=%d", res, err, creates)
+	}
+}
+
+func TestForeignOrLegacyThreadNeverLoadsIntoAnotherHarness(t *testing.T) {
+	for _, origin := range []string{"pi", "acp:other", ""} {
+		for _, turn := range []int{1, 2} {
+			t.Run(fmt.Sprintf("%s-turn-%d", origin, turn), func(t *testing.T) {
+				runner := newHarnessRunner("acp", nil)
+				creates := 0
+				runner.factory = func(req symphony.TurnRequest) (harness.Driver, error) {
+					creates++
+					if req.ThreadID != "" {
+						t.Fatal("sent incompatible session to backend")
+					}
+					d := newFakeDriver()
+					d.sessionID = "new-native-id"
+					d.runFn = func(*fakeDriver, string) harness.Outcome { return harness.Outcome{Kind: harness.OutcomeSettled} }
+					return d, nil
+				}
+				defer runner.CloseSession(t.Context(), "issue")
+				thread := sessionIDFor("issue")
+				if origin != "" {
+					thread = "foreign-native-thread"
+				}
+				res, err := runner.RunTurn(t.Context(), symphony.TurnRequest{SessionID: "issue", ThreadID: thread, ThreadHarness: origin, Turn: turn})
+				if turn == 1 {
+					if err != nil || creates != 1 || res.ThreadID != "new-native-id" || res.ThreadHarness != "acp" {
+						t.Fatalf("migration failed: %+v, %v", res, err)
+					}
+				} else if err == nil || creates != 0 {
+					t.Fatalf("fresh backend received continuation instead of full task: %v, creates=%d", err, creates)
+				}
+			})
+		}
+	}
+}
+
+func TestTransientStartupFailureNeverDiscardsSavedThread(t *testing.T) {
+	for _, attempt := range []int{1, 2} {
+		t.Run(fmt.Sprintf("attempt-%d", attempt), func(t *testing.T) {
+			runner := newHarnessRunner("acp", nil)
+			creates := 0
+			prompted := false
+			runner.factory = func(req symphony.TurnRequest) (harness.Driver, error) {
+				creates++
+				d := newFakeDriver()
+				d.sessionID = "reconstructed-session"
+				if req.ThreadID != "" {
+					d.startFn = func(*fakeDriver) error { return errors.New("restore transport failed") }
+				} else {
+					d.runFn = func(_ *fakeDriver, prompt string) harness.Outcome {
+						if prompt != "full task" {
+							t.Fatal("lost full task prompt")
+						}
+						prompted = true
+						return harness.Outcome{Kind: harness.OutcomeSettled}
+					}
+				}
+				return d, nil
+			}
+			defer runner.CloseSession(t.Context(), "issue")
+			res, err := runner.RunTurn(t.Context(), symphony.TurnRequest{SessionID: "issue", ThreadID: "old-session", Turn: 1, Attempt: attempt, Prompt: "full task"})
+			if err == nil || prompted || creates != 1 || res.ThreadID != "" {
+				t.Fatalf("discarded history on transient failure: err=%v, creates=%d", err, creates)
+			}
+		})
+	}
+}
+
+func TestCancellationBeforePromptRetiresStartedAgent(t *testing.T) {
+	for _, phase := range []string{"startup", "checkpoint"} {
+		t.Run(phase, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			d := newFakeDriver()
+			d.sessionID = "native-session"
+			if phase == "startup" {
+				d.startFn = func(*fakeDriver) error { cancel(); return nil }
+			}
+			d.runFn = func(*fakeDriver, string) harness.Outcome {
+				t.Fatal("prompted after cancellation")
+				return harness.Outcome{}
+			}
+			runner := newHarnessRunner("acp", nil)
+			runner.factory = func(symphony.TurnRequest) (harness.Driver, error) { return d, nil }
+			_, err := runner.RunTurn(ctx, symphony.TurnRequest{SessionID: "issue", RecordThread: func(string, string) error {
+				if phase == "checkpoint" {
+					cancel()
+				}
+				return nil
+			}})
+			if !errors.Is(err, context.Canceled) || d.closeCount() != 1 {
+				t.Fatalf("canceled startup retained agent: %v, closes=%d", err, d.closeCount())
+			}
+		})
+	}
+}
+
+func TestSwitchingBackToPiStartsUniqueConversation(t *testing.T) {
+	runner := newHarnessRunner("pi", nil)
+	runner.factory = func(req symphony.TurnRequest) (harness.Driver, error) {
+		if req.ThreadID == "" || req.ThreadID == sessionIDFor("issue") {
+			t.Fatal("reopened stale Pi conversation")
+		}
+		d := newFakeDriver()
+		d.runFn = func(*fakeDriver, string) harness.Outcome { return harness.Outcome{Kind: harness.OutcomeSettled} }
+		return d, nil
+	}
+	defer runner.CloseSession(t.Context(), "issue")
+	res, err := runner.RunTurn(t.Context(), symphony.TurnRequest{SessionID: "issue", ThreadID: "codex-thread", ThreadHarness: "codex", Turn: 1})
+	if err != nil || res.ThreadID == sessionIDFor("issue") {
+		t.Fatalf("stale conversation: %+v %v", res, err)
 	}
 }

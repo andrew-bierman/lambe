@@ -19,6 +19,9 @@ import (
 	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
+// ErrRestartFromFullPrompt requests a full task prompt without consuming an attempt.
+var ErrRestartFromFullPrompt = errors.New("saved conversation unavailable; restart with full task prompt")
+
 // AgentRunner runs one agent turn in a workspace. Implementations own the
 // agent process; the loop only sequences turns, prompts, and gates.
 type AgentRunner interface {
@@ -47,14 +50,17 @@ type CompletionFinalizer interface {
 
 // TurnRequest is one turn of an attempt.
 type TurnRequest struct {
-	SessionID string
-	ThreadID  string
-	Issue     tracker.Issue
-	Attempt   int
-	Turn      int
-	Prompt    string
-	Workspace string
-	Revision  Revision
+	// RecordThread saves the backend conversation and originating harness before prompting.
+	RecordThread  func(string, string) error `json:"-"`
+	SessionID     string
+	ThreadID      string
+	ThreadHarness string
+	Issue         tracker.Issue
+	Attempt       int
+	Turn          int
+	Prompt        string
+	Workspace     string
+	Revision      Revision
 }
 
 // TurnExit classifies how a turn ended.
@@ -77,10 +83,11 @@ const (
 // completion signal (the agent declares the work finished); only settled
 // turns are gated.
 type TurnResult struct {
-	ThreadID string
-	Exit     TurnExit
-	Output   string
-	Settled  bool
+	ThreadHarness string
+	ThreadID      string
+	Exit          TurnExit
+	Output        string
+	Settled       bool
 	// WakeAt is the earliest re-dispatch time for TurnDeferred turns;
 	// zero substitutes DefaultDeferHorizon.
 	WakeAt time.Time
@@ -348,14 +355,15 @@ func (m *BeadsMaterializer) Materialize(ctx context.Context, f Formula) error {
 // session is one supervised issue: the pinned workflow revision, the
 // attempt counter, the live thread, and the workspace key.
 type session struct {
-	issue     tracker.Issue
-	wf        *Workflow
-	attempt   int
-	turn      int
-	thread    string
-	lastGate  string
-	key       string
-	workspace string
+	issue         tracker.Issue
+	wf            *Workflow
+	attempt       int
+	turn          int
+	thread        string
+	threadHarness string
+	lastGate      string
+	key           string
+	workspace     string
 	// gateOutput holds the settled output between a gate error and its
 	// gate-only re-evaluation, so the agent is never re-prompted while the
 	// gate retries on the same output.
@@ -652,7 +660,7 @@ func (l *Loop) dispatch(ctx context.Context) error {
 		s.issue = claimed
 		if l.CheckpointDir != "" {
 			if err := l.stopRecordedAgent(ctx, claimed.ID); err != nil {
-				l.recovery[claimed.ID] = checkpoint{Version: 1, Phase: checkpointClaiming, Issue: claimed, Workflow: s.wf, Attempt: s.attempt, Turn: s.turn, Thread: s.thread, Key: s.key, Workspace: s.workspace, Retry: &Retry{IssueID: claimed.ID, Kind: kind, At: time.Now()}}
+				l.recovery[claimed.ID] = checkpoint{Version: 1, Phase: checkpointClaiming, Issue: claimed, Workflow: s.wf, Attempt: s.attempt, Turn: s.turn, Thread: s.thread, ThreadHarness: s.threadHarness, Key: s.key, Workspace: s.workspace, Retry: &Retry{IssueID: claimed.ID, Kind: kind, At: time.Now()}}
 				l.Log.Error("claim recovery blocked", "issue", claimed.ID, "error", err)
 				continue
 			}
@@ -755,23 +763,41 @@ func (w *worker) runTurn(ctx context.Context, s *session, ws *Workspace, log *sl
 		return true
 	}
 	res, err := l.Runner.RunTurn(ctx, TurnRequest{
-		SessionID: s.issue.ID,
-		ThreadID:  s.thread,
-		Issue:     s.issue,
-		Attempt:   s.attempt,
-		Turn:      s.turn,
-		Prompt:    prompt,
-		Workspace: ws.Dir,
-		Revision:  wf.Revision,
+		RecordThread: func(thread, backend string) error {
+			previous, previousBackend := s.thread, s.threadHarness
+			s.thread, s.threadHarness = thread, backend
+			if err := l.saveCheckpoint(s, checkpointRunning, nil); err != nil {
+				s.thread, s.threadHarness = previous, previousBackend
+				return err
+			}
+			return nil
+		},
+		SessionID:     s.issue.ID,
+		ThreadID:      s.thread,
+		ThreadHarness: s.threadHarness,
+		Issue:         s.issue,
+		Attempt:       s.attempt,
+		Turn:          s.turn,
+		Prompt:        prompt,
+		Workspace:     ws.Dir,
+		Revision:      wf.Revision,
 	})
 	w.interrupted = ctx.Err() != nil
 	if err == nil && w.interrupted {
 		err = ctx.Err()
 	}
 	if res.ThreadID != "" {
-		s.thread = res.ThreadID
+		s.thread, s.threadHarness = res.ThreadID, res.ThreadHarness
 	}
 	l.Spaces.RunAfterRun(ctx, ws.Dir, wf.Hooks)
+
+	if errors.Is(err, ErrRestartFromFullPrompt) {
+		l.closeRunnerSession(ctx, s.issue.ID)
+		s.turn = 0
+		w.interrupted = false
+		w.schedule(s, RetryContinuation, l.ContinuationDelay)
+		return true
+	}
 
 	if errors.Is(err, proc.ErrBindingUnavailable) {
 		// The child never received a prompt; preserve the attempt and replay this turn.

@@ -104,6 +104,10 @@ func runDaemon(args []string) error {
 		return fmt.Errorf("read %s: %w; create the agent workflow first (see https://github.com/andrew-bierman/lambe#quickstart)", workflowPath, err)
 	}
 
+	if err := daemon.CheckHarness(cfg); err != nil {
+		return err
+	}
+
 	d, err := daemon.New(daemonOptions(cfg, configPath))
 	if err != nil {
 		return err
@@ -301,8 +305,12 @@ func say(out io.Writer, format string, args ...any) {
 func runInit(args []string, in io.Reader, out io.Writer) error {
 	fs := flag.NewFlagSet("lambe init", flag.ContinueOnError)
 	configFile := fs.String("config", "", "path to write the lambe config to")
+	harness := fs.String("harness", "pi", "agent backend: pi, codex, or acp")
 	nonInteractive := fs.Bool("non-interactive", false, "skip all prompts and use defaults")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if _, err := daemon.HarnessCommand(&config.Config{Harness: *harness}); err != nil {
 		return err
 	}
 
@@ -335,11 +343,11 @@ func runInit(args []string, in io.Reader, out io.Writer) error {
 	}
 	cfgYAML := fmt.Sprintf("# lambe configuration written by lambe init.\n"+
 		"# See https://github.com/andrew-bierman/lambe for every key.\n"+
-		"harness: pi\n"+
+		"harness: %s\n"+
 		"trackers:\n"+
 		"  - name: local\n"+
 		"    type: repo\n"+
-		"    path: %q\n", absTracker)
+		"    path: %q\n", *harness, absTracker)
 	if err := os.WriteFile(configPath, []byte(cfgYAML), 0o600); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}

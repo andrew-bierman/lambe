@@ -262,3 +262,20 @@ func isolatedConfigDir(t *testing.T) string {
 	}
 	return dir
 }
+
+func TestInitChoosesCodex(t *testing.T) {
+	home := isolatedConfigDir(t)
+	project := t.TempDir()
+	t.Chdir(project)
+	if err := os.Mkdir(".beads", 0o750); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runInit([]string{"-non-interactive", "-harness", "codex"}, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(config.Options{File: filepath.Join(home, "lambe", "config.yaml"), Env: []string{}})
+	if err != nil || cfg.Harness != "codex" {
+		t.Fatalf("Codex preference lost during setup: %+v, %v", cfg, err)
+	}
+}

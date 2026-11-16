@@ -301,3 +301,51 @@ func TestShutdownDuringPreparationPreservesAttempt(t *testing.T) {
 		t.Fatal("prompted during preparation")
 	}
 }
+
+func TestNativeThreadIsDurableBeforePrompt(t *testing.T) {
+	f := newFixture(t, "work {{ issue }}")
+	f.loop.CheckpointDir = filepath.Join(f.dir, "sessions")
+	f.loop.Runner = turnFunc(func(_ context.Context, req TurnRequest) (TurnResult, error) {
+		if req.RecordThread == nil {
+			return TurnResult{}, errors.New("no durable thread recorder")
+		}
+		if err := req.RecordThread("actual-backend-thread", "codex"); err != nil {
+			return TurnResult{}, err
+		}
+		saved, err := f.loop.readCheckpoint(f.loop.checkpointPath(req.SessionID))
+		if err != nil || saved.Thread != "actual-backend-thread" || saved.ThreadHarness != "codex" || saved.Phase != checkpointRunning {
+			return TurnResult{}, fmt.Errorf("thread not durable before prompt: %+v, %v", saved, err)
+		}
+		return TurnResult{Exit: TurnSuccess}, nil
+	})
+	if err := f.loop.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := f.loop.readCheckpoint(f.loop.checkpointPath("i-1"))
+	if err != nil || saved.Thread != "actual-backend-thread" || saved.ThreadHarness != "codex" || saved.Phase != checkpointRetry {
+		t.Fatalf("thread not retained across continuation: %+v, %v", saved, err)
+	}
+}
+
+func TestUnavailableConversationRestartsFullPromptWithinAttempt(t *testing.T) {
+	f := newFixture(t, "full task {{ issue }}")
+	var calls []TurnRequest
+	f.loop.Runner = turnFunc(func(_ context.Context, req TurnRequest) (TurnResult, error) {
+		calls = append(calls, req)
+		if len(calls) == 1 {
+			return TurnResult{Exit: TurnSuccess, ThreadID: "old", ThreadHarness: "acp"}, nil
+		}
+		if len(calls) == 2 {
+			return TurnResult{Exit: TurnFailure}, ErrRestartFromFullPrompt
+		}
+		return TurnResult{Exit: TurnSuccess}, nil
+	})
+	for range 3 {
+		if err := f.loop.Tick(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(calls) != 3 || calls[1].Turn != 2 || calls[2].Turn != 1 || calls[2].Attempt != calls[0].Attempt || calls[2].ThreadID != "old" || calls[2].Prompt != calls[0].Prompt {
+		t.Fatalf("lost full-prompt recovery: %+v", calls)
+	}
+}
