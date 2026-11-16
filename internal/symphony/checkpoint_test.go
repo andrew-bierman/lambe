@@ -382,7 +382,7 @@ func TestChangedWorkspaceRootRefusesRecoveryAndPreservesSavedWork(t *testing.T) 
 	if err != nil || string(after) != string(before) {
 		t.Fatal("root change destroyed continuation state")
 	}
-	if data, err := os.ReadFile(precious); err != nil || string(data) != "uncommitted work" {
+	if data, err := os.ReadFile(precious); err != nil || string(data) != "uncommitted work" { // #nosec G304 -- path is inside this test's temporary workspace.
 		t.Fatal("root change destroyed workspace")
 	}
 	if len(f.runner.recorded()) != 0 {
