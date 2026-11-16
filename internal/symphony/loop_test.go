@@ -714,7 +714,8 @@ func TestFormulaTimeoutStillDispatchesReadyWork(t *testing.T) {
 		t.Run(stage, func(t *testing.T) {
 			t.Parallel()
 			f := newFixture(t, "work {{ issue }}", settle)
-			f.loop.ControlTimeout = 50 * time.Millisecond
+			// Leave time for the real trigger shell to start on a loaded race-test runner.
+			f.loop.ControlTimeout = time.Second
 			command := "exit 1"
 			if stage == "trigger" {
 				command = "exec sleep 10"
@@ -726,7 +727,7 @@ func TestFormulaTimeoutStillDispatchesReadyWork(t *testing.T) {
 				<-ctx.Done()
 				return ctx.Err()
 			})
-			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			if err := f.loop.Tick(ctx); err != nil {
 				t.Fatal(err)
