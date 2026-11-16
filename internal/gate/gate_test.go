@@ -800,7 +800,7 @@ type loopFixture struct {
 	agent  *agentRunner
 	gates  *gate.Runner
 	hub    *fakeHub
-	loop   *symphony.Loop
+	loop   *waitingLoop
 	spaces *symphony.WorkspaceManager
 }
 
@@ -831,7 +831,7 @@ func newLoopFixture(t *testing.T, gateTOML string) *loopFixture {
 	loop := symphony.NewLoop(tr, loader, agent, gates, spaces, discardLog())
 	loop.FailureDelay = func(int) time.Duration { return 2 * time.Millisecond }
 	loop.ContinuationDelay = 2 * time.Millisecond
-	return &loopFixture{tr: tr, agent: agent, gates: gates, hub: hub, loop: loop, spaces: spaces}
+	return &loopFixture{tr: tr, agent: agent, gates: gates, hub: hub, loop: &waitingLoop{loop}, spaces: spaces}
 }
 
 func TestLoopRedConsumesAttemptAndFeedsOutputToNextPrompt(t *testing.T) {
@@ -1403,4 +1403,14 @@ func TestLoopGateTimeoutPersistsEscalation(t *testing.T) {
 	if len(f.agent.attempts) != 1 {
 		t.Fatalf("agent ran %d times, want 1", len(f.agent.attempts))
 	}
+}
+
+// waitingLoop joins dispatched workers for turn/gate protocol assertions.
+type waitingLoop struct{ *symphony.Loop }
+
+func (l *waitingLoop) Tick(ctx context.Context) error {
+	if err := l.Loop.Tick(ctx); err != nil {
+		return err
+	}
+	return l.Wait(ctx)
 }

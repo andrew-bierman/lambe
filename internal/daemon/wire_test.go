@@ -396,3 +396,32 @@ func TestPersistForBindsIssueID(t *testing.T) {
 		t.Fatalf("persist calls = %+v, want i-9/555", got)
 	}
 }
+
+type closeContextDriver struct {
+	*fakeDriver
+	seen func(context.Context)
+}
+
+func (d closeContextDriver) Close(ctx context.Context) error {
+	d.seen(ctx)
+	return d.fakeDriver.Close(ctx)
+}
+
+func TestCloseSessionPreservesShutdownDeadlineAfterCancellation(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	deadline, _ := ctx.Deadline()
+	cancel()
+	drv := closeContextDriver{fakeDriver: newFakeDriver(), seen: func(cleanup context.Context) {
+		got, ok := cleanup.Deadline()
+		if !ok || got.After(deadline.Add(time.Millisecond)) {
+			t.Errorf("cleanup deadline %v extends shutdown deadline %v", got, deadline)
+		}
+		if cleanup.Err() != nil {
+			t.Error("cleanup inherited cancellation instead of a bounded fresh context")
+		}
+	}}
+	r := newHarnessRunner("pi", nil)
+	r.drivers["shutdown"] = newSupervisedDriver(drv)
+	r.CloseSession(ctx, "shutdown")
+}

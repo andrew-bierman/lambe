@@ -39,8 +39,9 @@ const (
 // Defaults from the Symphony specification: hooks time out after 60s and a
 // run may take up to 20 turns.
 const (
-	DefaultMaxTurns    = 20
-	DefaultHookTimeout = 60 * time.Second
+	DefaultMaxTurns            = 20
+	DefaultMaxConcurrentAgents = 10
+	DefaultHookTimeout         = 60 * time.Second
 )
 
 // Revision is the content hash of one WORKFLOW.md revision. It is pinned to
@@ -51,11 +52,12 @@ type Revision string
 // Workflow is one parsed WORKFLOW.md: front matter (hooks, turn cap, hook
 // timeout) plus the prompt body, identified by its content revision.
 type Workflow struct {
-	Hooks       map[HookName]string
-	PromptBody  string
-	MaxTurns    int
-	HookTimeout time.Duration
-	Revision    Revision
+	Hooks               map[HookName]string
+	PromptBody          string
+	MaxTurns            int
+	MaxConcurrentAgents int
+	HookTimeout         time.Duration
+	Revision            Revision
 }
 
 // EnvLookup resolves an environment variable name to its value, reporting
@@ -99,10 +101,11 @@ func ParseWorkflow(content []byte, env EnvLookup) (*Workflow, error) {
 	}
 
 	wf := &Workflow{
-		Hooks:       map[HookName]string{},
-		MaxTurns:    DefaultMaxTurns,
-		HookTimeout: DefaultHookTimeout,
-		Revision:    Revision(hashContent(content)),
+		Hooks:               map[HookName]string{},
+		MaxTurns:            DefaultMaxTurns,
+		MaxConcurrentAgents: DefaultMaxConcurrentAgents,
+		HookTimeout:         DefaultHookTimeout,
+		Revision:            Revision(hashContent(content)),
 	}
 
 	hooksRaw, ok := raw["hooks"].(map[string]any)
@@ -127,6 +130,22 @@ func ParseWorkflow(content []byte, env EnvLookup) (*Workflow, error) {
 		}
 		wf.MaxTurns = n
 	}
+	if v, ok := raw["agent"]; ok {
+		agent, ok := v.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("WORKFLOW.md: agent must be an object")
+		}
+		for key, dest := range map[string]*int{"max_turns": &wf.MaxTurns, "max_concurrent_agents": &wf.MaxConcurrentAgents} {
+			if v, ok := agent[key]; ok {
+				n, err := asInt(v)
+				if err != nil || n < 1 {
+					return nil, fmt.Errorf("WORKFLOW.md: agent.%s must be a positive integer, got %v", key, v)
+				}
+				*dest = n
+			}
+		}
+	}
+
 	if v, ok := raw["hook_timeout_ms"]; ok {
 		n, err := asInt(v)
 		if err != nil || n < 1 {
@@ -166,7 +185,11 @@ func asInt(v any) (int, error) {
 	case int64:
 		return int(t), nil
 	case float64:
-		return int(t), nil
+		n := int(t)
+		if float64(n) != t {
+			return 0, fmt.Errorf("not an integer")
+		}
+		return n, nil
 	case string:
 		return strconv.Atoi(t)
 	default:

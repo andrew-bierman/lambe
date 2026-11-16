@@ -7,10 +7,11 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/andrew-bierman/lambe/internal/proc"
 )
 
 // SanitizeKey reduces an arbitrary issue identifier to a workspace-safe key
@@ -173,9 +174,7 @@ func (m *WorkspaceManager) RunHook(ctx context.Context, name HookName, dir, comm
 	}
 	hookCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(hookCtx, "sh", "-lc", command) // #nosec G204 -- hook commands are operator-authored WORKFLOW.md configuration per the spec
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
+	out, err := proc.RunCommand(hookCtx, dir, "sh", "-lc", command)
 	if hookCtx.Err() != nil {
 		return fmt.Errorf("hook %s timed out after %s", name, timeout)
 	}

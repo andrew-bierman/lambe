@@ -417,25 +417,45 @@ func (d *Daemon) reload() {
 // ladder runs.
 func (d *Daemon) shutdown(ticksDone <-chan struct{}) error {
 	d.log.Info("shutdown: forwarding kill ladder to children", "bound", ShutdownBound.String())
+	ctx, cancel := context.WithTimeout(context.Background(), ShutdownBound)
+	defer cancel()
 	if d.cancel != nil {
 		d.cancel()
 	}
+	terminated := make(chan error, 1)
+	go func() { terminated <- d.asm.Supervisor.TerminateAll(ctx) }()
 	select {
 	case <-ticksDone:
-	case <-time.After(2 * time.Second):
-		d.log.Warn("tick goroutine did not stop within grace")
+	case <-ctx.Done():
+		d.log.Warn("tick shutdown bound expired")
 	}
-	// The cached report is refreshed on the way out so the final snapshot
-	// reflects the daemon's last writes.
-	rctx, rcancel := context.WithTimeout(context.Background(), ShutdownBound)
-	d.refreshReport(rctx)
-	rcancel()
-	ctx, cancel := context.WithTimeout(context.Background(), ShutdownBound)
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- d.asm.Supervisor.TerminateAll(ctx) }()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	locked := false
+	for ctx.Err() == nil && !locked {
+		locked = d.cycleMu.TryLock()
+		if !locked {
+			select {
+			case <-ticker.C:
+			case <-ctx.Done():
+			}
+		}
+	}
+	if locked {
+		if closer, ok := d.loop.(interface{ Close(context.Context) error }); ok {
+			if err := closer.Close(ctx); err != nil {
+				d.log.Error("worker shutdown incomplete", "error", err)
+			}
+		}
+		if ctx.Err() == nil {
+			d.refreshReport(ctx)
+		}
+		d.cycleMu.Unlock()
+	} else {
+		d.log.Error("cycle shutdown bound expired")
+	}
 	select {
-	case err := <-done:
+	case err := <-terminated:
 		if err != nil {
 			d.log.Error("shutdown ladder reported errors", "error", err)
 		}

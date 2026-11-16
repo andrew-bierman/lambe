@@ -124,6 +124,12 @@ Key knobs and defaults:
 | Turn timeout | 1h | Hard cap on a single agent turn |
 | Heartbeat | 150s | Liveness interval written to the tracker |
 
+The supervisor dispatches agent workers without waiting for their turns. Set
+`agent.max_concurrent_agents` in `WORKFLOW.md` to cap active workers (default 10);
+`agent.max_turns` sets the turn limit (default 20). Reloading the workflow changes
+the dispatch limit for subsequent work; reducing it leaves existing workers running.
+The older top-level `max_turns` remains accepted, with `agent.max_turns` taking precedence.
+
 Agent turns use the turn and silence limits above. Hub synchronization, formula
 evaluation, and gate evaluation have separate control deadlines (half the silence
 timeout, with a one-minute minimum). Tracker subprocesses also have a one-minute
