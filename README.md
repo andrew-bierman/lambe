@@ -148,6 +148,24 @@ by the platform, not by lambe itself. Example service units ship in
 - **Linux (systemd user):** `Restart=on-failure`. Copy the unit, adjust paths,
   then `systemctl --user enable --now lambe`.
 
+Lambe keeps private session checkpoints under its state directory. Restarting
+with the same state directory, tracker, and actor restores the pinned workflow,
+attempt, turn, thread, and retry deadline. Interrupted turns replay within the
+same attempt; pending gate checks reuse the settled output. Workspace files
+remain available. Keep the state directory across upgrades.
+
+Before replacing a surviving agent, recovery verifies the tracker claim and
+the process's kernel identity on macOS or Linux. A foreign claim or unverifiable
+process is left alone. Recovery errors are logged and retain the workspace;
+transient tracker failures are retried on subsequent ticks. Claims from older
+versions without checkpoints require inspection before releasing them for a
+fresh run. Do not release one while its old agent is still working.
+
+Checkpoints preserve Lambe's continuation state. Backend conversation resumption
+also depends on the harness: Pi reopens its workspace session; the current ACP
+driver creates a new backend conversation. A replay can repeat an interrupted
+tool operation, so tasks with external side effects still need idempotent steps.
+
 ## Symphony conformance and divergence
 
 lambe implements the Symphony specification as pinned to `8001b52` and stays

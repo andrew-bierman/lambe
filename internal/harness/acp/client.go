@@ -33,7 +33,7 @@ type clientOptions struct {
 	Session string
 	// Persist runs with the pgid and session id between process creation
 	// and spawn return; the crash-recovery seam.
-	Persist func(pgid int, session string)
+	Persist func(pgid int, session string) error
 	// WaitDelay bounds post-exit pipe waits; zero means the proc default.
 	WaitDelay time.Duration
 	// OnActivity, when set, fires for every byte read from the agent; the
@@ -117,7 +117,10 @@ func spawnAgent(opts clientOptions) (*agentProc, error) {
 	}
 	pgid := cmd.Process.Pid // Setpgid: the child leads its own group.
 	if opts.Persist != nil {
-		opts.Persist(pgid, opts.Session)
+		if err := opts.Persist(pgid, opts.Session); err != nil {
+			proc.AbortStart(cmd, stdinRead, stdinWrite, stdoutRead, stdoutWrite)
+			return nil, fmt.Errorf("%w: %w", proc.ErrBindingUnavailable, err)
+		}
 	}
 	_ = stdinRead.Close()
 	_ = stdoutWrite.Close()

@@ -20,14 +20,15 @@ const (
 // A worker owns its session copy until done closes. Only the coordinator
 // changes active, sessions, the retry queue, or stop; it reads results after done.
 type worker struct {
-	loop     *Loop
-	session  *session
-	cancel   context.CancelFunc
-	done     chan struct{}
-	retry    *Retry
-	finished bool
-	stop     workerStop
-	settling atomic.Bool
+	loop        *Loop
+	session     *session
+	cancel      context.CancelFunc
+	done        chan struct{}
+	retry       *Retry
+	finished    bool
+	stop        workerStop
+	interrupted bool
+	settling    atomic.Bool
 }
 
 func (l *Loop) capacity() int { return l.Loader.Current().MaxConcurrentAgents }
@@ -52,6 +53,7 @@ func (l *Loop) start(ctx context.Context, s *session, kind RetryKind) {
 
 func (w *worker) terminal(ctx context.Context, s *session, reason string) {
 	w.loop.cleanup(ctx, s, reason)
+	w.loop.removeCheckpoint(s.issue.ID)
 	w.finished = true
 }
 
@@ -64,6 +66,10 @@ func (l *Loop) collect(ctx context.Context) {
 			if w.stop != workerRunning {
 				if w.stop == workerTerminal && !w.finished {
 					l.cleanup(ctx, w.session, "issue left active state")
+					l.removeCheckpoint(id)
+				}
+				if w.stop == workerClaimLost {
+					l.removeCheckpoint(id)
 				}
 				delete(l.sessions, id)
 			} else if w.finished {

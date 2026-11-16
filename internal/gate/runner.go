@@ -503,3 +503,12 @@ func (r *Runner) settleErr(ctx context.Context, req symphony.GateRequest, output
 
 // compile-time seam check.
 var _ symphony.GateEvaluator = (*Runner)(nil)
+
+// FinalizeCompletion repairs bookkeeping after an owned issue was durably
+// closed before the supervisor could finish its green transition.
+func (r *Runner) FinalizeCompletion(ctx context.Context, issueID string) error {
+	if err := r.Hub.Tombstone(ctx, issueID); err != nil {
+		return err
+	}
+	return r.Esc.ResetCounters(ctx, issueID)
+}

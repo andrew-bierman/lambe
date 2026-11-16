@@ -55,7 +55,7 @@ type spawnOptions struct {
 	// Persist is invoked with the process-group id and session id
 	// immediately after the process exists and before spawn returns; the
 	// crash-recovery seam.
-	Persist func(pgid int, session string)
+	Persist func(pgid int, session string) error
 	// WaitDelay bounds post-exit pipe waits when descendants hold the
 	// stdout pipe open. Zero means proc.DefaultWaitDelay.
 	WaitDelay time.Duration
@@ -106,7 +106,10 @@ func spawnAgent(opts spawnOptions) (*agentProc, error) {
 	}
 	pgid := cmd.Process.Pid // Setpgid: the child leads its own group.
 	if opts.Persist != nil {
-		opts.Persist(pgid, opts.Session)
+		if err := opts.Persist(pgid, opts.Session); err != nil {
+			proc.AbortStart(cmd, stdinRead, stdinWrite, stdoutRead, stdoutWrite)
+			return nil, fmt.Errorf("%w: %w", proc.ErrBindingUnavailable, err)
+		}
 	}
 	// Drop the parent's copies: stdin EOF depends only on us closing
 	// stdinWrite; stdout EOF depends only on the child side.

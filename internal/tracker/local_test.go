@@ -249,10 +249,13 @@ func TestBDAttemptRecordsRoundTrip(t *testing.T) {
 		t.Fatalf("put attempt 2: %v", err)
 	}
 	// Re-put is idempotent (update, not a second record).
-	if err := l.PutAttempt(t.Context(), Attempt{SessionID: "ses-1", Number: 2, PGID: 7777, WakeAt: wake}); err != nil {
+	if err := l.PutAttempt(t.Context(), Attempt{SessionID: "ses-1", Number: 2, PGID: 7777, ProcessIdentity: "darwin:1794840000:123456", WakeAt: wake}); err != nil {
 		t.Fatalf("re-put attempt 2: %v", err)
 	}
 
+	if err := l.PutAttempt(t.Context(), Attempt{SessionID: "ses-1", Number: 2, WakeAt: wake}); err != nil {
+		t.Fatal(err)
+	}
 	attempts, err := l.Attempts(t.Context(), "ses-1")
 	if err != nil {
 		t.Fatalf("attempts: %v", err)
@@ -263,7 +266,7 @@ func TestBDAttemptRecordsRoundTrip(t *testing.T) {
 	if attempts[0].Number != 1 || attempts[0].PGID != 4242 {
 		t.Errorf("attempt 1: got %+v", attempts[0])
 	}
-	if attempts[1].PGID != 7777 {
+	if attempts[1].PGID != 7777 || attempts[1].ProcessIdentity != "darwin:1794840000:123456" {
 		t.Errorf("attempt 2 re-put did not update pgid: %+v", attempts[1])
 	}
 	if !attempts[1].WakeAt.Equal(wake) {

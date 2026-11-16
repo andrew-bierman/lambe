@@ -3,6 +3,7 @@ package symphony
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -114,6 +115,7 @@ func TestWorkflowReadsStandardAgentSettings(t *testing.T) {
 func TestActiveWorkerStopsAfterClaimLostWithoutReleasingForeignClaim(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, "work {{ issue }}")
+	f.loop.CheckpointDir = filepath.Join(f.dir, "sessions")
 	entered := make(chan TurnRequest, 1)
 	stopped := make(chan struct{})
 	f.loop.Runner = turnFunc(func(ctx context.Context, req TurnRequest) (TurnResult, error) {
@@ -157,6 +159,9 @@ func TestActiveWorkerStopsAfterClaimLostWithoutReleasingForeignClaim(t *testing.
 	}
 	if len(f.gate.calls) != 0 {
 		t.Fatal("canceled worker evaluated a completion gate")
+	}
+	if _, err := os.Stat(f.loop.checkpointPath("i-1")); !os.IsNotExist(err) {
+		t.Fatalf("lost claim retained stale continuation: %v", err)
 	}
 }
 

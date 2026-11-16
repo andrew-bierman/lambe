@@ -33,7 +33,7 @@ type ClientOptions struct {
 	Session string
 	// Persist runs between process creation and spawn return; see
 	// spawnOptions.Persist.
-	Persist func(pgid int, session string)
+	Persist func(pgid int, session string) error
 	// WaitDelay bounds post-exit pipe waits; zero means the proc default.
 	WaitDelay time.Duration
 	// OnRecord, when set, is invoked for every valid stdout record; the

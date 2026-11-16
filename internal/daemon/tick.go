@@ -110,6 +110,10 @@ func (f *FilteredTracker) Dispatchable(ctx context.Context, q tracker.DispatchQu
 	if err != nil {
 		return nil, err
 	}
+	// Routing controls new claims; an ID refresh must still see owned work after a label change.
+	if len(q.IDs) > 0 {
+		return issues, nil
+	}
 	out := issues[:0]
 	for _, issue := range issues {
 		labels := labelsOf(issue)

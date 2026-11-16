@@ -38,7 +38,7 @@ type Options struct {
 	// the crash-recovery seam: persistence lives elsewhere, but it must
 	// happen while the child is guaranteed alive so a supervisor crash right
 	// after Start can still find and kill the group.
-	Persist func(pgid int, session string)
+	Persist func(pgid int, session string) error
 	// WaitDelay bounds how long waits continue after the child exits while
 	// descendants still hold pipe ends. Zero means DefaultWaitDelay.
 	WaitDelay time.Duration
@@ -97,7 +97,10 @@ func Start(opts Options) (*Child, error) {
 	// Setpgid makes the child its own group leader, so pgid == pid.
 	pgid := cmd.Process.Pid
 	if opts.Persist != nil {
-		opts.Persist(pgid, opts.Session)
+		if err := opts.Persist(pgid, opts.Session); err != nil {
+			AbortStart(cmd, stdoutRead, stdoutWrite)
+			return nil, fmt.Errorf("%w: %w", ErrBindingUnavailable, err)
+		}
 	}
 	// Drop the parent's write end: EOF must depend only on the child (and
 	// whatever it passes the descriptor on to).

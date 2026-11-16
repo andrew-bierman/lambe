@@ -343,8 +343,10 @@ func TestAttemptPersisterRecordsPGIDOnLatestAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	persist := newAttemptPersisterFrom(func() (tracker.Tracker, error) { return rec, nil }, slog.New(slog.DiscardHandler))
-	persist("ses-1", 4242)
+	persist := newAttemptPersisterFrom(func() (tracker.Tracker, error) { return rec, nil }, slog.New(slog.DiscardHandler), func(int) (string, error) { return "test:identity", nil })
+	if err := persist("ses-1", 4242); err != nil {
+		t.Fatal(err)
+	}
 
 	puts := rec.recorded()
 	if len(puts) != 3 {
@@ -361,8 +363,10 @@ func TestAttemptPersisterRecordsPGIDOnLatestAttempt(t *testing.T) {
 func TestAttemptPersisterCreatesFirstAttempt(t *testing.T) {
 	t.Parallel()
 	rec := newPgidRecorder()
-	persist := newAttemptPersisterFrom(func() (tracker.Tracker, error) { return rec, nil }, slog.New(slog.DiscardHandler))
-	persist("fresh-1", 7)
+	persist := newAttemptPersisterFrom(func() (tracker.Tracker, error) { return rec, nil }, slog.New(slog.DiscardHandler), func(int) (string, error) { return "test:identity", nil })
+	if err := persist("fresh-1", 7); err != nil {
+		t.Fatal(err)
+	}
 
 	attempts, err := rec.Attempts(context.Background(), "fresh-1")
 	if err != nil {
@@ -384,12 +388,15 @@ func TestPersistForBindsIssueID(t *testing.T) {
 	}
 	var mu sync.Mutex
 	var got []tracker.Attempt
-	r.persist = func(sessionID string, pgid int) {
+	r.persist = func(sessionID string, pgid int) error {
 		mu.Lock()
 		defer mu.Unlock()
 		got = append(got, tracker.Attempt{SessionID: sessionID, PGID: pgid})
+		return nil
 	}
-	r.persistFor("i-9")(555, "lambe-i-9")
+	if err := r.persistFor("i-9")(555, "lambe-i-9"); err != nil {
+		t.Fatal(err)
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if len(got) != 1 || got[0].SessionID != "i-9" || got[0].PGID != 555 {
@@ -424,4 +431,25 @@ func TestCloseSessionPreservesShutdownDeadlineAfterCancellation(t *testing.T) {
 	r := newHarnessRunner("pi", nil)
 	r.drivers["shutdown"] = newSupervisedDriver(drv)
 	r.CloseSession(ctx, "shutdown")
+}
+
+func TestAttemptPersisterRetriesOpeningAfterTransientFailure(t *testing.T) {
+	rec := newPgidRecorder()
+	calls := 0
+	persist := newAttemptPersisterFrom(func() (tracker.Tracker, error) {
+		calls++
+		if calls == 1 {
+			return nil, context.DeadlineExceeded
+		}
+		return rec, nil
+	}, slog.New(slog.DiscardHandler), func(int) (string, error) { return "test:identity", nil })
+	if err := persist("recovery", 1234); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first persistence error = %v", err)
+	}
+	if err := persist("recovery", 1234); err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.recorded(); len(got) != 1 || got[0].ProcessIdentity != "test:identity" {
+		t.Fatalf("binding did not recover: %+v", got)
+	}
 }

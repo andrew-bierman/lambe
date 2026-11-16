@@ -376,11 +376,12 @@ func (b *Beads) EnsureIssue(ctx context.Context, key string, spec IssueSpec) (Is
 
 // Metadata keys lambe stamps on its operational records.
 const (
-	metaKind    = "lambe_kind"
-	metaSession = "lambe_session"
-	metaAttempt = "lambe_attempt"
-	metaPGID    = "lambe_pgid"
-	metaWakeAt  = "lambe_wake_at"
+	metaKind            = "lambe_kind"
+	metaSession         = "lambe_session"
+	metaAttempt         = "lambe_attempt"
+	metaPGID            = "lambe_pgid"
+	metaProcessIdentity = "lambe_process_identity"
+	metaWakeAt          = "lambe_wake_at"
 )
 
 // MetaKind is the exported name of the metadata key marking lambe's own
@@ -403,10 +404,11 @@ func (b *Beads) PutAttempt(ctx context.Context, a Attempt) error {
 		return fmt.Errorf("put attempt: session id and positive attempt number required")
 	}
 	meta := map[string]string{
-		metaKind:    kindAttempt,
-		metaSession: a.SessionID,
-		metaAttempt: strconv.Itoa(a.Number),
-		metaPGID:    strconv.Itoa(a.PGID),
+		metaKind:            kindAttempt,
+		metaSession:         a.SessionID,
+		metaAttempt:         strconv.Itoa(a.Number),
+		metaPGID:            strconv.Itoa(a.PGID),
+		metaProcessIdentity: a.ProcessIdentity,
 	}
 	if !a.WakeAt.IsZero() {
 		meta[metaWakeAt] = a.WakeAt.UTC().Format(time.RFC3339)
@@ -427,7 +429,11 @@ func (b *Beads) PutAttempt(ctx context.Context, a Attempt) error {
 	// a re-put finds the issue already existing (whose create metadata was
 	// not applied), so the pgid/wake fields ride on this update as well —
 	// using the id EnsureIssue returned rather than recomposing it.
-	update := map[string]string{metaPGID: strconv.Itoa(a.PGID), metaWakeAt: ""}
+	update := map[string]string{metaWakeAt: ""}
+	if a.PGID > 0 {
+		update[metaPGID] = strconv.Itoa(a.PGID)
+		update[metaProcessIdentity] = a.ProcessIdentity
+	}
 	if !a.WakeAt.IsZero() {
 		update[metaWakeAt] = a.WakeAt.UTC().Format(time.RFC3339)
 	}
@@ -463,6 +469,7 @@ func (b *Beads) Attempts(ctx context.Context, sessionID string) ([]Attempt, erro
 		a := Attempt{SessionID: sessionID, Number: n}
 		if pgid, err := strconv.Atoi(meta[metaPGID]); err == nil {
 			a.PGID = pgid
+			a.ProcessIdentity = meta[metaProcessIdentity]
 		}
 		if wake := meta[metaWakeAt]; wake != "" {
 			if t, err := time.Parse(time.RFC3339, wake); err == nil {
