@@ -116,6 +116,9 @@ func (a *ControlAdapter) CancelRun(_ context.Context, handle mcp.RunHandle) (mcp
 	if !runLive(run.State) {
 		return mcp.CancelResult{State: run.State, Outcome: run.Outcome}, nil
 	}
+	if run.ProjectionOnly {
+		return mcp.CancelResult{}, fmt.Errorf("run %q is owned by the supervisor; change its tracker state to stop it", handle.String())
+	}
 	if err := a.Registry.TerminateGroup(handle.String(), cancelGrace); err != nil {
 		log := a.Log
 		if log == nil {

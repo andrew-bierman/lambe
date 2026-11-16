@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Show live supervisor phases and agent output with `lambe tui` and `lambe logs`, and use the current Rex status protocol and CLI.
+
+
 ### Fixed
 
 - Restart recovery restores owned attempts, turns, retry deadlines, pinned workflows,

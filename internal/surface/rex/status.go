@@ -1,8 +1,11 @@
 package rex
 
 import (
+	"encoding/base64"
 	"io"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Status is one OSC 7501 program status badge Rex understands.
@@ -29,11 +32,11 @@ func (s Status) String() string {
 	case StatusWorking:
 		return "working"
 	case StatusWaitingOnUser:
-		return "waiting-on-user"
+		return "blocked"
 	case StatusFinished:
-		return "finished"
+		return "done"
 	case StatusFailed:
-		return "failed"
+		return "error"
 	default:
 		return "unknown"
 	}
@@ -82,7 +85,7 @@ func MapRunState(s RunState) Status {
 	case RunStateRunning:
 		return StatusWorking
 	case RunStateDeferred:
-		return StatusWaitingOnUser
+		return StatusIdle
 	case RunStateSettled:
 		return StatusFinished
 	case RunStateWatchdogKilled:
@@ -97,18 +100,25 @@ func MapRunState(s RunState) Status {
 // corrupt the sequence (ESC, BEL, CR, newline) are stripped or flattened so
 // the payload always stays a single field.
 func EmitStatus(w io.Writer, status Status, text string) error {
-	seq := "\x1b]7501;" + status.String() + ";" + sanitizeText(text) + "\x07"
+	text = sanitizeText(text)
+	for len(text) > 2048 {
+		_, size := utf8.DecodeLastRuneInString(text)
+		text = text[:len(text)-size]
+	}
+	seq := "\x1b]7501;state=" + status.String() + ":app=lambe:msg=" + base64.StdEncoding.EncodeToString([]byte(text)) + "\x1b\\"
 	_, err := io.WriteString(w, seq)
 	return err
 }
 
 // sanitizeText makes arbitrary text safe to embed in an OSC payload.
 func sanitizeText(text string) string {
-	r := strings.NewReplacer(
-		"\x1b", "",
-		"\x07", "",
-		"\r", "",
-		"\n", " ",
-	)
-	return r.Replace(text)
+	return strings.Map(func(r rune) rune {
+		if r == '\n' {
+			return ' '
+		}
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, text)
 }

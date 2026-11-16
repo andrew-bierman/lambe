@@ -35,6 +35,8 @@ usage:
   lambe run     [-config FILE] run the supervisor daemon until SIGTERM/SIGINT
   lambe status  [-config FILE] print the morning report
   lambe mcp     [-config FILE] serve lambe's MCP tools over stdio
+  lambe logs    [-config FILE] [-issue ID] [-follow] [-json] show agent output
+  lambe tui     [-config FILE] [-issue ID] watch supervisor and agent output
   lambe version print build information
 `
 
@@ -56,6 +58,11 @@ func main() {
 		if err := runDaemon(args[1:]); err != nil {
 			logging.Default().Error("lambe run failed", "error", err.Error())
 			os.Exit(exitCodeFor(err))
+		}
+	case "logs", "tui":
+		if err := runLive(args[1:], args[0] == "tui", os.Stdin, os.Stdout); err != nil {
+			logging.Default().Error("live view failed", "error", err)
+			os.Exit(1)
 		}
 	case "status":
 		if err := runStatus(args[1:]); err != nil {

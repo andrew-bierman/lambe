@@ -2,6 +2,7 @@ package rex
 
 import (
 	"bytes"
+	"encoding/base64"
 	"strings"
 	"testing"
 )
@@ -17,54 +18,54 @@ func TestEmitStatus(t *testing.T) {
 			name:   "idle with text",
 			status: StatusIdle,
 			text:   "no work",
-			want:   "\x1b]7501;idle;no work\x07",
+			want:   "\x1b]7501;state=idle:app=lambe:msg=" + base64.StdEncoding.EncodeToString([]byte("no work")) + "\x1b\\",
 		},
 		{
 			name:   "working",
 			status: StatusWorking,
 			text:   "agent turn",
-			want:   "\x1b]7501;working;agent turn\x07",
+			want:   "\x1b]7501;state=working:app=lambe:msg=" + base64.StdEncoding.EncodeToString([]byte("agent turn")) + "\x1b\\",
 		},
 		{
 			name:   "waiting-on-user",
 			status: StatusWaitingOnUser,
 			text:   "gate question",
-			want:   "\x1b]7501;waiting-on-user;gate question\x07",
+			want:   "\x1b]7501;state=blocked:app=lambe:msg=" + base64.StdEncoding.EncodeToString([]byte("gate question")) + "\x1b\\",
 		},
 		{
 			name:   "finished without text",
 			status: StatusFinished,
-			want:   "\x1b]7501;finished;\x07",
+			want:   "\x1b]7501;state=done:app=lambe:msg=" + base64.StdEncoding.EncodeToString([]byte("")) + "\x1b\\",
 		},
 		{
 			name:   "failed",
 			status: StatusFailed,
 			text:   "watchdog killed",
-			want:   "\x1b]7501;failed;watchdog killed\x07",
+			want:   "\x1b]7501;state=error:app=lambe:msg=" + base64.StdEncoding.EncodeToString([]byte("watchdog killed")) + "\x1b\\",
 		},
 		{
 			name:   "text with semicolon is dropped to keep payload single-field",
 			status: StatusIdle,
 			text:   "a;b",
-			want:   "\x1b]7501;idle;a;b\x07",
+			want:   "\x1b]7501;state=idle:app=lambe:msg=" + base64.StdEncoding.EncodeToString([]byte("a;b")) + "\x1b\\",
 		},
 		{
 			name:   "text with bell byte is stripped",
 			status: StatusIdle,
 			text:   "a\x07b",
-			want:   "\x1b]7501;idle;ab\x07",
+			want:   "\x1b]7501;state=idle:app=lambe:msg=" + base64.StdEncoding.EncodeToString([]byte("ab")) + "\x1b\\",
 		},
 		{
 			name:   "text with escape byte is stripped",
 			status: StatusIdle,
 			text:   "a\x1bb",
-			want:   "\x1b]7501;idle;ab\x07",
+			want:   "\x1b]7501;state=idle:app=lambe:msg=" + base64.StdEncoding.EncodeToString([]byte("ab")) + "\x1b\\",
 		},
 		{
 			name:   "newline becomes space",
 			status: StatusIdle,
 			text:   "a\nb",
-			want:   "\x1b]7501;idle;a b\x07",
+			want:   "\x1b]7501;state=idle:app=lambe:msg=" + base64.StdEncoding.EncodeToString([]byte("a b")) + "\x1b\\",
 		},
 	}
 	for _, tt := range tests {
@@ -87,7 +88,7 @@ func TestMapRunState(t *testing.T) {
 	}{
 		{RunStateIdle, StatusIdle},
 		{RunStateRunning, StatusWorking},
-		{RunStateDeferred, StatusWaitingOnUser},
+		{RunStateDeferred, StatusIdle},
 		{RunStateSettled, StatusFinished},
 		{RunStateWatchdogKilled, StatusFailed},
 	}
@@ -104,5 +105,17 @@ func TestMapRunState(t *testing.T) {
 func TestStatusString(t *testing.T) {
 	if !strings.HasPrefix(StatusWorking.String(), "working") {
 		t.Errorf("unexpected status string %q", StatusWorking)
+	}
+}
+
+func TestStatusMessageLimitsAndControls(t *testing.T) {
+	var buf bytes.Buffer
+	if err := EmitStatus(&buf, StatusWorking, "\u009b\x00"+strings.Repeat("🦖", 1000)); err != nil {
+		t.Fatal(err)
+	}
+	seq := strings.TrimSuffix(strings.TrimPrefix(buf.String(), "\x1b]7501;state=working:app=lambe:msg="), "\x1b\\")
+	text, err := base64.StdEncoding.DecodeString(seq)
+	if err != nil || len(text) > 2048 || strings.ContainsAny(string(text), "\u009b\x00") {
+		t.Fatalf("invalid status payload: size=%d err=%v", len(text), err)
 	}
 }

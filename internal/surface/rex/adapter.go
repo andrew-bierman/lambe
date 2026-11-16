@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 )
 
 // RunEvent is the narrow lifecycle-event seam the supervisor feeds to the
@@ -33,6 +34,8 @@ func (RunStateEvent) runEvent()   {}
 // status badges on the writer (lambe's terminal) and labeled sessions for
 // supervised agents. When Rex is unavailable it degrades to a no-op.
 type Adapter struct {
+	mu sync.Mutex
+
 	// available gates every effect.
 	available bool
 	// client creates and reads Rex sessions.
@@ -57,6 +60,8 @@ func NewAdapter(av Availability, client Client, out io.Writer) *Adapter {
 // Handle applies one run lifecycle event. Session-creation errors propagate;
 // badge emission errors after a successful session creation also propagate.
 func (a *Adapter) Handle(ctx context.Context, ev RunEvent) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if !a.available {
 		return nil
 	}
@@ -93,6 +98,8 @@ func (a *Adapter) emitState(state RunState) error {
 
 // Sessions returns the sessions created so far, keyed by agent name.
 func (a *Adapter) Sessions() map[string]Session {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	out := make(map[string]Session, len(a.sessions))
 	for k, v := range a.sessions {
 		out[k] = v
