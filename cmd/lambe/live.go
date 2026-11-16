@@ -95,7 +95,7 @@ func runLive(args []string, tui bool, in io.Reader, out io.Writer) error {
 			if !alive {
 				state = "stopped (historical output)"
 			}
-			if _, err := fmt.Fprintf(out, "Lambe — %s — updated %s\nq + Enter or Ctrl-C closes this viewer; the daemon keeps running\n\n", state, snapshot.UpdatedAt.Format(time.RFC3339)); err != nil {
+			if _, err := fmt.Fprintf(out, "Lambe — %s — updated %s\nq + Enter or Ctrl-C closes this viewer only\n\n", state, snapshot.UpdatedAt.Format(time.RFC3339)); err != nil {
 				return err
 			}
 		} else if !alive && len(previous) == 0 {
