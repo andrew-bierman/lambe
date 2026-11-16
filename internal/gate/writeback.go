@@ -48,6 +48,11 @@ type Hub interface {
 	Tombstone(ctx context.Context, issue string) error
 	// IsTombstoned reports the tombstone state.
 	IsTombstoned(ctx context.Context, issue string) (bool, error)
+	// IssueStatus reports the issue's current tracker status. It is the
+	// close-race reconcile read: when a guarded close loses its race, the
+	// runner re-reads the status to decide whether the race winner
+	// already moved the issue terminal.
+	IssueStatus(ctx context.Context, issue string) (string, error)
 }
 
 // BdHub implements Hub (and KV) over the bd CLI in one tracker directory.
@@ -182,6 +187,29 @@ func (h *BdHub) Put(ctx context.Context, issue, key, value string) error {
 		return fmt.Errorf("put %s/%s: %w", issue, key, err)
 	}
 	return nil
+}
+
+// IssueStatus implements Hub: bd show, decoding either the single-object
+// or one-element-array shape, mirroring metadata.
+func (h *BdHub) IssueStatus(ctx context.Context, issue string) (string, error) {
+	res, err := h.tr.Show(ctx, issue)
+	if err != nil {
+		return "", fmt.Errorf("show %s: %w", issue, err)
+	}
+	var rows []issueStatusJSON
+	if err := unmarshalStrict(string(res.Data), &rows); err == nil && len(rows) > 0 {
+		return rows[0].Status, nil
+	}
+	var row issueStatusJSON
+	if err := unmarshalStrict(string(res.Data), &row); err != nil {
+		return "", fmt.Errorf("decode %s: %w", issue, err)
+	}
+	return row.Status, nil
+}
+
+// issueStatusJSON mirrors the status field of bd's issue JSON.
+type issueStatusJSON struct {
+	Status string `json:"status"`
 }
 
 // issueMetaJSON mirrors the metadata field of bd's issue JSON.

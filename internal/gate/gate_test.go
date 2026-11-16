@@ -56,10 +56,15 @@ type fakeHub struct {
 
 	closeErr   error
 	commentErr error
+	// statuses is the IssueStatus answer per issue; an absent issue
+	// reports "" (not terminal).
+	statuses map[string]string
+	// statusErr injects an IssueStatus read failure.
+	statusErr error
 }
 
 func newFakeHub() *fakeHub {
-	return &fakeHub{tombstones: map[string]bool{}}
+	return &fakeHub{tombstones: map[string]bool{}, statuses: map[string]string{}}
 }
 
 func (h *fakeHub) Comment(_ context.Context, issue, body string) error {
@@ -107,6 +112,15 @@ func (h *fakeHub) IsTombstoned(_ context.Context, issue string) (bool, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.tombstones[issue], nil
+}
+
+func (h *fakeHub) IssueStatus(_ context.Context, issue string) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.statusErr != nil {
+		return "", h.statusErr
+	}
+	return h.statuses[issue], nil
 }
 
 // memKV is the in-memory KV persistence for escalation counters.
@@ -1108,13 +1122,15 @@ func TestGhCLIResolvePRHead(t *testing.T) {
 // ---- close race and request-path pinning ----
 
 // TestGreenCloseRaceSkipsTombstoneReturnsGateErr proves only the close
-// winner tombstones: a lost CAS race neither tombstones nor reports
-// green.
+// winner tombstones: a lost CAS race against a non-terminal issue (someone
+// else holds it in_progress) neither tombstones nor reports green — the
+// caller re-reconciles.
 func TestGreenCloseRaceSkipsTombstoneReturnsGateErr(t *testing.T) {
 	dir := t.TempDir()
 	writeFormula(t, dir, "tests", "type = \"shell\"\ncommand = \"exit 0\"")
 	hub, kv := newFakeHub(), newMemKV()
 	hub.closeErr = fmt.Errorf("close bd-gate-1: %w", gate.ErrCloseRace)
+	hub.statuses[testIssue().ID] = "in_progress"
 	r := newTestRunner(t, dir, hub, kv, gate.OsExec, nil)
 	ctx := context.Background()
 
@@ -1123,13 +1139,61 @@ func TestGreenCloseRaceSkipsTombstoneReturnsGateErr(t *testing.T) {
 		t.Fatal(err)
 	}
 	if outcome.Verdict != symphony.GateErr {
-		t.Fatalf("verdict = %d, want gate error on lost close race", outcome.Verdict)
+		t.Fatalf("verdict = %d, want gate error on lost close race with a non-terminal issue", outcome.Verdict)
 	}
 	if ok, _ := hub.IsTombstoned(ctx, testIssue().ID); ok {
 		t.Fatal("close-race loser must not tombstone; the close winner owns it")
 	}
 	if len(hub.needHuman) != 0 {
 		t.Fatal("a close race is not an escalation")
+	}
+}
+
+// TestGreenCloseRaceOnClosedIssueStandsGreen pins the close-race
+// reconcile: when the race winner already moved the issue terminal, the
+// completion stands as green without a tombstone or counter churn — no
+// noisy retry-and-reconcile cycle (first live trial finding).
+func TestGreenCloseRaceOnClosedIssueStandsGreen(t *testing.T) {
+	dir := t.TempDir()
+	writeFormula(t, dir, "tests", "type = \"shell\"\ncommand = \"echo all green\"")
+	hub, kv := newFakeHub(), newMemKV()
+	hub.closeErr = fmt.Errorf("close bd-gate-1: %w", gate.ErrCloseRace)
+	hub.statuses[testIssue().ID] = gate.StatusClosed
+	r := newTestRunner(t, dir, hub, kv, gate.OsExec, nil)
+	ctx := context.Background()
+
+	outcome, err := r.Evaluate(ctx, reqWithWorkspace(t, 1, symphony.Revision("wf-1")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Verdict != symphony.GateGreen {
+		t.Fatalf("verdict = %d, want green when the close race winner already closed the issue", outcome.Verdict)
+	}
+	if ok, _ := hub.IsTombstoned(ctx, testIssue().ID); ok {
+		t.Fatal("close-race loser must not tombstone; the close winner owns it")
+	}
+	if len(hub.needHuman) != 0 {
+		t.Fatal("a close race is not an escalation")
+	}
+}
+
+// TestGreenCloseRaceStatusReadFailureIsGateErr pins the conservative
+// fallback: when the post-race status re-read itself fails, the outcome is
+// a gate error so the caller re-reconciles rather than guessing terminal.
+func TestGreenCloseRaceStatusReadFailureIsGateErr(t *testing.T) {
+	dir := t.TempDir()
+	writeFormula(t, dir, "tests", "type = \"shell\"\ncommand = \"exit 0\"")
+	hub, kv := newFakeHub(), newMemKV()
+	hub.closeErr = fmt.Errorf("close bd-gate-1: %w", gate.ErrCloseRace)
+	hub.statusErr = errors.New("tracker unreachable")
+	r := newTestRunner(t, dir, hub, kv, gate.OsExec, nil)
+
+	outcome, err := r.Evaluate(context.Background(), reqWithWorkspace(t, 1, symphony.Revision("wf-1")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Verdict != symphony.GateErr {
+		t.Fatalf("verdict = %d, want gate error when the status re-read fails", outcome.Verdict)
 	}
 }
 

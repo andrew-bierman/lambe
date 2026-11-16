@@ -496,13 +496,10 @@ func (d *Daemon) cycle(ctx context.Context, prefix string, immediate bool) {
 	}
 	cancel()
 	if d.loop != nil {
-		d.log.Debug(prefix + ": loop tick starting")
 		if err := d.loop.Tick(ctx); err != nil {
 			d.log.Warn(prefix+": tick failed, continuing",
 				"category", ErrorCategory(err), "error", err)
 		}
-	} else {
-		d.log.Warn(prefix + ": loop is nil, skipping tick")
 	}
 	wctx, wcancel := context.WithTimeout(ctx, d.cycleBound())
 	defer wcancel()

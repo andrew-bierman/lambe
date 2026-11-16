@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -50,6 +51,10 @@ type Config struct {
 	// Harness names the default agent backend: "pi" or "acp".
 	Harness  string
 	Trackers []Tracker
+	// WorkflowPath is the resolved WORKFLOW.md location: an explicit
+	// workflow_path override if set, otherwise the first existing candidate
+	// from DefaultWorkflowPath's search order.
+	WorkflowPath string
 }
 
 // Options controls where Load reads overrides from. Env and Flags are
@@ -119,6 +124,7 @@ func Load(opts Options) (*Config, error) {
 			HeartbeatInterval:  k.Duration("supervisor.heartbeat_interval"),
 			HeartbeatTTLSecond: k.Int("supervisor.heartbeat_ttl_second"),
 		},
+		WorkflowPath: strings.TrimSpace(k.String("workflow_path")),
 	}
 
 	for _, raw := range k.Slices("trackers") {
@@ -127,6 +133,10 @@ func Load(opts Options) (*Config, error) {
 			Type: raw.String("type"),
 			Path: raw.String("path"),
 		})
+	}
+
+	if cfg.WorkflowPath == "" {
+		cfg.WorkflowPath = DefaultWorkflowPath(cfg.Trackers)
 	}
 
 	if errs := validate(cfg); len(errs) > 0 {
@@ -199,6 +209,42 @@ func dotify(flags map[string]string) map[string]any {
 		nested[parts[len(parts)-1]] = value
 	}
 	return root
+}
+
+// DefaultPath returns the default configuration file location,
+// <user config dir>/lambe/config.yaml. It is the file `lambe init` writes
+// and the implicit fallback for every subcommand's -config flag.
+func DefaultPath() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "config.yaml"
+	}
+	return filepath.Join(dir, "lambe", "config.yaml")
+}
+
+// DefaultWorkflowPath resolves the WORKFLOW.md location when the
+// configuration does not set workflow_path explicitly. Candidates are
+// checked in order: WORKFLOW.md in the current directory, in the first
+// tracker's path, and in <user config dir>/lambe/. When none exists the
+// cwd-relative "WORKFLOW.md" is returned so callers can report a
+// missing-file error against a stable path.
+func DefaultWorkflowPath(trackers []Tracker) string {
+	candidates := []string{"WORKFLOW.md"}
+	if len(trackers) > 0 {
+		candidates = append(candidates, filepath.Join(trackers[0].Path, "WORKFLOW.md"))
+	}
+	if dir, err := os.UserConfigDir(); err == nil {
+		candidates = append(candidates, filepath.Join(dir, "lambe", "WORKFLOW.md"))
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			if abs, absErr := filepath.Abs(candidate); absErr == nil {
+				return abs
+			}
+			return candidate
+		}
+	}
+	return "WORKFLOW.md"
 }
 
 func validate(cfg *Config) []error {

@@ -97,6 +97,76 @@ trackers:
 	}
 }
 
+func TestWorkflowPathExplicitOverride(t *testing.T) {
+	file := writeTemp(t, `
+workflow_path: /tmp/elsewhere/WORKFLOW.md
+`)
+	cfg, err := Load(Options{File: file})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.WorkflowPath != "/tmp/elsewhere/WORKFLOW.md" {
+		t.Errorf("workflow_path: got %q, want explicit override honored", cfg.WorkflowPath)
+	}
+}
+
+func TestDefaultWorkflowPathPrecedence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Chdir(t.TempDir())
+	trackerDir := t.TempDir()
+	trackers := []Tracker{{Name: "local", Type: "repo", Path: trackerDir}}
+
+	// No candidate exists: stable cwd-relative fallback.
+	if got := DefaultWorkflowPath(trackers); got != "WORKFLOW.md" {
+		t.Errorf("no candidates: got %q, want WORKFLOW.md", got)
+	}
+
+	// Tracker candidate only.
+	trackerWorkflow := filepath.Join(trackerDir, "WORKFLOW.md")
+	if err := os.WriteFile(trackerWorkflow, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := DefaultWorkflowPath(trackers); got != trackerWorkflow {
+		t.Errorf("tracker candidate: got %q, want %q", got, trackerWorkflow)
+	}
+
+	// cwd beats the tracker candidate.
+	cwdWorkflow := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	t.Chdir(filepath.Dir(cwdWorkflow))
+	if err := os.WriteFile("WORKFLOW.md", []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := DefaultWorkflowPath(trackers); got != cwdWorkflow {
+		t.Errorf("cwd should beat tracker: got %q, want %q", got, cwdWorkflow)
+	}
+
+	// User config dir candidate when cwd and tracker have none.
+	t.Chdir(t.TempDir())
+	if err := os.Remove(trackerWorkflow); err != nil {
+		t.Fatal(err)
+	}
+	userWorkflow := filepath.Join(home, "lambe", "WORKFLOW.md")
+	if err := os.MkdirAll(filepath.Dir(userWorkflow), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userWorkflow, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := DefaultWorkflowPath(trackers); got != userWorkflow {
+		t.Errorf("user config candidate: got %q, want %q", got, userWorkflow)
+	}
+}
+
+func TestDefaultPathUnderUserConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", home)
+	want := filepath.Join(home, "lambe", "config.yaml")
+	if got := DefaultPath(); got != want {
+		t.Errorf("DefaultPath: got %q, want %q", got, want)
+	}
+}
+
 func TestInvalidConfigReportsAllErrors(t *testing.T) {
 	file := writeTemp(t, `
 supervisor:

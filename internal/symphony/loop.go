@@ -199,14 +199,26 @@ type FormulaMaterializer interface {
 // poured root issue id per formula: bd mol pour is not deduped by bd itself
 // (each invocation materializes a fresh issue set — issue #6), so the
 // materializer skips a pour while the recorded root mol is still open and
-// re-allowed once it closes. Protos are ephemeral by default; both cook and
-// pour support --dry-run, which callers can enable for a rehearsal pass.
+// re-allowed once it closes. Re-arming is rate-limited by RefireInterval:
+// a root that just closed (for example a close-race limbo the next tick
+// misreads) must not rapid-fire fresh pours while upstream is still
+// broken. Protos are ephemeral by default; both cook and pour support
+// --dry-run, which callers can enable for a rehearsal pass.
 type BeadsMaterializer struct {
 	Bin    string
 	Dir    string
 	DryRun bool
 	Log    *slog.Logger
+	// RefireInterval is the minimum time between pours of the same
+	// formula after its recorded root closes. Non-positive values use
+	// DefaultRefireInterval.
+	RefireInterval time.Duration
 }
+
+// DefaultRefireInterval is the default pour re-arm delay: three ticks of
+// the default 10-second loop cadence, long enough for reconcile to
+// settle a close-race limbo before the same formula pours again.
+const DefaultRefireInterval = 30 * time.Second
 
 // materializedEntry is one ledger record: the poured root mol and when.
 type materializedEntry struct {
@@ -268,6 +280,29 @@ func (m *BeadsMaterializer) run(ctx context.Context, argv ...string) (string, er
 	return proc.RunCommand(ctx, m.Dir, append([]string{m.Bin}, argv...)...)
 }
 
+// refireInterval resolves the configured or default re-arm delay.
+func (m *BeadsMaterializer) refireInterval() time.Duration {
+	if m.RefireInterval > 0 {
+		return m.RefireInterval
+	}
+	return DefaultRefireInterval
+}
+
+// withinRefireWindow reports whether the formula's last pour happened
+// less than the re-fire interval ago, so a root that just closed cannot
+// trigger an immediate re-pour.
+func (m *BeadsMaterializer) withinRefireWindow(name string) bool {
+	entry, ok := m.loadLedger()[name]
+	if !ok {
+		return false
+	}
+	pouredAt, err := time.Parse(time.RFC3339, entry.PouredAt)
+	if err != nil {
+		return false
+	}
+	return time.Since(pouredAt) < m.refireInterval()
+}
+
 // Materialize implements FormulaMaterializer. The formula name doubles
 // as the proto id for bd mol pour, which resolves the formula file from
 // Dir/.beads/formulas and creates the step issues in one command. bd
@@ -279,8 +314,11 @@ func (m *BeadsMaterializer) Materialize(ctx context.Context, f Formula) error {
 		_, _ = m.run(ctx, "mol", "pour", f.Name, "--dry-run")
 		return nil
 	}
-	if _, live := m.pouredRootOpen(ctx, f.Name); live {
+	if rootID, live := m.pouredRootOpen(ctx, f.Name); live {
 		m.Log.Info("formula already materialized; root mol still open", "formula", f.Name)
+		return nil
+	} else if rootID != "" && m.withinRefireWindow(f.Name) {
+		m.Log.Info("formula root closed but the last pour is inside the refire interval; skipping this cycle", "formula", f.Name, "root", rootID)
 		return nil
 	}
 	out, err := m.run(ctx, "mol", "pour", f.Name)
@@ -465,7 +503,6 @@ func (l *Loop) runFormula(ctx context.Context, f Formula) error {
 	if err != nil {
 		return fmt.Errorf("formula trigger errored: %w", err)
 	}
-	l.Log.Debug("formula trigger evaluated", "formula", f.Name, "fired", fired)
 	if !fired {
 		return nil
 	}

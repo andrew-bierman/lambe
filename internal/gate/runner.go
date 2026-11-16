@@ -411,15 +411,26 @@ func (r *Runner) ghChecker() GHChecker {
 
 // settleGreen closes the issue behind the actor's claim, tombstones it,
 // and resets escalation counters. A close race means someone else already
-// closed it: the completion stands for the winner only — this runner
-// skips the tombstone (the close winner owns it) and surfaces GateErr so
-// the caller re-reconciles instead of treating the issue as terminal
-// here.
+// closed it: the runner re-reads the issue status — already closed means
+// the race winner finished the same terminal transition, so the
+// completion stands (returned green, without a tombstone: the close
+// winner owns it); anything else (someone re-opened it or holds it
+// in_progress) surfaces GateErr so the caller re-reconciles instead of
+// treating the issue as terminal here.
 func (r *Runner) settleGreen(ctx context.Context, req symphony.GateRequest, output string) (symphony.GateOutcome, error) {
 	id := req.Issue.ID
 	if err := r.Hub.Close(ctx, id, r.Actor, "gate green"); err != nil {
 		if errors.Is(err, ErrCloseRace) {
-			r.Log.Info("gate green close lost race; the close winner tombstones", "issue", id)
+			status, serr := r.Hub.IssueStatus(ctx, id)
+			switch {
+			case serr != nil:
+				r.Log.Warn("gate green close lost race; status re-read failed", "issue", id, "error", serr)
+			case status == StatusClosed:
+				r.Log.Info("gate green close lost race; issue already terminal, completion stands", "issue", id)
+				return symphony.GateOutcome{Verdict: symphony.GateGreen, Output: output}, nil
+			default:
+				r.Log.Info("gate green close lost race; issue not terminal, deferring to reconcile", "issue", id, "status", status)
+			}
 			return symphony.GateOutcome{Verdict: symphony.GateErr, Output: "close lost race: another actor already closed the issue"}, nil
 		}
 		r.Log.Error("gate green close failed, reporting gate error", "issue", id, "error", err)

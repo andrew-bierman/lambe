@@ -820,6 +820,7 @@ case "$1" in
     if [ -f %q ]; then echo '{"status":"closed"}'; else echo '{"status":"open"}'; fi ;;
 esac`, poursFile, stateFile)
 	if err := os.WriteFile(script, []byte(scriptBody), 0o700); err != nil { // #nosec G306 -- executable fixture in a private test directory
+	if err := os.WriteFile(script, []byte(scriptBody), 0o700); err != nil { // #nosec G306 -- test script must be executable
 		t.Fatal(err)
 	}
 
@@ -828,11 +829,13 @@ esac`, poursFile, stateFile)
 
 	if err := m.Materialize(context.Background(), fixture); err != nil {
 		onDisk, _ := os.ReadFile(script) // #nosec G304 -- test-owned executable fixture
+		onDisk, _ := os.ReadFile(script) // #nosec G304 -- test-owned temp path
 		t.Fatalf("first materialize: %v | script on disk:\n%s", err, onDisk)
 	}
 	if _, err := os.Stat(poursFile); err != nil {
 		ledger := m.loadLedger()
 		onDisk, _ := os.ReadFile(script) // #nosec G304 -- test-owned executable fixture
+		onDisk, _ := os.ReadFile(script) // #nosec G304 -- test-owned temp path
 		out, runErr := m.run(context.Background(), "mol", "pour", "latus-1436")
 		t.Fatalf("pours missing after first pour: stat=%v ledger=%+v manual-run-out=%q manual-err=%v | script on disk:\n%s", err, ledger, out, runErr, onDisk)
 	}
@@ -845,6 +848,9 @@ esac`, poursFile, stateFile)
 	if err := os.WriteFile(stateFile, []byte("closed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Backdate the last pour past the refire interval so the closed root
+	// re-arms immediately; the interval itself is pinned separately.
+	backdateLedger(t, m, "latus-1436")
 	if err := m.Materialize(context.Background(), fixture); err != nil {
 		t.Fatal(err)
 	}
@@ -853,9 +859,70 @@ esac`, poursFile, stateFile)
 	}
 }
 
+// TestBeadsMaterializerRefireInterval pins the re-fire rate limit: once a
+// formula's root mol closes, an immediate re-pour is blocked by the
+// refire interval and allowed once the interval elapses, so a close-race
+// limbo upstream cannot rapid-fire fresh issue sets on every tick.
+func TestBeadsMaterializerRefireInterval(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".beads"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	poursFile := filepath.Join(dir, "fake-bd-pours")
+	script := filepath.Join(dir, "fake-bd")
+	scriptBody := fmt.Sprintf(`#!/bin/bash
+case "$1" in
+  mol) echo "Root issue: test-mol-4"; echo "poured" >> %q ;;
+  show) echo '{"status":"closed"}' ;;
+esac`, poursFile)
+	if err := os.WriteFile(script, []byte(scriptBody), 0o700); err != nil { // #nosec G306 -- test script must be executable // #nosec G306 -- test script must stay executable
+		t.Fatal(err)
+	}
+
+	m := &BeadsMaterializer{Bin: script, Dir: dir, Log: slog.New(slog.NewTextHandler(&strings.Builder{}, nil))}
+	fixture := Formula{Name: "latus-1436"}
+
+	if err := m.Materialize(context.Background(), fixture); err != nil {
+		t.Fatal(err)
+	}
+	// Root already closed: an immediate second pour is inside the
+	// default refire window and must be blocked.
+	if err := m.Materialize(context.Background(), fixture); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustRead(t, poursFile); got != "poured\n" {
+		t.Fatalf("pours inside the refire interval = %q, want exactly one", got)
+	}
+
+	// Once the recorded pour ages past the interval, the pour is allowed.
+	backdateLedger(t, m, "latus-1436")
+	if err := m.Materialize(context.Background(), fixture); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(strings.Split(strings.TrimRight(mustRead(t, poursFile), "\n"), "\n")); n != 2 {
+		t.Fatalf("pours after the interval = %d, want 2", n)
+	}
+}
+
+// backdateLedger moves a formula's recorded pour time one refire window
+// into the past.
+func backdateLedger(t *testing.T, m *BeadsMaterializer, name string) {
+	t.Helper()
+	entries := m.loadLedger()
+	entry, ok := entries[name]
+	if !ok || entry.RootID == "" {
+		t.Fatalf("no ledger entry for %s to backdate", name)
+	}
+	entry.PouredAt = time.Now().Add(-2 * DefaultRefireInterval).UTC().Format(time.RFC3339)
+	entries[name] = entry
+	m.saveLedger(entries)
+}
+
 func mustRead(t *testing.T, path string) string {
 	t.Helper()
 	raw, err := os.ReadFile(path) // #nosec G304 -- test-owned fixture path
+	raw, err := os.ReadFile(path) // #nosec G304 -- test-owned temp path
 	if err != nil {
 		t.Fatal(err)
 	}
