@@ -324,6 +324,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 		spaces := symphony.NewWorkspaceManager(filepath.Join(d.opts.StateDir, "workspaces"), d.log)
 		l := symphony.NewLoop(filtered, loader, d.asm.Runner, d.asm.Gates, spaces, d.log)
+		view := newLiveView(LivePath(d.opts.StateDir, d.opts.Config), func(err error) { d.log.Warn("live view update failed", "error", err) })
+		view.registry = d.asm.Registry
+		view.start()
+		defer view.close()
+		l.Observe = view.progress
+		if runner, ok := d.asm.Runner.(*harnessRunner); ok {
+			runner.live = view
+		}
 		l.ControlTimeout = d.cycleBound()
 		l.CheckpointDir = filepath.Join(d.opts.StateDir, "sessions", strings.TrimSuffix(lockName, ".lock"))
 		if err := l.Restore(runCtx, d.opts.Actor); err != nil {

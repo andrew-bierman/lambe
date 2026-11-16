@@ -92,6 +92,7 @@ func formulaDir(trackerDir string) string {
 // session; ACP currently creates a new conversation after process retirement.
 type harnessRunner struct {
 	name string
+	live *liveView
 	cfg  *config.Config
 
 	// persist records an agent process group id onto the session's
@@ -121,6 +122,7 @@ type supervisedDriver struct {
 
 	mu            sync.Mutex
 	lastAssistant string
+	onEvent       func(harness.Event)
 }
 
 type agentStderr struct{ log *slog.Logger }
@@ -158,6 +160,9 @@ func (sd *supervisedDriver) drain(log *slog.Logger) {
 }
 
 func (sd *supervisedDriver) recordEvent(ev harness.Event, log *slog.Logger) {
+	if sd.onEvent != nil {
+		sd.onEvent(ev)
+	}
 	if msg, ok := ev.(harness.MessageCompletedEvent); ok && msg.Role == "assistant" && msg.Text != "" {
 		sd.mu.Lock()
 		sd.lastAssistant = msg.Text
@@ -343,6 +348,9 @@ func (r *harnessRunner) driverFor(req symphony.TurnRequest) (*supervisedDriver, 
 		return nil, err
 	}
 	sd := newSupervisedDriver(drv)
+	if r.live != nil {
+		sd.onEvent = func(ev harness.Event) { r.live.event(req.SessionID, ev) }
+	}
 	r.drivers[req.SessionID] = sd
 	go sd.drain(logging.Default())
 	return sd, nil

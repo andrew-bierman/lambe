@@ -128,6 +128,30 @@ claiming work. Backends advertising `session/resume` reopen without replaying ol
 only when Lambe can supply the full task prompt, with a diagnostic. Lambe records the actual
 backend thread before prompting. Pi reopens its saved workspace session.
 
+## Watching agent work
+
+Keep `lambe run` running, then open another terminal:
+
+```sh
+lambe tui                       # supervisor phase, attempts, tools, assistant output
+lambe logs -follow              # follow recent agent output
+lambe logs -issue ISSUE_ID      # inspect one issue
+lambe logs -json                # shared read-only snapshot for scripts and other clients
+```
+
+Pass the same `-config FILE` to these commands when using a custom configuration.
+The TUI exits with Ctrl-C or `q` followed by Enter. In Rex it reports an OSC
+status badge in its own pane. Rex is optional; agent execution stays headless
+and the views work in a normal terminal. A stopped daemon’s output is labeled
+historical, using its native process identity rather than a reusable PID alone.
+
+The private live snapshot keeps owned work visible and trims completed history
+when it reaches 100 issues,
+up to 4 KiB per issue. It contains tool names and completed assistant messages;
+it is a progress view, not a full transcript archive. The tracker and restart
+checkpoints remain the scheduling authority. Future clients can use the same
+projection without starting another scheduler.
+
 ## Adapter seams
 
 lambe is built around a small set of seams. What exists today:
@@ -138,7 +162,7 @@ lambe is built around a small set of seams. What exists today:
 | Harness | Pi | Codex through ACP, configurable ACP agents |
 | Store | Embedded Beads local store | — |
 | Gates | `shell`, `gh:run`, `gh:pr` | — |
-| Surfaces | none yet | MCP, Rex planned |
+| Surfaces | terminal logs/TUI and JSON progress | MCP, optional Rex badges |
 
 ## Configuration
 

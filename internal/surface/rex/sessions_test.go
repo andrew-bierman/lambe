@@ -60,7 +60,7 @@ func TestShellClientCreateSession(t *testing.T) {
 	var gotArgs []string
 	sc := NewShellClient(func(_ context.Context, name string, args ...string) (string, int, error) {
 		gotName, gotArgs = name, args
-		return `{"id":"ses-7","name":"lambe-issues"}`, 0, nil
+		return `{"session_id":"ses-7"}`, 0, nil
 	})
 	s, err := sc.CreateSession(context.Background(), SessionRequest{
 		Name:   "issues",
@@ -76,7 +76,7 @@ func TestShellClientCreateSession(t *testing.T) {
 		t.Errorf("command = %q, want rex", gotName)
 	}
 	joined := strings.Join(gotArgs, " ")
-	for _, want := range []string{"api", "call", "session.create", "--json"} {
+	for _, want := range []string{"new", "issues", "--json"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("args %q missing %q", joined, want)
 		}

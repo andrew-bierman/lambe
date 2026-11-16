@@ -42,7 +42,7 @@ func TestAdapterLifecycle(t *testing.T) {
 	}
 	got := out.String()
 	for _, want := range []string{
-		"]7501;working;", "]7501;waiting-on-user;", "]7501;finished;",
+		"]7501;state=working:", "]7501;state=idle:", "]7501;state=done:",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output %q missing %q", got, want)
@@ -58,7 +58,7 @@ func TestAdapterWatchdogKilledEmitsFailed(t *testing.T) {
 	if err := a.Handle(context.Background(), RunStateEvent{State: RunStateWatchdogKilled}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if !strings.Contains(out.String(), "]7501;failed;") {
+	if !strings.Contains(out.String(), "]7501;state=error:") {
 		t.Errorf("output %q missing failed badge", out.String())
 	}
 }
@@ -69,7 +69,7 @@ func TestAdapterStateBeforeStartStillEmits(t *testing.T) {
 	if err := a.Handle(context.Background(), RunStateEvent{State: RunStateIdle}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if !strings.Contains(out.String(), "]7501;idle;") {
+	if !strings.Contains(out.String(), "]7501;state=idle:") {
 		t.Errorf("output %q missing idle badge", out.String())
 	}
 	if len(a.Sessions()) != 0 {

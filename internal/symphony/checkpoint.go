@@ -50,6 +50,7 @@ func (l *Loop) checkpointPath(id string) string {
 }
 
 func (l *Loop) saveCheckpoint(s *session, phase checkpointPhase, retry *Retry) error {
+	l.progress(s, string(phase), retry)
 	if l.CheckpointDir == "" {
 		return nil
 	}

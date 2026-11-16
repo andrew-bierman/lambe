@@ -20,6 +20,9 @@ const maxRunTail = 4096
 // symphony loop and its wired runner. The run's identifier is the issue id:
 // one run per issue at a time.
 type Run struct {
+	// ProjectionOnly marks loop-owned observations without a control cancellation hook.
+	ProjectionOnly bool
+
 	// IssueID is the tracker issue the run works on; it doubles as the
 	// run's handle on the wire surface.
 	IssueID string
@@ -101,8 +104,9 @@ func (r *RunRegistry) Register(issueID, agent, prompt, workspace string, depth i
 		r.order = append(r.order, issueID)
 	}
 	r.runs[issueID] = run
+	result := *run
 	r.mu.Unlock()
-	return *run
+	return result
 }
 
 // Lookup returns a copy of one run's state; ok is false for unknown runs.
@@ -264,21 +268,23 @@ func (r *RunRegistry) TerminateGroup(handle string, grace time.Duration) error {
 // cosmetic: they run on a background goroutine with their own timeout and
 // their failures are logged, never propagated.
 func (r *RunRegistry) emit(handle, agent string, state mcp.RunState) {
-	if r.surface == nil {
+	r.mu.RLock()
+	adapter, log := r.surface, r.log
+	r.mu.RUnlock()
+	if adapter == nil {
 		return
 	}
-	adapter := r.surface
 	ev := rex.RunStateEvent{State: rexRunState(state)}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if agent != "" && state == mcp.StateRunning {
 			if err := adapter.Handle(ctx, rex.RunStartedEvent{Agent: agent}); err != nil {
-				r.log.Warn("rex surface: run started", "run", handle, "error", err)
+				log.Warn("rex surface: run started", "run", handle, "error", err)
 			}
 		}
 		if err := adapter.Handle(ctx, ev); err != nil {
-			r.log.Warn("rex surface: state badge", "run", handle, "error", err)
+			log.Warn("rex surface: state badge", "run", handle, "error", err)
 		}
 	}()
 }

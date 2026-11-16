@@ -375,6 +375,9 @@ type session struct {
 // Tick coordinates independent workers without waiting for agent turns.
 // Coordinator operations (Tick, Wait, Close) must be serialized by the caller.
 type Loop struct {
+	// Observe receives progress from concurrent workers; it must be concurrency-safe.
+	Observe func(Progress)
+
 	Tracker          tracker.Tracker
 	Loader           *Loader
 	Runner           AgentRunner
@@ -881,6 +884,7 @@ func (l *Loop) terminal(ctx context.Context, s *session, reason string) {
 }
 
 func (l *Loop) cleanup(ctx context.Context, s *session, reason string) {
+	l.progress(s, "stopped: "+reason, nil)
 	log := logging.WithIssue(l.Log, s.issue.ID)
 	log.Info("run terminal", "reason", reason)
 	l.closeRunnerSession(ctx, s.issue.ID)

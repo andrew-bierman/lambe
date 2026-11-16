@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 )
 
 // Session is one Rex session as returned by the Rex server API.
@@ -53,7 +52,7 @@ func (c *ShellClient) call(ctx context.Context, result any, args ...string) erro
 	if c.run == nil {
 		return fmt.Errorf("rex: shell client has no runner")
 	}
-	full := append([]string{"api", "call"}, args...)
+	full := append([]string{}, args...)
 	full = append(full, "--json")
 	stdout, code, err := c.run(ctx, "rex", full...)
 	if err != nil {
@@ -68,30 +67,37 @@ func (c *ShellClient) call(ctx context.Context, result any, args ...string) erro
 	return nil
 }
 
-// CreateSession creates a labeled session for a supervised agent. Labels are
-// passed as repeated key=value arguments in deterministic order.
+// CreateSession creates a named session. Rex CLI has no arbitrary metadata labels.
 func (c *ShellClient) CreateSession(ctx context.Context, req SessionRequest) (Session, error) {
-	args := []string{"session.create", "--name", req.Name}
-	for _, k := range sortedKeys(req.Labels) {
-		args = append(args, "--label", k+"="+req.Labels[k])
+	var created struct {
+		ID string `json:"session_id"`
 	}
-	var s Session
-	if err := c.call(ctx, &s, args...); err != nil {
+	if err := c.call(ctx, &created, "new", req.Name); err != nil {
 		return Session{}, err
 	}
-	if s.ID == "" {
-		return Session{}, fmt.Errorf("rex session.create returned no session id")
+	if created.ID == "" {
+		return Session{}, fmt.Errorf("rex new returned no session id")
 	}
+	s := Session{ID: created.ID, Name: req.Name}
 	return s, nil
 }
 
 // ListSessions lists sessions visible to lambe.
 func (c *ShellClient) ListSessions(ctx context.Context) ([]Session, error) {
-	var out []Session
-	if err := c.call(ctx, &out, "session.list"); err != nil {
+	var out struct {
+		Sessions []struct {
+			ID   string `json:"session_id"`
+			Name string `json:"label"`
+		} `json:"sessions"`
+	}
+	if err := c.call(ctx, &out, "ls"); err != nil {
 		return nil, err
 	}
-	return out, nil
+	sessions := make([]Session, 0, len(out.Sessions))
+	for _, s := range out.Sessions {
+		sessions = append(sessions, Session{ID: s.ID, Name: s.Name})
+	}
+	return sessions, nil
 }
 
 // Capture returns the captured output of one session, uninterpreted.
@@ -99,29 +105,14 @@ func (c *ShellClient) Capture(ctx context.Context, sessionID string) (string, er
 	if c.run == nil {
 		return "", fmt.Errorf("rex: shell client has no runner")
 	}
-	stdout, code, err := c.run(ctx, "rex", "capture", "--json", sessionID)
+	stdout, code, err := c.run(ctx, "rex", "capture", "-s", sessionID, "--trim", "--unwrap")
 	if err != nil {
 		return "", fmt.Errorf("rex capture %s: %w", sessionID, err)
 	}
 	if code != 0 {
 		return "", fmt.Errorf("rex capture %s: exit %d: %s", sessionID, code, truncate(stdout))
 	}
-	var out struct {
-		Output string `json:"output"`
-	}
-	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
-		return "", fmt.Errorf("rex capture %s: decode response: %w", sessionID, err)
-	}
-	return out.Output, nil
-}
-
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return stdout, nil
 }
 
 // truncate shortens command output embedded in error messages.
