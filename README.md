@@ -25,6 +25,24 @@ through work item by work item, and treats a task as done only when external
 checks are green — never because a process exited zero. That last property,
 verified completion, is the product.
 
+## First-run setup
+
+Run `lambe init` from the repository you want to supervise. It writes a config
+that pins that repository’s `WORKFLOW.md`, so running Lambe from another folder
+does not accidentally select a different prompt. Existing files are preserved.
+
+Before dispatching real work, configure the workflow’s workspace hooks and the
+completion check in a `[gate]` table in that starter or a separate formula file.
+Every configured gate applies to every task in this tracker. Lambe refuses to
+start without a completion gate, before claiming existing work. The starter’s automatic
+trigger starts disabled; the starter uses native Beads formula and step fields.
+Lambe starts the configured agent itself when an eligible task appears—you do
+not start a second agent session. Queue a task with `bd create` after configuring
+its completion gate, and inspect it with `lambe status`.
+
+`lambe version` reports the installed Go module version for upstream installs,
+even when no release linker flags were supplied.
+
 ## Quickstart
 
 Install (Go 1.27+):
@@ -104,6 +122,11 @@ Pi remains the default. To select Codex during setup:
 npm install -g @agentclientprotocol/codex-acp
 lambe init -harness codex
 ```
+
+For an npm-installed Codex adapter, Lambe uses the Node executable beside
+the adapter when available, then checks the required runtime API before
+claiming work. An older shell Node cannot silently break the first prompt.
+Native adapters and explicit custom commands retain their own runtime.
 
 Authenticate Codex before running Lambe, then review the generated workflow
 and completion gate. Existing configurations can set `harness: codex` instead

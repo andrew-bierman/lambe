@@ -161,8 +161,12 @@ func LoadFormulas(dir string) ([]Formula, error) {
 		}
 		path := filepath.Join(dir, e.Name())
 		var spec formulaTOML
-		if _, err := toml.DecodeFile(path, &spec); err != nil { // #nosec G304 -- path built from the configured formulas directory
+		meta, err := toml.DecodeFile(path, &spec)
+		if err != nil { // #nosec G304 -- path built from the configured formulas directory
 			return nil, fmt.Errorf("decode formula %s: %w", path, err)
+		}
+		if !meta.IsDefined("trigger") {
+			continue
 		}
 		if spec.Trigger.Command == "" {
 			return nil, fmt.Errorf("formula %s: trigger.command is required", path)
