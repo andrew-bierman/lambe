@@ -172,6 +172,96 @@ func TestRevisionPinWorkflowEditedBetweenAttempts(t *testing.T) {
 	}
 }
 
+type unavailableRefreshTracker struct {
+	tracker.Tracker
+	all       bool
+	heartbeat bool
+}
+
+func (t unavailableRefreshTracker) Dispatchable(ctx context.Context, q tracker.DispatchQuery) ([]tracker.Issue, error) {
+	if t.all || len(q.IDs) > 0 {
+		return nil, context.DeadlineExceeded
+	}
+	return t.Tracker.Dispatchable(ctx, q)
+}
+
+func (t unavailableRefreshTracker) Heartbeat(ctx context.Context, id string) error {
+	if t.heartbeat {
+		return context.DeadlineExceeded
+	}
+	return t.Tracker.Heartbeat(ctx, id)
+}
+
+func TestRetrySurvivesTemporaryTrackerRefreshFailure(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name      string
+		all       bool
+		heartbeat bool
+	}{{"refresh", false, false}, {"all reads", true, false}, {"heartbeat", false, true}} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, "body", failTurn, settle)
+			if err := f.loop.Tick(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			f.loop.Tracker = unavailableRefreshTracker{Tracker: f.tr, all: tt.all, heartbeat: tt.heartbeat}
+			if err := f.loop.Tick(t.Context()); (err != nil) != tt.all {
+				t.Fatalf("outage tick error = %v, all reads unavailable = %t", err, tt.all)
+			}
+			if got := f.runner.count(); got != 1 {
+				t.Fatalf("tracker unavailable: got %d turns, want 1", got)
+			}
+			f.loop.Tracker = f.tr
+			if err := f.loop.Tick(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			calls := f.runner.recorded()
+			if len(calls) != 2 || calls[1].Attempt != 2 {
+				t.Fatalf("retry did not resume after tracker recovery: %+v", calls)
+			}
+		})
+	}
+}
+
+type lostRetryClaimTracker struct{ tracker.Tracker }
+
+func (t lostRetryClaimTracker) Heartbeat(context.Context, string) error {
+	return tracker.ErrNotOwner
+}
+
+func TestRetryStandsDownAfterClaimLost(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "body", failTurn, settle)
+	if err := f.loop.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	workspace := f.runner.recorded()[0].Workspace
+	f.tr.mu.Lock()
+	issue := f.tr.issues["i-1"]
+	issue.Assignee = "another-supervisor"
+	f.tr.issues["i-1"] = issue
+	f.tr.mu.Unlock()
+	f.loop.Tracker = lostRetryClaimTracker{Tracker: f.tr}
+	if err := f.loop.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	f.loop.Tracker = f.tr
+	if err := f.loop.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.runner.count(); got != 1 {
+		t.Fatalf("lost claim must not run another turn: got %d", got)
+	}
+	current, _ := f.tr.get("i-1")
+	if current.Assignee != "another-supervisor" || current.Status != "in_progress" {
+		t.Fatalf("foreign claim changed: %+v", current)
+	}
+	if _, err := os.Stat(workspace); err != nil {
+		t.Fatalf("workspace must be retained after losing ownership: %v", err)
+	}
+}
+
 func TestAfterCreateFailureRunnerNeverInvokedRetriedLater(t *testing.T) {
 	t.Parallel()
 	flag := filepath.Join(t.TempDir(), "fail-create")

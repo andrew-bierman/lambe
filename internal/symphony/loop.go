@@ -340,10 +340,22 @@ func (l *Loop) serviceRetries(ctx context.Context) error {
 		stop, err := Reconcile(ctx, l.Tracker, []string{r.IssueID})
 		if err != nil {
 			l.Log.Error("retry reconcile failed", "issue", r.IssueID, "error", err)
+			l.retries.Add(r)
 			continue
 		}
 		if len(stop) > 0 {
 			l.terminal(ctx, s, "retry found terminal state")
+			continue
+		}
+		if err := l.Tracker.Heartbeat(ctx, r.IssueID); err != nil {
+			if errors.Is(err, tracker.ErrNotOwner) {
+				l.Log.Info("retry claim lost, standing down", "issue", r.IssueID)
+				l.closeRunnerSession(ctx, r.IssueID)
+				delete(l.sessions, r.IssueID)
+			} else {
+				l.Log.Error("retry ownership check failed", "issue", r.IssueID, "error", err)
+				l.retries.Add(r)
+			}
 			continue
 		}
 		if r.Kind == RetryGate {
