@@ -386,3 +386,14 @@ func TestBareCommandsLoadInitializedConfigurationFromAnotherDirectory(t *testing
 		t.Fatalf("bare command ignored initialized setup: path=%q cfg=%+v err=%v", path, cfg, err)
 	}
 }
+
+// TestInitHelpIsSuccess pins the CLI contract that -h/--help exits cleanly:
+// flag.ErrHelp is a successful outcome of the setup wizard, not a failure.
+// (The flag package prints usage to its own stderr; runInit's writer only
+// carries wizard output.)
+func TestInitHelpIsSuccess(t *testing.T) {
+	var out strings.Builder
+	if err := runInit([]string{"-h"}, strings.NewReader(""), &out); err != nil {
+		t.Fatalf("runInit(-h) = %v; want nil", err)
+	}
+}

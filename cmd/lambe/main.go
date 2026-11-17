@@ -334,6 +334,11 @@ func runInit(args []string, in io.Reader, out io.Writer) error {
 	harness := fs.String("harness", "pi", "agent backend: pi, codex, or acp")
 	nonInteractive := fs.Bool("non-interactive", false, "skip all prompts and use defaults")
 	if err := fs.Parse(args); err != nil {
+		// -h/--help prints the flag usage and returns flag.ErrHelp: that is
+		// a successful outcome, not a setup failure.
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if _, err := daemon.HarnessCommand(&config.Config{Harness: *harness}); err != nil {
