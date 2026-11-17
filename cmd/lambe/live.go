@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,7 +16,7 @@ import (
 
 	"github.com/andrew-bierman/lambe/internal/config"
 	"github.com/andrew-bierman/lambe/internal/daemon"
-	"github.com/andrew-bierman/lambe/internal/surface/rex"
+	"github.com/andrew-bierman/lambe/internal/surface/tui"
 )
 
 func terminalText(text string) string {
@@ -29,7 +28,7 @@ func terminalText(text string) string {
 	}, strings.ToValidUTF8(text, "�"))
 }
 
-func runLive(args []string, tui bool, in io.Reader, out io.Writer) error {
+func runLive(args []string, useTUI bool, _ io.Reader, out io.Writer) error {
 	fs := flag.NewFlagSet("lambe logs", flag.ContinueOnError)
 	configFile := fs.String("config", "", "config file")
 	issue := fs.String("issue", "", "show one issue")
@@ -40,6 +39,9 @@ func runLive(args []string, tui bool, in io.Reader, out io.Writer) error {
 	}
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %v", fs.Args())
+	}
+	if useTUI && (*issue != "" || *follow || *asJSON) {
+		return fmt.Errorf("tui does not support -issue, -follow, or -json")
 	}
 	configPath, err := cliConfigPath(*configFile)
 	if err != nil {
@@ -53,94 +55,45 @@ func runLive(args []string, tui bool, in io.Reader, out io.Writer) error {
 		return err
 	}
 	path := daemon.LivePath(daemon.DefaultStateDir(), cfg)
+
+	if useTUI {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		return tui.Run(ctx, path)
+	}
+
+	return runLogsFollow(path, *issue, *follow, *asJSON, out)
+}
+
+func runLogsFollow(path, issue string, follow, asJSON bool, out io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if tui {
-		go func() {
-			scanner := bufio.NewScanner(in)
-			for scanner.Scan() {
-				if strings.TrimSpace(scanner.Text()) == "q" {
-					stop()
-					return
-				}
-			}
-		}()
-	}
+
 	previous := map[string]daemon.LiveRun{}
 	render := func() error {
 		snapshot, alive, err := daemon.ReadLive(path)
 		if err != nil {
 			return fmt.Errorf("read live output: %w; start `lambe run` with the same configuration first", err)
 		}
-		if *asJSON {
+		if asJSON {
 			return json.NewEncoder(out).Encode(snapshot)
 		}
-		if tui {
-			if os.Getenv("REX_SESSION") != "" {
-				status := rex.StatusIdle
-				for _, run := range snapshot.Runs {
-					if run.Phase == "running" || run.Phase == "gating" || run.Phase == "preparing" || run.Phase == "claiming" {
-						status = rex.StatusWorking
-						break
-					}
-				}
-				if err := rex.EmitStatus(out, status, "Lambe supervisor: "+stateDescription(alive)); err != nil {
-					return err
-				}
-			}
-			if _, err := fmt.Fprint(out, "\x1b[H\x1b[2J"); err != nil {
-				return err
-			}
-			state := "running"
-			if !alive {
-				state = "stopped (historical output)"
-			}
-			if _, err := fmt.Fprintf(out, "Lambe — %s — updated %s\nq + Enter or Ctrl-C closes this viewer only\n\n", state, snapshot.UpdatedAt.Format(time.RFC3339)); err != nil {
-				return err
-			}
-		} else if !alive && len(previous) == 0 {
+		if !alive && len(previous) == 0 {
 			if _, err := fmt.Fprintln(out, "Daemon stopped; showing historical output."); err != nil {
 				return err
 			}
 		}
-		runs := snapshot.Runs
-		if tui && *issue == "" {
-			var visible []daemon.LiveRun
-			for _, run := range runs {
-				if !strings.HasPrefix(run.Phase, "stopped:") {
-					visible = append(visible, run)
-				}
-			}
-			for i := len(runs) - 1; i >= 0 && len(visible) < 4; i-- {
-				if strings.HasPrefix(runs[i].Phase, "stopped:") {
-					visible = append(visible, runs[i])
-				}
-			}
-			if len(visible) > 4 {
-				visible = visible[:4]
-			}
-			runs = visible
-		}
-		for _, run := range runs {
-			if *issue != "" && run.IssueID != *issue {
+		for _, run := range snapshot.Runs {
+			if issue != "" && run.IssueID != issue {
 				continue
 			}
 			text := run.Tail
-			if !tui {
-				old, seen := previous[run.IssueID]
-				if seen && old.TailBytes == run.TailBytes && old.Progress == run.Progress {
-					continue
-				}
-				text = tailDelta(text, run.TailBytes-old.TailBytes)
+			old, seen := previous[run.IssueID]
+			if seen && old.TailBytes == run.TailBytes && old.Progress == run.Progress {
+				continue
 			}
+			text = tailDelta(text, run.TailBytes-old.TailBytes)
 			previous[run.IssueID] = run
-			if tui && *issue == "" {
-				lines := strings.Split(strings.TrimSpace(text), "\n")
-				if len(lines) > 2 {
-					lines = lines[len(lines)-2:]
-				}
-				text = strings.Join(lines, "\n")
-			}
 			if !run.WakeAt.IsZero() {
 				text = "wake at " + run.WakeAt.Format(time.RFC3339) + "\n" + text
 			}
@@ -151,7 +104,7 @@ func runLive(args []string, tui bool, in io.Reader, out io.Writer) error {
 		return nil
 	}
 	if err := render(); err != nil {
-		if !*asJSON && (tui || *follow) && errors.Is(err, os.ErrNotExist) {
+		if !asJSON && follow && errors.Is(err, os.ErrNotExist) {
 			if _, writeErr := fmt.Fprintln(out, "Waiting for Lambe output; start lambe run with the same configuration."); writeErr != nil {
 				return writeErr
 			}
@@ -159,7 +112,7 @@ func runLive(args []string, tui bool, in io.Reader, out io.Writer) error {
 			return err
 		}
 	}
-	if *asJSON || (!tui && !*follow) {
+	if asJSON || !follow {
 		return nil
 	}
 	ticker := time.NewTicker(time.Second)
@@ -177,13 +130,6 @@ func runLive(args []string, tui bool, in io.Reader, out io.Writer) error {
 			}
 		}
 	}
-}
-
-func stateDescription(alive bool) string {
-	if alive {
-		return "running"
-	}
-	return "stopped"
 }
 
 func tailDelta(current string, added int64) string {

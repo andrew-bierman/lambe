@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/term"
+
 	"github.com/andrew-bierman/lambe/internal/daemon"
 	"github.com/andrew-bierman/lambe/internal/symphony"
 )
@@ -71,6 +73,9 @@ func TestBareLiveViewUsesInitializedTrackerNamespace(t *testing.T) {
 }
 
 func TestLiveViewCanWaitForDaemonStartupAndQuit(t *testing.T) {
+	if !term.IsTerminal(os.Stdout.Fd()) {
+		t.Skip("TUI requires an interactive terminal")
+	}
 	isolatedConfigDir(t)
 	t.Setenv("LAMBE_STATE_DIR", t.TempDir())
 	t.Chdir(t.TempDir())
@@ -82,10 +87,10 @@ func TestLiveViewCanWaitForDaemonStartupAndQuit(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if err := runLive(nil, true, strings.NewReader("q\n"), &out); err != nil {
+	if err := runLive(nil, true, strings.NewReader("q"), &out); err != nil {
 		t.Fatalf("view exited before daemon startup: %v", err)
 	}
-	if !strings.Contains(out.String(), "Waiting for Lambe output") {
+	if !strings.Contains(out.String(), "Waiting for lambe daemon") {
 		t.Fatal("startup wait was invisible")
 	}
 }
