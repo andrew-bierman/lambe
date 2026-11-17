@@ -205,7 +205,7 @@ lambe logs -json                # shared read-only snapshot for scripts and othe
 ```
 
 Pass the same `-config FILE` to these commands when using a custom configuration.
-The TUI exits with Ctrl-C or `q` followed by Enter. In Rex it reports an OSC
+The TUI exits with Ctrl-C, `q`, or Esc. In Rex it reports an OSC
 status badge in its own pane. Rex is optional; agent execution stays headless
 and the views work in a normal terminal. A stopped daemon’s output is labeled
 historical, using its native process identity rather than a reusable PID alone.
