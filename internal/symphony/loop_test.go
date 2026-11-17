@@ -1211,3 +1211,29 @@ func TestSlowRootLookupDoesNotStartAStarvedPour(t *testing.T) {
 		t.Fatal("starved pour was executed")
 	}
 }
+
+// TestGateErrorsEscalateToTerminal pins issue #18: a permanent gate error
+// parks the session after the escalation threshold instead of retrying the
+// gate forever without consuming an attempt.
+func TestGateErrorsEscalateToTerminal(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "body", settle)
+	f.loop.ContinuationDelay = 0
+	outcomes := make([]GateOutcome, gateEscalationThreshold)
+	for i := range outcomes {
+		outcomes[i] = GateOutcome{Verdict: GateErr, Output: "no gate formulas configured"}
+	}
+	f.gate.outcomes = outcomes
+
+	for i := 0; i < gateEscalationThreshold+3; i++ {
+		if err := f.loop.Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := len(f.gate.calls); got != gateEscalationThreshold {
+		t.Fatalf("gate evaluations = %d, want %d: terminal after the threshold, no further retries", got, gateEscalationThreshold)
+	}
+	if calls := f.runner.recorded(); len(calls) != 1 {
+		t.Fatalf("runner calls = %d, want 1: a gate error never re-prompts the agent", len(calls))
+	}
+}

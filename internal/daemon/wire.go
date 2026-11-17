@@ -60,6 +60,14 @@ func DefaultWire(cfg *config.Config, bdBin, actor string) func(*Assembly) error 
 		if err != nil {
 			return fmt.Errorf("wire gate hub: %w", err)
 		}
+		// bd has no built-in needs-human status; configure it once at wiring
+		// time so gate escalation can park an issue. Best-effort: the hub
+		// falls back to blocked when the value cannot be configured.
+		bootCtx, cancelBoot := context.WithTimeout(context.Background(), persistBound)
+		if err := hub.EnsureNeedsHumanStatus(bootCtx); err != nil {
+			log.Warn("needs-human custom status not configured; escalations will park as blocked", "error", err)
+		}
+		cancelBoot()
 		esc := gate.NewEscalator(hub)
 		gates := gate.NewRunner(formulaDir(primary), hub, esc, actor, log)
 		gates.CheckTimeout = controlTimeout(cfg)

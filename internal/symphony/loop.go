@@ -121,6 +121,12 @@ const (
 	GateErr
 )
 
+// gateEscalationThreshold bounds consecutive gate-error retries for one
+// session. A permanent condition (no gate configured, unreadable gate
+// config) must park for a human instead of retrying forever; the count
+// matches the escalator's own five-consecutive-occurrence threshold.
+const gateEscalationThreshold = 5
+
 // GateOutcome is one gate decision.
 type GateOutcome struct {
 	Verdict GateVerdict
@@ -498,6 +504,10 @@ type session struct {
 	// gate-only re-evaluation, so the agent is never re-prompted while the
 	// gate retries on the same output.
 	gateOutput string
+	// gateErrors counts consecutive gate-error verdicts for this session;
+	// a permanent gate condition is escalated to a human instead of retrying
+	// forever (issue #18).
+	gateErrors int
 }
 
 // Loop is the tick orchestrator: formula triggers, the two-read dispatch,
@@ -1103,12 +1113,29 @@ func (w *worker) evaluateGate(ctx context.Context, s *session, output string, lo
 		Output:    output,
 	})
 	if gerr != nil || outcome.Verdict == GateErr {
-		log.Info("gate error, retrying gate without consuming attempt", "error", gerr)
+		// The evaluator's Go error is nil by contract on GateErr; the real
+		// reason lives in outcome.Output. Log both, and count consecutive
+		// errors so a permanent condition (no gate configured, unreadable
+		// gate config) parks for a human instead of retrying forever.
+		reason := outcome.Output
+		if reason == "" && gerr != nil {
+			reason = gerr.Error()
+		}
+		s.gateErrors++
+		log.Info("gate error, retrying gate without consuming attempt",
+			"error", gerr, "gate_output", reason, "consecutive", s.gateErrors)
+		if s.gateErrors >= gateEscalationThreshold {
+			log.Error("gate escalation threshold reached; parking for human review",
+				"issue", s.issue.ID, "consecutive", s.gateErrors, "gate_output", reason)
+			l.terminal(ctx, s, "gate escalation")
+			return true
+		}
 		l.closeRunnerSession(ctx, s.issue.ID)
 		s.gateOutput = output
 		w.schedule(s, RetryGate, l.ContinuationDelay)
 		return true
 	}
+	s.gateErrors = 0
 	if outcome.Verdict == GateRed {
 		log.Info("gate red, scheduling failure retry with gate output")
 		s.lastGate = outcome.Output

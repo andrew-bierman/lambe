@@ -1478,3 +1478,37 @@ func (l *waitingLoop) Tick(ctx context.Context) error {
 	}
 	return l.Wait(ctx)
 }
+
+// TestNeedsHumanFallsBackToBlocked pins issue #18: bd rejects the
+// needs-human status unless the custom status is configured, and escalation
+// must still park the issue. Without EnsureNeedsHumanStatus the writeback
+// falls back to blocked, which keeps the issue out of the dispatch front.
+func TestNeedsHumanFallsBackToBlocked(t *testing.T) {
+	if os.Getenv("LAMBE_TEST_BD") != "1" {
+		t.Skip("set LAMBE_TEST_BD=1 to run the bd integration test")
+	}
+	if _, err := exec.LookPath("bd"); err != nil {
+		t.Skip("bd not on PATH")
+	}
+
+	dir := t.TempDir()
+	runBd(t, dir, "init") // deliberately does NOT configure status.custom
+
+	hub, err := gate.NewBdHub("", dir, "lambe-integration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := bdCreateIssue(t, dir, "needs-human fallback")
+
+	if err := hub.NeedsHuman(context.Background(), id, "no gate formulas configured", "gate output"); err != nil {
+		t.Fatalf("NeedsHuman should fall back to blocked, got error: %v", err)
+	}
+	show := runBd(t, dir, "show", id, "--json")
+	if !strings.Contains(show, `"status": "blocked"`) && !strings.Contains(show, `"status":"blocked"`) {
+		t.Fatalf("issue not parked as blocked:\n%s", show)
+	}
+	comments := runBd(t, dir, "comments", id)
+	if !strings.Contains(comments, "no gate formulas configured") {
+		t.Fatalf("parking reason missing from comments:\n%s", comments)
+	}
+}

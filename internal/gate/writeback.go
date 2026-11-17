@@ -143,7 +143,17 @@ func (h *BdHub) Defer(ctx context.Context, issue string, until time.Time, reason
 // bd alone.
 func (h *BdHub) NeedsHuman(ctx context.Context, issue, reason, lastGateOutput string) error {
 	if _, err := h.tr.Update(ctx, tracker.UpdateRequest{ID: issue, Status: StatusNeedsHuman}); err != nil {
-		return fmt.Errorf("needs-human %s: %w", issue, err)
+		// bd rejects needs-human unless the custom status is configured
+		// (EnsureNeedsHumanStatus). Escalation must still park the issue:
+		// fall back to blocked, which hides it from dispatch, and keep the
+		// reason in metadata so the parking is auditable.
+		if _, berr := h.tr.Update(ctx, tracker.UpdateRequest{
+			ID:       issue,
+			Status:   tracker.StatusBlocked,
+			Metadata: map[string]string{"lambe_needs_human_reason": reason},
+		}); berr != nil {
+			return fmt.Errorf("needs-human %s: %w (blocked fallback: %v)", issue, err, berr)
+		}
 	}
 	body := "lambe gate escalated this issue to needs-human: " + reason + "."
 	if lastGateOutput != "" {

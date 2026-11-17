@@ -127,7 +127,7 @@ func runDaemon(args []string) error {
 	if err := requireConfig(configPath); err != nil {
 		return err
 	}
-	if err := requireLocalTracker(configPath); err != nil {
+	if err := requireLocalTracker(cfg); err != nil {
 		return err
 	}
 	workflowPath := cfg.WorkflowPath
@@ -184,11 +184,11 @@ func daemonOptions(cfg *config.Config, configPath string) daemon.Options {
 
 // runStatus prints the morning report from the local tracker.
 func runStatus(args []string) error {
-	cfg, configPath, err := parseCommon(args)
+	cfg, _, err := parseCommon(args)
 	if err != nil {
 		return err
 	}
-	if err := requireLocalTracker(configPath); err != nil {
+	if err := requireLocalTracker(cfg); err != nil {
 		return err
 	}
 	return daemon.Status(os.Stdout, cfg, daemon.DefaultMachine())
@@ -199,11 +199,11 @@ func runStatus(args []string) error {
 // tick loop, then proxies tool calls into it. The daemon proper may be
 // running separately; spawns register runs its next tick dispatches.
 func runMCP(args []string) error {
-	cfg, configPath, err := parseCommon(args)
+	cfg, _, err := parseCommon(args)
 	if err != nil {
 		return err
 	}
-	if err := requireLocalTracker(configPath); err != nil {
+	if err := requireLocalTracker(cfg); err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
@@ -221,12 +221,16 @@ func runMCP(args []string) error {
 	return mcp.New(control, mcp.Options{Env: os.Environ()}).ServeStdio(ctx, os.Stdin, os.Stdout)
 }
 
-func requireLocalTracker(configPath string) error {
-	if configPath != "" {
-		return nil
+func requireLocalTracker(cfg *config.Config) error {
+	if len(cfg.Trackers) == 0 {
+		return errors.New("no trackers configured; run `lambe init` to create a config")
 	}
-	if _, err := os.Stat(".beads"); err != nil {
-		return fmt.Errorf("read local .beads tracker: %w; run bd init in the project root, or pass -config FILE to select another tracker", err)
+	dir := cfg.Trackers[0].Path
+	if dir == "" {
+		dir = "."
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".beads")); err != nil {
+		return fmt.Errorf("read tracker %s: %w; run `bd init` in that project root, or pass -config FILE to select another tracker", cfg.Trackers[0].Name, err)
 	}
 	return nil
 }
