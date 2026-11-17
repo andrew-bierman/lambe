@@ -155,6 +155,9 @@ func (t *ShellTransport) List(ctx context.Context, q DispatchQuery) (Result, err
 	for _, kv := range sortedPairs(q.Metadata) {
 		args = append(args, "--metadata-field", kv[0]+"="+kv[1])
 	}
+	if len(q.Labels) > 0 {
+		args = append(args, "--label", strings.Join(q.Labels, ","))
+	}
 	return t.run(ctx, args)
 }
 

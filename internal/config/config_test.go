@@ -273,3 +273,46 @@ func TestWorkspaceRootRejectsNUL(t *testing.T) {
 		t.Fatal("invalid workspace path accepted")
 	}
 }
+
+func TestLabelsDefaultEmpty(t *testing.T) {
+	cfg, err := Load(Options{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Labels) != 0 {
+		t.Errorf("default labels should be empty, got %v", cfg.Labels)
+	}
+}
+
+func TestLabelsFromConfigFile(t *testing.T) {
+	file := writeTemp(t, `labels:
+  - "lambe:babysit"
+  - "priority:high"
+`)
+	cfg, err := Load(Options{File: file, Env: []string{}})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Labels) != 2 || cfg.Labels[0] != "lambe:babysit" || cfg.Labels[1] != "priority:high" {
+		t.Errorf("labels: got %v, want [lambe:babysit priority:high]", cfg.Labels)
+	}
+}
+
+func TestLabelsRejectEmptyString(t *testing.T) {
+	file := writeTemp(t, `labels:
+  - "lambe:babysit"
+  - ""
+`)
+	_, err := Load(Options{File: file, Env: []string{}})
+	if err == nil {
+		t.Fatal("empty label string should be rejected")
+	}
+}
+
+func TestLabelsRejectNonList(t *testing.T) {
+	file := writeTemp(t, `labels: "not-a-list"`)
+	_, err := Load(Options{File: file, Env: []string{}})
+	if err == nil {
+		t.Fatal("non-list labels should be rejected")
+	}
+}

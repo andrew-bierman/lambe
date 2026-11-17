@@ -328,6 +328,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 		spaces := symphony.NewWorkspaceManager(workspaceRoot, d.log)
 		l := symphony.NewLoop(filtered, loader, d.asm.Runner, d.asm.Gates, spaces, d.log)
+		if d.opts.Config != nil {
+			l.DispatchLabels = d.opts.Config.Labels
+		}
 		view := newLiveView(LivePath(d.opts.StateDir, d.opts.Config), func(err error) { d.log.Warn("live view update failed", "error", err) })
 		view.registry = d.asm.Registry
 		view.start()
@@ -569,7 +572,11 @@ func (d *Daemon) refreshReport(ctx context.Context) {
 	if d.primary == nil {
 		return
 	}
-	rep, err := BuildReport(ctx, d.primary)
+	var labels []string
+	if d.opts.Config != nil {
+		labels = d.opts.Config.Labels
+	}
+	rep, err := BuildReport(ctx, d.primary, labels)
 	if err != nil {
 		d.log.Warn("report refresh failed", "category", ErrorCategory(err), "error", err)
 		return

@@ -728,7 +728,7 @@ func TestBuildAndRenderReport(t *testing.T) {
 		Metadata: map[string]string{"lambe_last_gate_output": "tests failed\nfull log follows"},
 	}
 
-	rep, err := BuildReport(context.Background(), tr)
+	rep, err := BuildReport(context.Background(), tr, nil)
 	if err != nil {
 		t.Fatalf("build report: %v", err)
 	}

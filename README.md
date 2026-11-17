@@ -244,6 +244,11 @@ Key knobs and defaults:
 | Silence timeout | 10m | Agent produces no output for this long → reclaim |
 | Turn timeout | 1h | Hard cap on a single agent turn |
 | Heartbeat | 150s | Liveness interval written to the tracker |
+| `labels` | (none) | Opt-in work lane: claim only issues with every listed label |
+
+On a shared tracker, set `labels` so lambe claims only issues explicitly
+marked for its workflow (for example `lambe:babysit`). Other hub tasks stay
+available to their own agents, and `lambe status` shows only lambe's own work.
 
 The supervisor dispatches agent workers without waiting for their turns. Set
 `agent.max_concurrent_agents` in `WORKFLOW.md` to cap active workers (default 10);

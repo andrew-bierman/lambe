@@ -65,6 +65,12 @@ type Config struct {
 	// workflow_path override if set, otherwise the first existing candidate
 	// from DefaultWorkflowPath's search order.
 	WorkflowPath string
+	// Labels is the opt-in work lane: when non-empty, the daemon claims
+	// only issues that carry every listed label. An empty slice (the
+	// default) dispatches every ready issue, preserving the pre-filter
+	// behavior. On a shared tracker this keeps lambe's workflow isolated
+	// from other agents' tasks.
+	Labels []string
 }
 
 // Options controls where Load reads overrides from. Env and Flags are
@@ -176,6 +182,20 @@ func Load(opts Options) (*Config, error) {
 			Type: raw.String("type"),
 			Path: raw.String("path"),
 		})
+	}
+
+	if raw := k.Get("labels"); raw != nil {
+		items, ok := raw.([]any)
+		if !ok {
+			return nil, fmt.Errorf("labels must be a YAML list of strings")
+		}
+		for i, item := range items {
+			s, ok := item.(string)
+			if !ok || strings.TrimSpace(s) == "" {
+				return nil, fmt.Errorf("labels[%d] must be a non-empty string", i)
+			}
+			cfg.Labels = append(cfg.Labels, strings.TrimSpace(s))
+		}
 	}
 
 	if cfg.WorkspaceRoot != "" {

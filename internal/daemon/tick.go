@@ -203,7 +203,7 @@ func RunTicks(ctx context.Context, interval time.Duration, cycle func(context.Co
 // interval is re-read through the getter each beat so a config reload
 // applies live. Lease losses downgrade the claim to standing-down state;
 // other errors are logged and retried on the next beat.
-func HeartbeatLoop(ctx context.Context, tr tracker.Tracker, actor string, interval func() time.Duration, log *slog.Logger) {
+func HeartbeatLoop(ctx context.Context, tr tracker.Tracker, actor string, interval func() time.Duration, log *slog.Logger, labels ...[]string) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -226,8 +226,12 @@ func HeartbeatLoop(ctx context.Context, tr tracker.Tracker, actor string, interv
 			}
 			// One round, wall-clock bounded: a hung tracker call fails
 			// the round and the next beat retries it.
+			var queryLabels []string
+			if len(labels) > 0 {
+				queryLabels = labels[0]
+			}
 			roundCtx, roundCancel := context.WithTimeout(ctx, heartbeatRoundBound)
-			issues, err := tr.Dispatchable(roundCtx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}})
+			issues, err := tr.Dispatchable(roundCtx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}, Labels: queryLabels})
 			if err != nil {
 				roundCancel()
 				log.Warn("heartbeat dispatch read failed",

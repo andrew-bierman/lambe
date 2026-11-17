@@ -100,6 +100,11 @@ type DispatchQuery struct {
 	Statuses []string
 	IDs      []string
 	Metadata map[string]string
+	// Labels filters by issue labels (AND semantics: must carry every
+	// label). An empty slice imposes no label constraint. The opt-in work
+	// lane sets this so a shared tracker only dispatches issues explicitly
+	// marked for this workflow.
+	Labels []string
 }
 
 // Empty reports whether the query can match nothing, in which case

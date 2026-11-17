@@ -63,12 +63,14 @@ const gateOutputMeta = "lambe_last_gate_output"
 // BuildReport reads the morning report from the local tracker: active runs
 // from the in-progress front joined with each session's newest attempt,
 // deferred runs from armed wake timers, and needs-human items from blocked
-// issues carrying a gate-output summary. Unreadable sections degrade to
-// empty with their error reported once.
-func BuildReport(ctx context.Context, tr tracker.Tracker) (Report, error) {
+// issues carrying a gate-output summary. When labels is non-empty, only
+// issues carrying every listed label are included (opt-in work lane on a
+// shared tracker). Unreadable sections degrade to empty with their error
+// reported once.
+func BuildReport(ctx context.Context, tr tracker.Tracker, labels []string) (Report, error) {
 	rep := Report{}
 
-	issues, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}})
+	issues, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}, Labels: labels})
 	if err != nil {
 		return rep, fmt.Errorf("read active runs: %w", err)
 	}
@@ -87,7 +89,7 @@ func BuildReport(ctx context.Context, tr tracker.Tracker) (Report, error) {
 	// front. "ready" is a bd pseudo-status only valid as a sole filter, so
 	// the multi-status read must not include it; a deferred run's issue
 	// stays open until its wake fires.
-	deferred, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusOpen, tracker.StatusDeferred}})
+	deferred, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusOpen, tracker.StatusDeferred}, Labels: labels})
 	if err == nil {
 		now := time.Now()
 		seen := map[string]bool{}
@@ -106,7 +108,7 @@ func BuildReport(ctx context.Context, tr tracker.Tracker) (Report, error) {
 		sort.Slice(rep.Deferred, func(i, j int) bool { return rep.Deferred[i].WakeAt.Before(rep.Deferred[j].WakeAt) })
 	}
 
-	blocked, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusBlocked}})
+	blocked, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusBlocked}, Labels: labels})
 	if err == nil {
 		for _, issue := range blocked {
 			if issue.Metadata[tracker.MetaKind] != "" {
@@ -244,7 +246,7 @@ func Status(w io.Writer, cfg *config.Config, machine string) error {
 	if err != nil {
 		return fmt.Errorf("open tracker %s: %w", t.Name, err)
 	}
-	rep, err := BuildReport(context.Background(), local)
+	rep, err := BuildReport(context.Background(), local, cfg.Labels)
 	if err != nil {
 		return err
 	}

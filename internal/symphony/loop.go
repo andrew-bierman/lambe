@@ -515,7 +515,11 @@ type Loop struct {
 	Formulas         []Formula
 	Materializer     FormulaMaterializer
 	DispatchStatuses []string
-	RetryCap         time.Duration
+	// DispatchLabels restricts the dispatch read to issues carrying every
+	// listed label (opt-in work lane). An empty slice dispatches every
+	// ready issue.
+	DispatchLabels []string
+	RetryCap       time.Duration
 	// ControlTimeout bounds each formula trigger and materialization.
 	// Non-positive values use the tracker command timeout; agent turns
 	// retain their own runner deadlines.
@@ -693,7 +697,7 @@ func (l *Loop) serviceRetries(ctx context.Context) error {
 // dispatch performs the state-list read and starts runs for every issue
 // whose claim wins.
 func (l *Loop) dispatch(ctx context.Context) error {
-	issues, err := l.Tracker.Dispatchable(ctx, tracker.DispatchQuery{Statuses: l.DispatchStatuses})
+	issues, err := l.Tracker.Dispatchable(ctx, tracker.DispatchQuery{Statuses: l.DispatchStatuses, Labels: l.DispatchLabels})
 	if err != nil {
 		return fmt.Errorf("dispatch read: %w", err)
 	}
