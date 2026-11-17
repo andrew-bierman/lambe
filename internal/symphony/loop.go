@@ -245,6 +245,10 @@ type BeadsMaterializer struct {
 // settle a close-race limbo before the same formula pours again.
 const DefaultRefireInterval = 30 * time.Second
 
+// materializationLockWait bounds how long a tick waits for the
+// materialization lock before giving up and letting the next tick retry.
+const materializationLockWait = 2 * time.Second
+
 // materializedEntry is one ledger record: the poured root mol and when.
 type materializedEntry struct {
 	Pending  bool   `json:"pending,omitempty"`
@@ -1126,7 +1130,7 @@ func (w *worker) evaluateGate(ctx context.Context, s *session, output string, lo
 			"error", gerr, "gate_output", reason, "consecutive", s.gateErrors)
 		if s.gateErrors >= gateEscalationThreshold {
 			log.Error("gate escalation threshold reached; parking for human review",
-				"issue", s.issue.ID, "consecutive", s.gateErrors, "gate_output", reason)
+				"consecutive", s.gateErrors, "gate_output", reason)
 			l.terminal(ctx, s, "gate escalation")
 			return true
 		}
@@ -1157,13 +1161,27 @@ func (m *BeadsMaterializer) materializationLock() (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) // #nosec G304 -- configured private materialization ledger lock
-	if err != nil {
-		return nil, err
-	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	// Contention is expected (a second daemon on the same tracker, or a
+	// close/reopen race inside one process), so acquisition waits briefly
+	// instead of failing the tick outright. Each attempt uses a fresh open
+	// description: a stale fd must never wedge materialization.
+	deadline := time.Now().Add(materializationLockWait)
+	for {
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) // #nosec G304 -- configured private materialization ledger lock
+		if err != nil {
+			return nil, err
+		}
+		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return file, nil
+		}
 		_ = file.Close()
-		return nil, fmt.Errorf("another process is materializing responsibilities: %w", err)
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			return nil, err
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("another process is materializing responsibilities (%s): lock held for %s", path, materializationLockWait)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	return file, nil
 }
