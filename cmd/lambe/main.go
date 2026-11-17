@@ -229,7 +229,7 @@ func requireLocalTracker(cfg *config.Config) error {
 	if dir == "" {
 		dir = "."
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".beads")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, ".beads")); err != nil { // #nosec G703 -- operator-configured tracker path
 		return fmt.Errorf("read tracker %s: %w; run `bd init` in that project root, or pass -config FILE to select another tracker", cfg.Trackers[0].Name, err)
 	}
 	return nil

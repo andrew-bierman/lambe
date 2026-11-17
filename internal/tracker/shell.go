@@ -152,6 +152,9 @@ func (t *ShellTransport) List(ctx context.Context, q DispatchQuery) (Result, err
 	} else if len(q.Statuses) > 0 {
 		args = append(args, "--status", strings.Join(q.Statuses, ","))
 	}
+	if q.Unlimited {
+		args = append(args, "--limit", "0")
+	}
 	for _, kv := range sortedPairs(q.Metadata) {
 		args = append(args, "--metadata-field", kv[0]+"="+kv[1])
 	}

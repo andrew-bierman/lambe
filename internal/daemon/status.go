@@ -67,8 +67,17 @@ const gateOutputMeta = "lambe_last_gate_output"
 // issues carrying every listed label are included (opt-in work lane on a
 // shared tracker). Unreadable sections degrade to empty with their error
 // reported once.
+//
+// Attempt state arrives as one grouped read. On a shell transport every
+// per-issue query costs an engine start, so joining the attempt records that
+// way made a production-sized hub report take minutes; every section here
+// joins the same grouped set instead.
 func BuildReport(ctx context.Context, tr tracker.Tracker, labels []string) (Report, error) {
 	rep := Report{}
+
+	// A failed attempt read degrades to "no attempts known": the sections
+	// below still render, with attempt numbers at zero and no wake timers.
+	attempts := readAttempts(ctx, tr)
 
 	issues, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}, Labels: labels})
 	if err != nil {
@@ -76,9 +85,8 @@ func BuildReport(ctx context.Context, tr tracker.Tracker, labels []string) (Repo
 	}
 	for _, issue := range issues {
 		run := ActiveRun{Issue: issue.ID, Session: issue.ID, Assignee: issue.Assignee}
-		attempts, err := tr.Attempts(ctx, issue.ID)
-		if err == nil && len(attempts) > 0 {
-			run.Attempt = attempts[len(attempts)-1].Number
+		if session := attempts[issue.ID]; len(session) > 0 {
+			run.Attempt = session[len(session)-1].Number
 		}
 		rep.Active = append(rep.Active, run)
 	}
@@ -92,22 +100,19 @@ func BuildReport(ctx context.Context, tr tracker.Tracker, labels []string) (Repo
 	deferred, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusOpen, tracker.StatusDeferred}, Labels: labels})
 	if err == nil {
 		now := time.Now()
-		seen := map[string]bool{}
 		for _, issue := range deferred {
-			attempts, aerr := tr.Attempts(ctx, issue.ID)
-			if aerr != nil {
-				continue
-			}
-			for _, a := range attempts {
-				if a.WakeAt.After(now) && !seen[issue.ID] {
-					seen[issue.ID] = true
+			for _, a := range attempts[issue.ID] {
+				if a.WakeAt.After(now) {
 					rep.Deferred = append(rep.Deferred, DeferredRun{Issue: issue.ID, WakeAt: a.WakeAt})
+					break
 				}
 			}
 		}
 		sort.Slice(rep.Deferred, func(i, j int) bool { return rep.Deferred[i].WakeAt.Before(rep.Deferred[j].WakeAt) })
 	}
 
+	// Needs-human and gate rejections both read from this one blocked-front
+	// scan; no section of the report queries per issue.
 	blocked, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusBlocked}, Labels: labels})
 	if err == nil {
 		for _, issue := range blocked {
@@ -122,6 +127,16 @@ func BuildReport(ctx context.Context, tr tracker.Tracker, labels []string) (Repo
 	}
 
 	return rep, nil
+}
+
+// readAttempts reads lambe's whole attempt set in one query and groups it by
+// session. An unreadable tracker yields nil so the report still renders.
+func readAttempts(ctx context.Context, tr tracker.Tracker) map[string][]tracker.Attempt {
+	records, err := tr.ListByMetadata(ctx, tracker.MetaKind, tracker.KindAttempt)
+	if err != nil {
+		return nil
+	}
+	return tracker.GroupAttempts(records)
 }
 
 // summarizeGateOutput reduces a gate output blob to its first line, capped.

@@ -159,13 +159,51 @@ func (b *Beads) Dispatchable(ctx context.Context, q DispatchQuery) ([]Issue, err
 	if err != nil {
 		return nil, fmt.Errorf("list dispatchable: %w", err)
 	}
+	issues, err := decodeIssues(res)
+	if err != nil {
+		return nil, fmt.Errorf("decode dispatchable: %w", err)
+	}
+	return issues, nil
+}
+
+// decodeIssues normalizes a list reply into typed issues.
+func decodeIssues(res Result) ([]Issue, error) {
 	var rows []issueJSON
 	if err := json.Unmarshal(res.Data, &rows); err != nil {
-		return nil, fmt.Errorf("decode dispatchable: %w", err)
+		return nil, err
 	}
 	issues := make([]Issue, 0, len(rows))
 	for _, r := range rows {
 		issues = append(issues, r.toIssue())
+	}
+	return issues, nil
+}
+
+// recordStatuses returns the statuses lambe's own records live under.
+// Attempt beads are blocked once recorded, but a record caught before its
+// status flip is still open or in progress, so the record-set read spans all
+// three.
+func recordStatuses() []string {
+	return []string{StatusOpen, StatusInProgress, StatusBlocked}
+}
+
+// ListByMetadata implements Tracker: one query returns every non-terminal
+// record carrying key=value, uncapped by the backend's default row limit.
+func (b *Beads) ListByMetadata(ctx context.Context, key, value string) ([]Issue, error) {
+	if key == "" || value == "" {
+		return nil, fmt.Errorf("list by metadata: key and value required")
+	}
+	res, err := b.t.List(ctx, DispatchQuery{
+		Statuses:  recordStatuses(),
+		Metadata:  map[string]string{key: value},
+		Unlimited: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list by metadata %s=%s: %w", key, value, err)
+	}
+	issues, err := decodeIssues(res)
+	if err != nil {
+		return nil, fmt.Errorf("decode %s=%s records: %w", key, value, err)
 	}
 	return issues, nil
 }
@@ -409,6 +447,54 @@ const MetaKind = metaKind
 // kindAttempt is the lambe_kind value of attempt records.
 const kindAttempt = "attempt"
 
+// KindAttempt is the exported name of the lambe_kind value marking attempt
+// records. Pair it with MetaKind in ListByMetadata to read every attempt in
+// one query.
+const KindAttempt = kindAttempt
+
+// attemptFromIssue decodes one attempt record. It reports false for a record
+// missing its session or attempt number, which a partial write can leave
+// behind.
+func attemptFromIssue(issue Issue) (Attempt, bool) {
+	meta := issue.Metadata
+	session := meta[metaSession]
+	n, err := strconv.Atoi(meta[metaAttempt])
+	if session == "" || err != nil {
+		return Attempt{}, false
+	}
+	a := Attempt{SessionID: session, Number: n}
+	if pgid, err := strconv.Atoi(meta[metaPGID]); err == nil {
+		a.PGID = pgid
+		a.ProcessIdentity = meta[metaProcessIdentity]
+	}
+	if wake := meta[metaWakeAt]; wake != "" {
+		if t, err := time.Parse(time.RFC3339, wake); err == nil {
+			a.WakeAt = t
+		}
+	}
+	return a, true
+}
+
+// GroupAttempts buckets attempt records by session id, sorted by attempt
+// number within each session. Feed it the result of ListByMetadata(MetaKind,
+// KindAttempt): the whole attempt set arrives in one read instead of a query
+// per session, which is the difference between one engine start and one per
+// issue when the transport shells out.
+func GroupAttempts(records []Issue) map[string][]Attempt {
+	grouped := make(map[string][]Attempt, len(records))
+	for _, issue := range records {
+		a, ok := attemptFromIssue(issue)
+		if !ok {
+			continue
+		}
+		grouped[a.SessionID] = append(grouped[a.SessionID], a)
+	}
+	for _, list := range grouped {
+		sort.Slice(list, func(i, j int) bool { return list[i].Number < list[j].Number })
+	}
+	return grouped
+}
+
 // attemptKey builds the pinned-id key for one attempt record.
 func attemptKey(sessionID string, number int) string {
 	return fmt.Sprintf("att-%s-%d", sessionID, number)
@@ -464,7 +550,7 @@ func (b *Beads) PutAttempt(ctx context.Context, a Attempt) error {
 }
 
 // Attempts implements Tracker: exact-match metadata query, ordered by
-// attempt number.
+// attempt number. A whole-set read is ListByMetadata plus GroupAttempts.
 func (b *Beads) Attempts(ctx context.Context, sessionID string) ([]Attempt, error) {
 	res, err := b.t.List(ctx, DispatchQuery{
 		Metadata: map[string]string{metaKind: kindAttempt, metaSession: sessionID},
@@ -472,26 +558,15 @@ func (b *Beads) Attempts(ctx context.Context, sessionID string) ([]Attempt, erro
 	if err != nil {
 		return nil, fmt.Errorf("list attempts for %s: %w", sessionID, err)
 	}
-	var rows []issueJSON
-	if err := json.Unmarshal(res.Data, &rows); err != nil {
+	rows, err := decodeIssues(res)
+	if err != nil {
 		return nil, fmt.Errorf("decode attempts: %w", err)
 	}
 	attempts := make([]Attempt, 0, len(rows))
 	for _, r := range rows {
-		meta := r.toIssue().Metadata
-		n, err := strconv.Atoi(meta[metaAttempt])
-		if err != nil {
+		a, ok := attemptFromIssue(r)
+		if !ok {
 			continue
-		}
-		a := Attempt{SessionID: sessionID, Number: n}
-		if pgid, err := strconv.Atoi(meta[metaPGID]); err == nil {
-			a.PGID = pgid
-			a.ProcessIdentity = meta[metaProcessIdentity]
-		}
-		if wake := meta[metaWakeAt]; wake != "" {
-			if t, err := time.Parse(time.RFC3339, wake); err == nil {
-				a.WakeAt = t
-			}
 		}
 		attempts = append(attempts, a)
 	}

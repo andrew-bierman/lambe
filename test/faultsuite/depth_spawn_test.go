@@ -57,6 +57,10 @@ func (s *spawnDepthTracker) Attempts(context.Context, string) ([]tracker.Attempt
 	return nil, nil
 }
 
+func (s *spawnDepthTracker) ListByMetadata(context.Context, string, string) ([]tracker.Issue, error) {
+	return nil, nil
+}
+
 // TestFault_SpawnDepthGuardHoldsInTheDaemon is the fault the depth guard
 // exists for: a lambe-supervised agent (already at depth 1 under the
 // default max of 1) tries to spawn another run — the classic

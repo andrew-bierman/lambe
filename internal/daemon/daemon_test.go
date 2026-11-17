@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -34,8 +35,15 @@ type fakeTracker struct {
 	heartbeatErr map[string]error
 	// attemptsErr overrides Attempts for matching sessions.
 	attemptsErr map[string]error
+	// metadataErr, when set, fails ListByMetadata reads for matching
+	// "key=value" pairs.
+	metadataErr map[string]error
 	// dispatchErr, when set, fails every Dispatchable read.
 	dispatchErr error
+	// attemptCalls and metadataCalls count Attempts and ListByMetadata
+	// reads, so tests can prove the report batches attempt state.
+	attemptCalls  int
+	metadataCalls int
 }
 
 func newFakeTracker() *fakeTracker {
@@ -44,6 +52,7 @@ func newFakeTracker() *fakeTracker {
 		attempts:     map[string][]tracker.Attempt{},
 		heartbeatErr: map[string]error{},
 		attemptsErr:  map[string]error{},
+		metadataErr:  map[string]error{},
 	}
 }
 
@@ -172,10 +181,60 @@ func (f *fakeTracker) PutAttempt(_ context.Context, a tracker.Attempt) error {
 func (f *fakeTracker) Attempts(_ context.Context, sessionID string) ([]tracker.Attempt, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.attemptCalls++
 	if err := f.attemptsErr[sessionID]; err != nil {
 		return nil, err
 	}
 	return f.attempts[sessionID], nil
+}
+
+// ListByMetadata serves attempt records from the fake's per-session attempt
+// map, rendered the way the Beads tracker stores them.
+func (f *fakeTracker) ListByMetadata(_ context.Context, key, value string) ([]tracker.Issue, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.metadataCalls++
+	if err := f.metadataErr[key+"="+value]; err != nil {
+		return nil, err
+	}
+	if key != tracker.MetaKind || value != tracker.KindAttempt {
+		return nil, nil
+	}
+	var out []tracker.Issue
+	for session, attempts := range f.attempts {
+		for _, a := range attempts {
+			out = append(out, fakeAttemptRecord(session, a))
+		}
+	}
+	return out, nil
+}
+
+// fakeAttemptRecord renders one attempt as the metadata map the Beads
+// tracker persists, so ListByMetadata can hand it back through
+// tracker.GroupAttempts.
+func fakeAttemptRecord(session string, a tracker.Attempt) tracker.Issue {
+	meta := map[string]string{
+		"lambe_kind":             "attempt",
+		"lambe_session":          session,
+		"lambe_attempt":          strconv.Itoa(a.Number),
+		"lambe_pgid":             strconv.Itoa(a.PGID),
+		"lambe_process_identity": a.ProcessIdentity,
+	}
+	if !a.WakeAt.IsZero() {
+		meta["lambe_wake_at"] = a.WakeAt.UTC().Format(time.RFC3339)
+	}
+	return tracker.Issue{
+		ID:       fmt.Sprintf("att-%s-%d", session, a.Number),
+		Status:   tracker.StatusBlocked,
+		Metadata: meta,
+	}
+}
+
+// readCounts reports how many Attempts and ListByMetadata reads ran.
+func (f *fakeTracker) readCounts() (attempts, metadata int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.attemptCalls, f.metadataCalls
 }
 
 // heartbeatLog returns a copy of the recorded heartbeat calls.

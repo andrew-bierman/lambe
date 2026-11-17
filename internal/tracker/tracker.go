@@ -132,6 +132,10 @@ type DispatchQuery struct {
 	// lane sets this so a shared tracker only dispatches issues explicitly
 	// marked for this workflow.
 	Labels []string
+	// Unlimited asks the backend to ignore its default row cap. Record-set
+	// reads (lambe's own attempt beads) set it: a silently truncated read
+	// would drop state the caller is about to summarize.
+	Unlimited bool
 }
 
 // Empty reports whether the query can match nothing, in which case
@@ -226,4 +230,12 @@ type Tracker interface {
 
 	// Attempts returns the recorded attempts for a session, in order.
 	Attempts(ctx context.Context, sessionID string) ([]Attempt, error)
+
+	// ListByMetadata returns every non-terminal issue carrying the metadata
+	// pair key=value, in one read. It spans the open, in-progress, and
+	// blocked statuses, so a caller can fetch a whole record set (lambe's
+	// attempt beads, via MetaKind and KindAttempt) instead of paying one
+	// query per issue. Group the result with GroupAttempts when the records
+	// are attempts.
+	ListByMetadata(ctx context.Context, key, value string) ([]Issue, error)
 }

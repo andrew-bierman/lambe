@@ -785,6 +785,12 @@ func (m *memTracker) Attempts(_ context.Context, sessionID string) ([]tracker.At
 	return out, nil
 }
 
+// ListByMetadata serves nothing: this fixture only drives the gate, which
+// reads attempts per session.
+func (m *memTracker) ListByMetadata(context.Context, string, string) ([]tracker.Issue, error) {
+	return nil, nil
+}
+
 // status reads the current tracker status for an issue.
 func (m *memTracker) status(id string) string {
 	m.mu.Lock()

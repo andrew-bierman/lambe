@@ -147,6 +147,12 @@ func (f *fakeTracker) Attempts(_ context.Context, _ string) ([]tracker.Attempt, 
 	return append([]tracker.Attempt(nil), f.attempts...), nil
 }
 
+// ListByMetadata is unused by the loop's own reads; the fixture serves
+// attempts per session only.
+func (f *fakeTracker) ListByMetadata(context.Context, string, string) ([]tracker.Issue, error) {
+	return nil, nil
+}
+
 // turnCall records one fakeRunner invocation.
 type turnCall struct {
 	TurnRequest

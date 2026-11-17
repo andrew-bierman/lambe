@@ -333,6 +333,12 @@ func (p *pgidRecorder) Attempts(_ context.Context, sessionID string) ([]tracker.
 	return append([]tracker.Attempt(nil), p.attempts[sessionID]...), nil
 }
 
+// ListByMetadata is unused by the persist seam, which reads one session's
+// attempts.
+func (p *pgidRecorder) ListByMetadata(context.Context, string, string) ([]tracker.Issue, error) {
+	return nil, nil
+}
+
 func (p *pgidRecorder) recorded() []tracker.Attempt {
 	p.mu.Lock()
 	defer p.mu.Unlock()
