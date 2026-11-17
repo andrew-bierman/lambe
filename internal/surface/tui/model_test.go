@@ -5,16 +5,42 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/andrew-bierman/lambe/internal/daemon"
 	"github.com/andrew-bierman/lambe/internal/symphony"
 )
 
+func testSnapshot() daemon.LiveSnapshot {
+	return daemon.LiveSnapshot{
+		Identity:  "lambe@test",
+		UpdatedAt: time.Now(),
+		Runs: []daemon.LiveRun{
+			{Progress: symphony.Progress{IssueID: "ac-1", Title: "first issue", Phase: "running", Attempt: 1}},
+			{Progress: symphony.Progress{IssueID: "ac-2", Title: "second issue", Phase: "stopped: gate red"}},
+			{Progress: symphony.Progress{IssueID: "ac-3", Title: "third issue", Phase: "retry"}},
+		},
+	}
+}
+
+func newSized(t *testing.T) *Model {
+	t.Helper()
+	m := New("/tmp/live.json")
+	model, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	return model.(*Model)
+}
+
+func withSnapshot(t *testing.T, m *Model) *Model {
+	t.Helper()
+	model, _ := m.Update(snapshotMsg{snapshot: testSnapshot(), alive: true})
+	return model.(*Model)
+}
+
 func TestNew(t *testing.T) {
 	m := New("/tmp/live.json")
 	if m.path != "/tmp/live.json" {
-		t.Fatalf("path = %q, want %q", m.path, "/tmp/live.json")
+		t.Fatalf("path = %q", m.path)
 	}
 	if !m.loading {
 		t.Fatal("new model should be loading")
@@ -22,107 +48,87 @@ func TestNew(t *testing.T) {
 }
 
 func TestWindowSizeSetsLayout(t *testing.T) {
-	m := New("/tmp/live.json")
-	model, cmd := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	mm := model.(*Model)
-	if cmd != nil {
-		t.Fatal("window size should not return a command")
+	m := newSized(t)
+	if m.width != 120 || m.height != 30 {
+		t.Fatalf("dimensions = %dx%d", m.width, m.height)
 	}
-	if mm.width != 120 || mm.height != 30 {
-		t.Fatalf("dimensions = %dx%d, want 120x30", mm.width, mm.height)
-	}
-	if mm.listWidth < minListWidth {
-		t.Fatalf("listWidth = %d, want at least %d", mm.listWidth, minListWidth)
-	}
-	if mm.vp.Width == 0 || mm.vp.Height == 0 {
-		t.Fatalf("viewport not sized: %dx%d", mm.vp.Width, mm.vp.Height)
+	if m.detail.Width <= 0 || m.detail.Height <= 0 {
+		t.Fatalf("detail viewport not sized: %dx%d", m.detail.Width, m.detail.Height)
 	}
 }
 
-func TestSnapshotUpdatesRuns(t *testing.T) {
-	m := New("/tmp/live.json")
-	model, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = model.(*Model)
-
-	snapshot := daemon.LiveSnapshot{
-		Identity:  "lambe@test",
-		UpdatedAt: time.Now(),
-		Runs: []daemon.LiveRun{
-			{Progress: symphony.Progress{IssueID: "ac-1", Title: "first", Phase: "running"}},
-			{Progress: symphony.Progress{IssueID: "ac-2", Title: "second", Phase: "stopped: gate red"}},
-		},
+func TestSnapshotPopulatesList(t *testing.T) {
+	m := withSnapshot(t, newSized(t))
+	if len(m.list.Items()) != 3 {
+		t.Fatalf("items = %d, want 3", len(m.list.Items()))
 	}
-	model, cmd := m.Update(snapshotMsg{snapshot: snapshot, alive: true})
-	mm := model.(*Model)
-	if cmd != nil {
-		t.Fatal("snapshot update should not return a command")
+	if m.selectedID != "ac-1" {
+		t.Fatalf("selectedID = %q, want ac-1", m.selectedID)
 	}
-	if len(mm.visibleRuns()) != 2 {
-		t.Fatalf("runs = %d, want 2", len(mm.visibleRuns()))
-	}
-	if !mm.alive {
+	if !m.alive {
 		t.Fatal("alive should be true")
 	}
-	if mm.loading {
-		t.Fatal("loading should be false after snapshot")
+	if m.loading {
+		t.Fatal("loading should be false")
 	}
 }
 
-func TestNavigation(t *testing.T) {
-	m := New("/tmp/live.json")
-	model, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+func TestNavigationMovesSelection(t *testing.T) {
+	m := withSnapshot(t, newSized(t))
+
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = model.(*Model)
-	model, _ = m.Update(snapshotMsg{
-		snapshot: daemon.LiveSnapshot{
-			UpdatedAt: time.Now(),
-			Runs: []daemon.LiveRun{
-				{Progress: symphony.Progress{IssueID: "ac-1", Phase: "running"}},
-				{Progress: symphony.Progress{IssueID: "ac-2", Phase: "running"}},
-				{Progress: symphony.Progress{IssueID: "ac-3", Phase: "running"}},
-			},
-		},
-	})
-	mm := model.(*Model)
-
-	if mm.selected != 0 {
-		t.Fatalf("selected = %d, want 0", mm.selected)
+	if m.selectedID != "ac-2" {
+		t.Fatalf("selectedID = %q, want ac-2 after down", m.selectedID)
 	}
 
-	model, _ = mm.Update(tea.KeyMsg{Type: tea.KeyDown})
-	mm = model.(*Model)
-	if mm.selected != 1 {
-		t.Fatalf("selected = %d, want 1 after down", mm.selected)
+	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = model.(*Model)
+	if m.selectedID != "ac-3" {
+		t.Fatalf("selectedID = %q, want ac-3", m.selectedID)
 	}
 
-	model, _ = mm.Update(tea.KeyMsg{Type: tea.KeyDown})
-	mm = model.(*Model)
-	model, _ = mm.Update(tea.KeyMsg{Type: tea.KeyDown})
-	mm = model.(*Model)
-	if mm.selected != 2 {
-		t.Fatalf("selected = %d, want 2 at bottom", mm.selected)
+	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m = model.(*Model)
+	if m.selectedID != "ac-2" {
+		t.Fatalf("selectedID = %q, want ac-2 after up", m.selectedID)
+	}
+}
+
+func TestSelectionPreservedAcrossSnapshots(t *testing.T) {
+	m := withSnapshot(t, newSized(t))
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = model.(*Model)
+	if m.selectedID != "ac-2" {
+		t.Fatalf("selectedID = %q", m.selectedID)
 	}
 
-	model, _ = mm.Update(tea.KeyMsg{Type: tea.KeyUp})
-	mm = model.(*Model)
-	if mm.selected != 1 {
-		t.Fatalf("selected = %d, want 1 after up", mm.selected)
+	model, _ = m.Update(snapshotMsg{snapshot: testSnapshot(), alive: true})
+	m = model.(*Model)
+	if m.selectedID != "ac-2" {
+		t.Fatalf("selectedID = %q after refresh, want ac-2", m.selectedID)
 	}
+}
 
-	model, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnd})
-	mm = model.(*Model)
-	if mm.selected != 2 {
-		t.Fatalf("selected = %d, want 2 after end", mm.selected)
+func TestTabTogglesFocus(t *testing.T) {
+	m := withSnapshot(t, newSized(t))
+	if m.focus != focusList {
+		t.Fatal("default focus should be list")
 	}
-
-	model, _ = mm.Update(tea.KeyMsg{Type: tea.KeyHome})
-	mm = model.(*Model)
-	if mm.selected != 0 {
-		t.Fatalf("selected = %d, want 0 after home", mm.selected)
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = model.(*Model)
+	if m.focus != focusDetail {
+		t.Fatal("tab should focus detail")
+	}
+	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = model.(*Model)
+	if m.focus != focusList {
+		t.Fatal("tab should focus list again")
 	}
 }
 
 func TestQuitKey(t *testing.T) {
-	m := New("/tmp/live.json")
+	m := newSized(t)
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	if cmd == nil {
 		t.Fatal("q should return a quit command")
@@ -130,23 +136,9 @@ func TestQuitKey(t *testing.T) {
 }
 
 func TestViewContainsExpectedContent(t *testing.T) {
-	m := New("/tmp/live.json")
-	model, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = model.(*Model)
-	model, _ = m.Update(snapshotMsg{
-		snapshot: daemon.LiveSnapshot{
-			Identity:  "lambe@test",
-			UpdatedAt: time.Now(),
-			Runs: []daemon.LiveRun{
-				{Progress: symphony.Progress{IssueID: "ac-1", Title: "test issue", Phase: "running"}},
-			},
-		},
-		alive: true,
-	})
-	mm := model.(*Model)
-
-	view := mm.View()
-	for _, want := range []string{"lambe", "running", "ac-1", "test issue", "navigate", "quit"} {
+	m := withSnapshot(t, newSized(t))
+	view := m.View()
+	for _, want := range []string{"lambe", "running", "ac-1", "first issue", "quit"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -196,12 +188,55 @@ func TestPhasePresentation(t *testing.T) {
 
 func TestTruncate(t *testing.T) {
 	if got := truncate("hello", 10); got != "hello" {
-		t.Fatalf("truncate = %q, want hello", got)
+		t.Fatalf("truncate = %q", got)
 	}
 	if got := truncate("hello world", 6); got != "hello…" {
-		t.Fatalf("truncate = %q, want hello…", got)
+		t.Fatalf("truncate = %q", got)
 	}
 	if got := truncate("x", 0); got != "" {
-		t.Fatalf("truncate = %q, want empty", got)
+		t.Fatalf("truncate = %q", got)
+	}
+}
+
+func TestFilterLifecycle(t *testing.T) {
+	m := withSnapshot(t, newSized(t))
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	m = model.(*Model)
+	for _, r := range "ac-2" {
+		model, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = model.(*Model)
+	}
+	if m.list.FilterState() != list.Filtering {
+		t.Fatalf("filter state = %v, want Filtering", m.list.FilterState())
+	}
+	if got := m.list.FilterInput.Value(); got != "ac-2" {
+		t.Fatalf("filter input = %q, want ac-2", got)
+	}
+	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = model.(*Model)
+	if m.list.FilterState() != list.FilterApplied {
+		t.Fatalf("filter state = %v, want FilterApplied", m.list.FilterState())
+	}
+	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = model.(*Model)
+	if m.list.FilterState() != list.Unfiltered {
+		t.Fatalf("filter state = %v, want Unfiltered", m.list.FilterState())
+	}
+}
+
+func TestEmptySnapshotShowsPlaceholder(t *testing.T) {
+	m := New("/tmp/live.json")
+	model, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	model, _ = model.Update(snapshotMsg{snapshot: daemon.LiveSnapshot{UpdatedAt: time.Now()}, alive: false})
+	m = model.(*Model)
+	if got := len(m.list.Items()); got != 0 {
+		t.Fatalf("items = %d, want 0", got)
+	}
+	view := m.View()
+	if !strings.Contains(view, "No active run") {
+		t.Fatalf("empty state missing placeholder:\n%s", view)
+	}
+	if !strings.Contains(view, "stopped") {
+		t.Fatalf("header should show stopped state:\n%s", view)
 	}
 }

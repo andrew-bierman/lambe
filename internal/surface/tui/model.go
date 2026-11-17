@@ -1,13 +1,16 @@
-// Package tui implements a Bubble Tea dashboard for lambe.
+// Package tui implements the lambe dashboard on top of Bubbles components.
 //
-// It displays a scrollable run list, a detail pane with full agent output, a
-// daemon status header, and a keybinding footer. The model reads the same
-// live.json snapshot that `lambe logs` uses, so it is a pure viewer: it never
-// mutates daemon state.
+// The dashboard is a pure viewer over the same live.json snapshot that
+// `lambe logs` reads. It composes established Bubbles widgets rather than
+// hand-rolling terminal layout:
 //
-// Layout and presentation patterns are informed by other Bubble Tea dashboards
-// such as Abacus (Beads issue viewer) and PUG (Terraform TUI): split panes,
-// phase badges, pill-style footer hints, and lipgloss-aware layout arithmetic.
+//   - bubbles/list      run list with navigation, paging, and filtering
+//   - bubbles/viewport  scrollable run detail and agent output
+//   - bubbles/help      keybinding footer
+//   - bubbles/spinner   refresh indicator
+//
+// The left pane is the list, the right pane is the detail viewport. Tab moves
+// focus between them. Filtering with "/" is provided by bubbles/list.
 package tui
 
 import (
@@ -18,30 +21,24 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/term"
 	"github.com/muesli/reflow/wordwrap"
 
 	"github.com/andrew-bierman/lambe/internal/daemon"
 )
 
-const (
-	// tickInterval is how often the TUI re-reads the live snapshot.
-	tickInterval = 250 * time.Millisecond
-
-	minViewportWidth  = 20
-	minViewportHeight = 8
-	minListWidth      = 24
-	maxListWidth      = 50
-)
+const tickInterval = 250 * time.Millisecond
 
 // Styles.
 var (
-	baseStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#E0E0E0"))
-
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("#FAFAFA")).
@@ -53,44 +50,8 @@ var (
 			Background(lipgloss.Color("#1E1E2E")).
 			Padding(0, 1)
 
-	listTitleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#FAFAFA")).
-			Background(lipgloss.Color("#5A4FCF")).
-			Padding(0, 1)
-
-	selectedRunStyle = lipgloss.NewStyle().
-				Background(lipgloss.Color("#3A3A4A")).
-				Foreground(lipgloss.Color("#FAFAFA"))
-
-	runStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#E0E0E0"))
-
-	detailTitleStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("#FAFAFA")).
-				Background(lipgloss.Color("#5A4FCF")).
-				Padding(0, 1)
-
-	phaseRunningStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("#00FF7F"))
-
-	phaseGatingStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("#00BFFF"))
-
-	phaseStoppedGreenStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#00AA00"))
-
-	phaseStoppedRedStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#FF5555"))
-
-	phaseRetryStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFAA00"))
-
-	phaseDefaultStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#AAAAAA"))
+	separatorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#3A3A4A"))
 
 	labelStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#A0A0A0"))
@@ -98,92 +59,173 @@ var (
 	valueStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FAFAFA"))
 
-	keyPillStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#1E1E2E")).
-			Background(lipgloss.Color("#A0A0A0")).
-			Padding(0, 1)
+	dimStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#808080"))
 
 	errorStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("#FF5555"))
 
-	dimStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#808080"))
+	runningStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#00FF7F"))
+
+	gatingStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#00BFFF"))
+
+	greenStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#00AA00"))
+
+	redStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FF5555"))
+
+	retryStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFAA00"))
+
+	neutralStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#AAAAAA"))
 )
 
-// keyMap defines the TUI's keyboard shortcuts.
+// runItem adapts a live run to the bubbles/list Item interface.
+type runItem struct {
+	run daemon.LiveRun
+}
+
+func (i runItem) Title() string {
+	title := i.run.IssueID
+	if i.run.Title != "" {
+		title += " · " + i.run.Title
+	}
+	return title
+}
+
+func (i runItem) Description() string {
+	desc := phaseLabel(i.run.Phase)
+	if i.run.Attempt > 0 {
+		desc += fmt.Sprintf(" · attempt %d", i.run.Attempt)
+	}
+	if i.run.Turn > 0 {
+		desc += fmt.Sprintf(" · turn %d", i.run.Turn)
+	}
+	return desc
+}
+
+func (i runItem) FilterValue() string {
+	return strings.Join([]string{i.run.IssueID, i.run.Title, i.run.Phase}, " ")
+}
+
+// focusArea is the pane receiving navigation keys.
+type focusArea int
+
+const (
+	focusList focusArea = iota
+	focusDetail
+)
+
+// keyMap is the dashboard's own keybindings; list navigation keys come from
+// bubbles/list and viewport scrolling from bubbles/viewport.
 type keyMap struct {
-	Up     key.Binding
-	Down   key.Binding
-	PgUp   key.Binding
-	PgDown key.Binding
-	Home   key.Binding
-	End    key.Binding
-	Quit   key.Binding
+	Quit     key.Binding
+	Focus    key.Binding
+	Help     key.Binding
+	Filter   key.Binding
+	ScrollUp key.Binding
+	ScrollDn key.Binding
+	PageUp   key.Binding
+	PageDown key.Binding
+	GoTop    key.Binding
+	GoBottom key.Binding
+	ListUp   key.Binding
+	ListDown key.Binding
 }
 
 func defaultKeyMap() keyMap {
 	return keyMap{
-		Up: key.NewBinding(
-			key.WithKeys("up", "k"),
-			key.WithHelp("↑/k", "up"),
-		),
-		Down: key.NewBinding(
-			key.WithKeys("down", "j"),
-			key.WithHelp("↓/j", "down"),
-		),
-		PgUp: key.NewBinding(
-			key.WithKeys("pgup", "K"),
-			key.WithHelp("pgup/K", "page up"),
-		),
-		PgDown: key.NewBinding(
-			key.WithKeys("pgdown", "J"),
-			key.WithHelp("pgdn/J", "page down"),
-		),
-		Home: key.NewBinding(
-			key.WithKeys("home", "g"),
-			key.WithHelp("home/g", "top"),
-		),
-		End: key.NewBinding(
-			key.WithKeys("end", "G"),
-			key.WithHelp("end/G", "bottom"),
-		),
 		Quit: key.NewBinding(
-			key.WithKeys("q", "ctrl+c", "esc"),
+			key.WithKeys("q", "ctrl+c"),
 			key.WithHelp("q", "quit"),
+		),
+		Focus: key.NewBinding(
+			key.WithKeys("tab"),
+			key.WithHelp("tab", "focus"),
+		),
+		Help: key.NewBinding(
+			key.WithKeys("?"),
+			key.WithHelp("?", "help"),
+		),
+		Filter: key.NewBinding(
+			key.WithKeys("/"),
+			key.WithHelp("/", "filter"),
+		),
+		ScrollUp: key.NewBinding(
+			key.WithKeys("up", "k"),
+			key.WithHelp("↑/k", "scroll"),
+		),
+		ScrollDn: key.NewBinding(
+			key.WithKeys("down", "j"),
+			key.WithHelp("↓/j", "scroll"),
+		),
+		PageUp: key.NewBinding(
+			key.WithKeys("pgup", "K"),
+			key.WithHelp("pgup", "page up"),
+		),
+		PageDown: key.NewBinding(
+			key.WithKeys("pgdown", "J"),
+			key.WithHelp("pgdn", "page down"),
+		),
+		GoTop: key.NewBinding(
+			key.WithKeys("home", "g"),
+			key.WithHelp("g", "top"),
+		),
+		GoBottom: key.NewBinding(
+			key.WithKeys("end", "G"),
+			key.WithHelp("G", "bottom"),
+		),
+		ListUp: key.NewBinding(
+			key.WithKeys("up", "k"),
+			key.WithHelp("↑/k", "run"),
+		),
+		ListDown: key.NewBinding(
+			key.WithKeys("down", "j"),
+			key.WithHelp("↓/j", "run"),
 		),
 	}
 }
 
-// footerHint is a single key hint shown in the footer bar.
-type footerHint struct {
-	key  string
-	desc string
+// ShortHelp implements help.KeyMap.
+func (k keyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.ListUp, k.ListDown, k.Focus, k.Filter, k.Help, k.Quit}
 }
 
-// globalFooterHints are always shown (space permitting).
-var globalFooterHints = []footerHint{
-	{"↑↓", "navigate"},
-	{"pgup/dn", "scroll"},
-	{"g/G", "top/bottom"},
-	{"q", "quit"},
+// FullHelp implements help.KeyMap.
+func (k keyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{k.ListUp, k.ListDown, k.Focus, k.Filter},
+		{k.ScrollUp, k.ScrollDn, k.PageUp, k.PageDown},
+		{k.GoTop, k.GoBottom, k.Help, k.Quit},
+	}
 }
 
-// Model is the Bubble Tea model for the lambe dashboard.
+// Model is the Bubble Tea dashboard model.
 type Model struct {
-	path      string
-	keys      keyMap
-	snapshot  daemon.LiveSnapshot
-	alive     bool
-	err       error
-	selected  int
-	width     int
-	height    int
-	listWidth int
-	vp        viewport.Model
-	lastRead  time.Time
-	loading   bool
+	path string
+	keys keyMap
+
+	list    list.Model
+	detail  viewport.Model
+	help    help.Model
+	spinner spinner.Model
+
+	snapshot   daemon.LiveSnapshot
+	alive      bool
+	err        error
+	width      int
+	height     int
+	focus      focusArea
+	selectedID string
+	lastRead   time.Time
+	loading    bool
 }
 
 // snapshotMsg carries a freshly read live snapshot.
@@ -196,36 +238,45 @@ type snapshotMsg struct {
 // tickMsg triggers the next snapshot read.
 type tickMsg time.Time
 
-// New creates a new TUI model that reads from path.
+// New creates a dashboard that reads the live snapshot at path.
 func New(path string) *Model {
 	m := &Model{
 		path:    path,
 		keys:    defaultKeyMap(),
 		loading: true,
 	}
-	m.vp = viewport.New(0, 0)
+	delegate := list.NewDefaultDelegate()
+	m.list = list.New(nil, delegate, 0, 0)
+	m.list.Title = "Runs"
+	m.list.SetShowHelp(false)
+	m.list.SetShowTitle(true)
+	m.list.SetShowStatusBar(true)
+	m.list.DisableQuitKeybindings()
+
+	m.detail = viewport.New(0, 0)
+
+	m.help = help.New()
+	m.help.ShowAll = false
+
+	m.spinner = spinner.New()
+	m.spinner.Spinner = spinner.Dot
 	return m
 }
 
 // Init implements tea.Model.
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(
-		readSnapshot(m.path),
-		tick(),
-	)
+	return tea.Batch(readSnapshot(m.path), tick(), m.spinner.Tick)
 }
 
 // Update implements tea.Model.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		if key.Matches(msg, m.keys.Quit) {
-			return m, tea.Quit
-		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.updateLayout()
+		m.layout()
 		m.refreshDetail()
 		return m, nil
 
@@ -233,8 +284,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.lastRead = time.Now()
 		if msg.err != nil {
-			// Keep the previous snapshot on transient read errors so the
-			// dashboard does not flicker empty; surface persistent errors.
+			// Keep the last good snapshot on transient errors (for example a
+			// daemon restart rewriting the file) instead of flashing empty.
 			if !errors.Is(msg.err, os.ErrNotExist) || m.snapshot.UpdatedAt.IsZero() {
 				m.err = msg.err
 			}
@@ -243,110 +294,199 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.snapshot = msg.snapshot
 		m.alive = msg.alive
-		m.clampSelection()
+		cmd := m.setRuns(msg.snapshot.Runs)
 		m.refreshDetail()
-		return m, nil
+		return m, cmd
+
+	case list.FilterMatchesMsg:
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(msg)
+		m.syncSelection()
+		return m, cmd
 
 	case tickMsg:
 		return m, tea.Batch(readSnapshot(m.path), tick())
+
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		cmds = append(cmds, cmd)
+		return m, tea.Batch(cmds...)
+
+	case tea.KeyMsg:
+		return m.handleKey(msg)
 	}
 
-	// Navigation updates the list selection or scrolls the detail viewport.
-	cmd := m.handleNavigation(msg)
-	return m, cmd
+	// Non-key messages (mouse, etc.) go to the focused component.
+	cmds = append(cmds, m.updateFocused(msg))
+	return m, tea.Batch(cmds...)
 }
 
-func (m *Model) handleNavigation(msg tea.Msg) tea.Cmd {
-	runs := m.visibleRuns()
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		if key.Matches(msg, m.keys.Down) {
-			if m.selected < len(runs)-1 {
-				m.selected++
-				m.refreshDetail()
-			}
-			return nil
+func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Filtering captures all keys except ctrl+c.
+	if m.list.FilterState() == list.Filtering {
+		if msg.Type == tea.KeyCtrlC {
+			return m, tea.Quit
 		}
-		if key.Matches(msg, m.keys.Up) {
-			if m.selected > 0 {
-				m.selected--
-				m.refreshDetail()
-			}
-			return nil
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(msg)
+		m.syncSelection()
+		return m, cmd
+	}
+
+	switch {
+	case key.Matches(msg, m.keys.Quit):
+		return m, tea.Quit
+	case key.Matches(msg, m.keys.Focus):
+		if m.focus == focusList {
+			m.focus = focusDetail
+		} else {
+			m.focus = focusList
 		}
-		if key.Matches(msg, m.keys.Home) {
-			m.selected = 0
-			m.refreshDetail()
-			return nil
-		}
-		if key.Matches(msg, m.keys.End) {
-			m.selected = len(runs) - 1
-			if m.selected < 0 {
-				m.selected = 0
-			}
-			m.refreshDetail()
-			return nil
+		return m, nil
+	case key.Matches(msg, m.keys.Help):
+		m.help.ShowAll = !m.help.ShowAll
+		m.layout()
+		return m, nil
+	case key.Matches(msg, m.keys.Filter):
+		// Hand the filter key to the list even when detail has focus.
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(msg)
+		m.syncSelection()
+		return m, cmd
+	}
+
+	if m.focus == focusDetail {
+		if cmd, handled := m.scrollDetail(msg); handled {
+			return m, cmd
 		}
 	}
 
 	var cmd tea.Cmd
-	m.vp, cmd = m.vp.Update(msg)
+	m.list, cmd = m.list.Update(msg)
+	m.syncSelection()
+	return m, cmd
+}
+
+// scrollDetail applies viewport scrolling keys when the detail pane has focus.
+func (m *Model) scrollDetail(msg tea.KeyMsg) (tea.Cmd, bool) {
+	switch {
+	case key.Matches(msg, m.keys.ScrollUp):
+		m.detail.ScrollUp(1)
+		return nil, true
+	case key.Matches(msg, m.keys.ScrollDn):
+		m.detail.ScrollDown(1)
+		return nil, true
+	case key.Matches(msg, m.keys.PageUp):
+		m.detail.HalfPageUp()
+		return nil, true
+	case key.Matches(msg, m.keys.PageDown):
+		m.detail.HalfPageDown()
+		return nil, true
+	case key.Matches(msg, m.keys.GoTop):
+		m.detail.GotoTop()
+		return nil, true
+	case key.Matches(msg, m.keys.GoBottom):
+		m.detail.GotoBottom()
+		return nil, true
+	}
+	return nil, false
+}
+
+func (m *Model) updateFocused(msg tea.Msg) tea.Cmd {
+	var cmd tea.Cmd
+	if m.focus == focusDetail {
+		m.detail, cmd = m.detail.Update(msg)
+	} else {
+		m.list, cmd = m.list.Update(msg)
+	}
 	return cmd
 }
 
-func (m *Model) updateLayout() {
-	if m.width < minViewportWidth || m.height < minViewportHeight {
+// layout sizes the panes from the current window and help state.
+func (m *Model) layout() {
+	if m.width <= 0 || m.height <= 0 {
 		return
 	}
-	m.listWidth = m.width / 3
-	if m.listWidth < minListWidth {
-		m.listWidth = minListWidth
+	headerHeight := 1
+	footerHeight := lipgloss.Height(m.renderFooter())
+	bodyHeight := m.height - headerHeight - footerHeight
+	if bodyHeight < 3 {
+		bodyHeight = 3
 	}
-	if m.listWidth > maxListWidth {
-		m.listWidth = maxListWidth
+
+	listWidth := m.width / 3
+	if listWidth < 24 {
+		listWidth = 24
 	}
-	if m.listWidth > m.width/2 {
-		m.listWidth = m.width / 2
+	if listWidth > m.width/2 {
+		listWidth = m.width / 2
 	}
-	m.vp.Width = m.width - m.listWidth - 1
-	if m.vp.Width < minViewportWidth {
-		m.vp.Width = minViewportWidth
+	if listWidth > 48 {
+		listWidth = 48
 	}
-	m.vp.Height = m.contentHeight()
+
+	m.list.SetSize(listWidth, bodyHeight)
+
+	detailWidth := m.width - listWidth - 3 // separator column + padding
+	if detailWidth < 5 {
+		detailWidth = 5
+	}
+	m.detail.Width = detailWidth
+	m.detail.Height = bodyHeight
 }
 
-func (m *Model) contentHeight() int {
-	header := lipgloss.Height(m.renderHeader())
-	footer := lipgloss.Height(m.renderFooter())
-	h := m.height - header - footer
-	if h < minViewportHeight {
-		h = minViewportHeight
+// setRuns replaces the list contents while preserving the selected issue.
+func (m *Model) setRuns(runs []daemon.LiveRun) tea.Cmd {
+	items := make([]list.Item, len(runs))
+	for i, run := range runs {
+		items[i] = runItem{run: run}
 	}
-	return h
+	cmd := m.list.SetItems(items)
+	if m.selectedID == "" {
+		m.syncSelection()
+		return cmd
+	}
+	for i, item := range items {
+		if runItem, ok := item.(runItem); ok && runItem.run.IssueID == m.selectedID {
+			m.list.Select(i)
+			return cmd
+		}
+	}
+	m.syncSelection()
+	return cmd
 }
 
-func (m *Model) clampSelection() {
-	runs := m.visibleRuns()
-	if m.selected >= len(runs) {
-		m.selected = len(runs) - 1
+// syncSelection records the selected issue and refreshes the detail pane when
+// the selection moved.
+func (m *Model) syncSelection() {
+	previous := m.selectedID
+	if item, ok := m.list.SelectedItem().(runItem); ok {
+		m.selectedID = item.run.IssueID
+	} else {
+		m.selectedID = ""
 	}
-	if m.selected < 0 {
-		m.selected = 0
+	if m.selectedID != previous {
+		m.refreshDetail()
 	}
+}
+
+func (m *Model) selectedRun() (daemon.LiveRun, bool) {
+	item, ok := m.list.SelectedItem().(runItem)
+	if !ok {
+		return daemon.LiveRun{}, false
+	}
+	return item.run, true
 }
 
 func (m *Model) refreshDetail() {
-	runs := m.visibleRuns()
-	if m.selected >= len(runs) {
-		m.clampSelection()
-	}
-	if len(runs) == 0 {
-		m.vp.SetContent("")
+	run, ok := m.selectedRun()
+	if !ok {
+		m.detail.SetContent(dimStyle.Render("No active run. Waiting for the daemon to claim work."))
 		return
 	}
-	run := runs[m.selected]
-	m.vp.SetContent(detailContent(run, m.vp.Width))
-	m.vp.GotoBottom()
+	m.detail.SetContent(detailContent(run, m.detail.Width))
+	m.detail.GotoBottom()
 }
 
 // View implements tea.Model.
@@ -355,23 +495,22 @@ func (m *Model) View() string {
 		return "Initializing..."
 	}
 	if m.loading && m.snapshot.UpdatedAt.IsZero() {
-		return m.centered("Waiting for lambe daemon...")
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+			m.spinner.View()+" Waiting for lambe daemon...")
 	}
 
-	parts := []string{
-		m.renderHeader(),
-		m.renderBody(),
-		m.renderFooter(),
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+	header := m.renderHeader()
+	body := m.renderBody()
+	footer := m.renderFooter()
+	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }
 
 func (m *Model) renderHeader() string {
 	state := "stopped"
-	stateStyle := phaseStoppedRedStyle
+	stateStyle := redStyle
 	if m.alive {
 		state = "running"
-		stateStyle = phaseRunningStyle
+		stateStyle = runningStyle
 	}
 	identity := m.snapshot.Identity
 	if identity == "" {
@@ -381,189 +520,97 @@ func (m *Model) renderHeader() string {
 	if !m.snapshot.UpdatedAt.IsZero() {
 		updated = m.snapshot.UpdatedAt.Format("15:04:05")
 	}
-	running, stopped, other := m.countRuns()
-	stats := fmt.Sprintf("%d runs · %d active · %d stopped · %d other", len(m.visibleRuns()), running, stopped, other)
-	left := fmt.Sprintf(" lambe  ·  %s  ·  %s  ·  %s  ·  updated %s ",
-		stateStyle.Render(state),
-		identity,
-		stats,
-		updated,
-	)
+	runs := len(m.snapshot.Runs)
+	text := fmt.Sprintf(" lambe  ·  %s  ·  %s  ·  %d runs  ·  updated %s ",
+		stateStyle.Render(state), identity, runs, updated)
 	if m.err != nil {
-		left += " · " + errorStyle.Render("read error: "+truncate(m.err.Error(), 50))
+		text += " · " + errorStyle.Render("read error: "+truncate(m.err.Error(), 60))
 	}
-	return headerStyle.Width(m.width).Render(left)
-}
-
-func (m *Model) countRuns() (running, stopped, other int) {
-	for _, run := range m.visibleRuns() {
-		switch {
-		case run.Phase == "running" || run.Phase == "gating" || run.Phase == "preparing" || run.Phase == "claiming":
-			running++
-		case strings.HasPrefix(run.Phase, "stopped:"):
-			stopped++
-		default:
-			other++
-		}
-	}
-	return running, stopped, other
+	return headerStyle.Width(m.width).Render(ansi.Truncate(text, m.width-2, "…"))
 }
 
 func (m *Model) renderBody() string {
-	height := m.contentHeight()
-	list := m.renderList(height)
-	detail := m.renderDetail(height)
-	return lipgloss.JoinHorizontal(lipgloss.Top, list, detail)
-}
-
-func (m *Model) renderList(height int) string {
-	if m.listWidth == 0 {
-		m.updateLayout()
+	bodyHeight := m.height - 1 - lipgloss.Height(m.renderFooter())
+	if bodyHeight < 1 {
+		bodyHeight = 1
 	}
-	runs := m.visibleRuns()
-	var lines []string
-	title := listTitleStyle.Width(m.listWidth).Render(" Runs ")
-	lines = append(lines, title)
-
-	available := height - lipgloss.Height(title)
-	if available < 1 {
-		available = 1
-	}
-
-	if len(runs) == 0 {
-		lines = append(lines, runStyle.Render("  (none)"))
-		return fillToHeight(lipgloss.JoinVertical(lipgloss.Left, lines...), height, m.listWidth)
-	}
-
-	// Scroll the list window so the selected run stays visible.
-	start := 0
-	if m.selected >= available {
-		start = m.selected - available + 1
-	}
-	end := start + available
-	if end > len(runs) {
-		end = len(runs)
-		start = end - available
-		if start < 0 {
-			start = 0
-		}
-	}
-
-	for i := start; i < end; i++ {
-		run := runs[i]
-		marker := "  "
-		style := runStyle
-		if i == m.selected {
-			marker = "> "
-			style = selectedRunStyle
-		}
-		phase := phaseBadge(run.Phase)
-		id := truncate(run.IssueID, m.listWidth-lipgloss.Width(phase)-7)
-		line := fmt.Sprintf("%s%s  %s", marker, phase, id)
-		lines = append(lines, style.Width(m.listWidth).Render(line))
-	}
-	return fillToHeight(lipgloss.JoinVertical(lipgloss.Left, lines...), height, m.listWidth)
-}
-
-func (m *Model) renderDetail(height int) string {
-	if m.width-m.listWidth <= 0 {
-		return ""
-	}
-	paneWidth := m.width - m.listWidth - 1
-	if paneWidth < minViewportWidth {
-		paneWidth = minViewportWidth
-	}
-	var title string
-	runs := m.visibleRuns()
-	if len(runs) == 0 {
-		title = " Detail "
-		m.vp.SetContent("")
-	} else {
-		run := runs[m.selected]
-		title = fmt.Sprintf(" %s · %s ", run.IssueID, truncate(run.Title, paneWidth-25))
-	}
-	header := detailTitleStyle.Width(paneWidth).Render(title)
-	content := m.vp.View()
-	body := lipgloss.NewStyle().Width(paneWidth).Height(height - lipgloss.Height(header)).Render(content)
-	return lipgloss.JoinVertical(lipgloss.Left, header, body)
+	separator := separatorStyle.Render(strings.Repeat("│\n", bodyHeight-1) + "│")
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		m.list.View(),
+		" ",
+		separator,
+		" ",
+		m.detail.View(),
+	)
 }
 
 func (m *Model) renderFooter() string {
-	left := renderFooterHints(globalFooterHints)
+	left := m.help.View(m.keys)
+	focus := "list"
+	if m.focus == focusDetail {
+		focus = "detail"
+	}
+	right := dimStyle.Render(fmt.Sprintf("focus %s · %s", focus, m.lastRead.Format("15:04:05")))
+	contentWidth := m.width - 2
 	leftWidth := lipgloss.Width(left)
-
-	refresh := ""
-	if !m.lastRead.IsZero() {
-		refresh = "refreshed " + m.lastRead.Format("15:04:05")
-	}
-	if m.err != nil {
-		refresh = errorStyle.Render("read error (!)")
-	}
-	right := dimStyle.Render(refresh)
 	rightWidth := lipgloss.Width(right)
-
-	spacerWidth := m.width - leftWidth - rightWidth
-	if spacerWidth < 1 {
-		spacerWidth = 1
+	if leftWidth+rightWidth+1 > contentWidth {
+		avail := contentWidth - rightWidth - 1
+		if avail < 0 {
+			avail = 0
+		}
+		left = ansi.Truncate(left, avail, "…")
+		leftWidth = lipgloss.Width(left)
 	}
-	spacer := strings.Repeat(" ", spacerWidth)
-
-	return footerStyle.Width(m.width).Render(left + spacer + right)
+	space := contentWidth - leftWidth - rightWidth
+	if space < 1 {
+		space = 1
+	}
+	return footerStyle.Width(m.width).Render(left + strings.Repeat(" ", space) + right)
 }
 
-func (m *Model) centered(text string) string {
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, text)
-}
-
-func (m *Model) visibleRuns() []daemon.LiveRun {
-	return m.snapshot.Runs
-}
-
-// detailContent formats one run for the detail pane.
+// detailContent formats one run for the detail viewport.
 func detailContent(run daemon.LiveRun, width int) string {
 	if width < 1 {
 		width = 80
 	}
 	var sections []string
 
-	header := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("#FAFAFA")).
-		Render(truncate(run.Title, width-2))
-	sections = append(sections, header)
+	title := run.Title
+	if title == "" {
+		title = "(untitled)"
+	}
+	sections = append(sections, lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FAFAFA")).
+		Render(truncate(title, width-2)))
 
-	makeRow := func(k, v string) string {
+	row := func(k, v string) string {
 		return lipgloss.JoinHorizontal(lipgloss.Left,
 			labelStyle.Width(12).Render(k),
-			valueStyle.Render(v),
-		)
+			valueStyle.Render(v))
 	}
 
-	col1 := []string{
-		makeRow("Issue:", run.IssueID),
-		makeRow("Phase:", phaseBadge(run.Phase)),
-		makeRow("Attempt:", fmt.Sprintf("%d", run.Attempt)),
-		makeRow("Turn:", fmt.Sprintf("%d", run.Turn)),
+	left := []string{
+		row("Issue:", run.IssueID),
+		row("Phase:", phaseLabel(run.Phase)),
+		row("Attempt:", fmt.Sprintf("%d", run.Attempt)),
+		row("Turn:", fmt.Sprintf("%d", run.Turn)),
 	}
 	if run.Thread != "" {
-		col1 = append(col1, makeRow("Thread:", run.Thread))
+		left = append(left, row("Thread:", run.Thread))
 	}
 
-	col2 := []string{}
+	right := []string{}
 	if run.Workspace != "" {
-		col2 = append(col2, makeRow("Workspace:", run.Workspace))
+		right = append(right, row("Workspace:", run.Workspace))
 	}
 	if !run.WakeAt.IsZero() {
-		col2 = append(col2, makeRow("Wake at:", run.WakeAt.Format(time.RFC3339)))
+		right = append(right, row("Wake at:", run.WakeAt.Format(time.RFC3339)))
 	}
 
-	left := lipgloss.JoinVertical(lipgloss.Left, col1...)
-	var meta string
-	if len(col2) > 0 && width >= 70 {
-		right := lipgloss.JoinVertical(lipgloss.Left, col2...)
-		meta = lipgloss.JoinHorizontal(lipgloss.Top, left, baseStyle.Render(strings.Repeat(" ", 4)), right)
-	} else {
-		meta = left
+	meta := lipgloss.JoinVertical(lipgloss.Left, left...)
+	if len(right) > 0 && width >= 70 {
+		meta = lipgloss.JoinHorizontal(lipgloss.Top, meta, "    ",
+			lipgloss.JoinVertical(lipgloss.Left, right...))
 	}
 	sections = append(sections, meta)
 
@@ -571,62 +618,40 @@ func detailContent(run daemon.LiveRun, width int) string {
 	if text == "" {
 		text = "(no output yet)"
 	} else {
-		// Account for viewport padding/borders when wrapping.
-		wrapWidth := width - 4
+		wrapWidth := width - 2
 		if wrapWidth < 20 {
 			wrapWidth = 20
 		}
 		text = wordwrap.String(text, wrapWidth)
 	}
 	sections = append(sections, dimStyle.Render("--- output ---")+"\n"+text)
-
 	return strings.Join(sections, "\n\n")
 }
 
-func phaseBadge(phase string) string {
+// phaseLabel renders a phase with an icon and color.
+func phaseLabel(phase string) string {
 	icon, style := phasePresentation(phase)
-	return style.Render(icon + " " + truncate(phase, 14))
+	if phase == "" {
+		phase = "unknown"
+	}
+	return style.Render(icon + " " + phase)
 }
 
 func phasePresentation(phase string) (string, lipgloss.Style) {
 	switch {
 	case phase == "running":
-		return "▶", phaseRunningStyle
+		return "▶", runningStyle
 	case phase == "gating" || phase == "preparing" || phase == "claiming":
-		return "◉", phaseGatingStyle
+		return "◉", gatingStyle
 	case phase == "stopped: gate green":
-		return "✔", phaseStoppedGreenStyle
+		return "✔", greenStyle
 	case strings.HasPrefix(phase, "stopped:"):
-		return "✘", phaseStoppedRedStyle
+		return "✘", redStyle
 	case phase == "retry" || phase == "deferred" || phase == "interrupted":
-		return "↻", phaseRetryStyle
+		return "↻", retryStyle
 	default:
-		return "○", phaseDefaultStyle
+		return "○", neutralStyle
 	}
-}
-
-func renderFooterHints(hints []footerHint) string {
-	parts := make([]string, 0, len(hints))
-	for _, h := range hints {
-		parts = append(parts, keyPill(h.key, h.desc))
-	}
-	return strings.Join(parts, "  ")
-}
-
-func keyPill(key, desc string) string {
-	return keyPillStyle.Render(" "+key+" ") + baseStyle.Render(" ") + baseStyle.Render(desc)
-}
-
-func fillToHeight(content string, height, width int) string {
-	lines := strings.Split(content, "\n")
-	pad := baseStyle.Width(width).Render("")
-	for len(lines) < height {
-		lines = append(lines, pad)
-	}
-	if len(lines) > height {
-		lines = lines[:height]
-	}
-	return strings.Join(lines, "\n")
 }
 
 func truncate(s string, limit int) string {
@@ -654,11 +679,12 @@ func tick() tea.Cmd {
 	})
 }
 
-// Run starts the TUI and blocks until the user quits. The context is used
-// only for startup; the TUI owns its own lifecycle after Init.
+// Run starts the dashboard and blocks until the user quits.
 func Run(ctx context.Context, path string) error {
-	m := New(path)
-	p := tea.NewProgram(m, tea.WithContext(ctx), tea.WithAltScreen())
+	if !term.IsTerminal(os.Stdout.Fd()) {
+		return errors.New("lambe tui needs an interactive terminal; use `lambe logs -follow` for pipes")
+	}
+	p := tea.NewProgram(New(path), tea.WithContext(ctx), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil

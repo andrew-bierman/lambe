@@ -102,7 +102,11 @@ func parseCommon(args []string) (*config.Config, string, error) {
 
 func cliConfigPath(explicit string) (string, error) {
 	if explicit != "" {
-		return explicit, nil
+		abs, err := filepath.Abs(explicit)
+		if err != nil {
+			return "", fmt.Errorf("resolve config path %s: %w", explicit, err)
+		}
+		return abs, nil
 	}
 	path := config.DefaultPath()
 	if _, err := os.Stat(path); err != nil {
