@@ -35,12 +35,17 @@ func NewBeads(t Transport, actor string) *Beads {
 // issueJSON mirrors the bead fields lambe reads. Metadata values arrive as
 // arbitrary JSON scalars, so they are normalized to strings.
 type issueJSON struct {
-	ID       string         `json:"id"`
-	Title    string         `json:"title"`
-	Status   string         `json:"status"`
-	Assignee string         `json:"assignee"`
-	Revision string         `json:"revision"`
-	Metadata map[string]any `json:"metadata"`
+	ID          string         `json:"id"`
+	Title       string         `json:"title"`
+	Description string         `json:"description"`
+	Status      string         `json:"status"`
+	Assignee    string         `json:"assignee"`
+	Revision    string         `json:"revision"`
+	Priority    int            `json:"priority"`
+	Labels      []string       `json:"labels"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	Metadata    map[string]any `json:"metadata"`
 }
 
 func (j issueJSON) toIssue() Issue {
@@ -48,13 +53,25 @@ func (j issueJSON) toIssue() Issue {
 	for k, v := range j.Metadata {
 		meta[k] = metadataString(v)
 	}
+	labels := make([]string, len(j.Labels))
+	for i, label := range j.Labels {
+		labels[i] = strings.ToLower(strings.TrimSpace(label))
+	}
 	return Issue{
-		ID:       j.ID,
-		Title:    j.Title,
-		Status:   j.Status,
-		Assignee: j.Assignee,
-		Revision: j.Revision,
-		Metadata: meta,
+		ID:           j.ID,
+		Identifier:   j.ID,
+		Title:        j.Title,
+		Description:  j.Description,
+		Status:       j.Status,
+		State:        j.Status,
+		Assignee:     j.Assignee,
+		Revision:     j.Revision,
+		Priority:     j.Priority,
+		Labels:       labels,
+		CreatedAt:    j.CreatedAt,
+		UpdatedAt:    j.UpdatedAt,
+		Metadata:     meta,
+		Dispatchable: true,
 	}
 }
 

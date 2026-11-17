@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -695,12 +696,17 @@ func (l *Loop) serviceRetries(ctx context.Context) error {
 }
 
 // dispatch performs the state-list read and starts runs for every issue
-// whose claim wins.
+// whose claim wins. Issues are sorted by priority and filtered by workflow
+// required_labels and blocked-by metadata.
 func (l *Loop) dispatch(ctx context.Context) error {
 	issues, err := l.Tracker.Dispatchable(ctx, tracker.DispatchQuery{Statuses: l.DispatchStatuses, Labels: l.DispatchLabels})
 	if err != nil {
 		return fmt.Errorf("dispatch read: %w", err)
 	}
+
+	wf := l.Loader.Current()
+	issues = sortIssuesForDispatch(issues, wf.RequiredLabels)
+
 	for _, issue := range issues {
 		// Record creation and its blocked-state update are separate tracker writes.
 		if issue.Metadata[tracker.MetaKind] != "" {
@@ -726,7 +732,6 @@ func (l *Loop) dispatch(ctx context.Context) error {
 		if _, recovering := l.recovery[issue.ID]; recovering {
 			continue
 		}
-		wf := l.Loader.Current()
 		s := &session{issue: issue, wf: wf, key: issue.ID}
 		kind := RetryFailure
 		if l.CheckpointDir != "" {
@@ -776,6 +781,67 @@ func (l *Loop) dispatch(ctx context.Context) error {
 		l.start(ctx, s, kind)
 	}
 	return nil
+}
+
+// sortIssuesForDispatch orders issues by Symphony §8.2 priority rules and
+// drops issues that do not satisfy the workflow's required_labels or that
+// carry unresolved blockers. Priority is sorted 1–4 first (lower is higher),
+// then oldest created_at, then identifier lexicographically.
+func sortIssuesForDispatch(issues []tracker.Issue, requiredLabels []string) []tracker.Issue {
+	labels := make(map[string]bool, len(requiredLabels))
+	for _, label := range requiredLabels {
+		labels[label] = true
+	}
+
+	out := issues[:0]
+	for _, issue := range issues {
+		if !hasLabels(issue.Labels, labels) {
+			continue
+		}
+		if len(issue.BlockedBy) > 0 {
+			continue
+		}
+		out = append(out, issue)
+	}
+	issues = out
+
+	sort.Slice(issues, func(i, j int) bool {
+		pi, pj := priorityBucket(issues[i].Priority), priorityBucket(issues[j].Priority)
+		if pi != pj {
+			return pi < pj
+		}
+		if issues[i].CreatedAt != issues[j].CreatedAt {
+			return issues[i].CreatedAt.Before(issues[j].CreatedAt)
+		}
+		return issues[i].Identifier < issues[j].Identifier
+	})
+	return issues
+}
+
+// priorityBucket maps priority to a sort rank. Priorities 1–4 rank first in
+// ascending order; everything else (including 0/unset) sorts after.
+func priorityBucket(p int) int {
+	if p >= 1 && p <= 4 {
+		return p - 1
+	}
+	return 100
+}
+
+// hasLabels reports whether issueLabels contains every required label.
+func hasLabels(issueLabels []string, required map[string]bool) bool {
+	if len(required) == 0 {
+		return true
+	}
+	seen := make(map[string]bool, len(issueLabels))
+	for _, label := range issueLabels {
+		seen[label] = true
+	}
+	for label := range required {
+		if !seen[label] {
+			return false
+		}
+	}
+	return true
 }
 
 // runAttempt executes one attempt (a failure retry increments the attempt
@@ -965,9 +1031,9 @@ func (w *worker) runTurn(ctx context.Context, s *session, ws *Workspace, log *sl
 // rejection.
 func (l *Loop) turnPrompt(s *session) (string, error) {
 	if s.turn > 1 {
-		return ContinuationGuidance(s.issue.Title, s.attempt, s.lastGate)
+		return ContinuationGuidance(s.issue, s.attempt, s.lastGate)
 	}
-	prompt, err := RenderPrompt(s.wf.PromptBody, s.issue.Title, s.attempt)
+	prompt, err := RenderPrompt(s.wf.PromptBody, s.issue, s.attempt)
 	if err != nil {
 		return "", err
 	}

@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/andrew-bierman/lambe/internal/tracker"
 	"github.com/fsnotify/fsnotify"
 	"github.com/knadh/koanf/parsers/yaml"
 )
@@ -50,14 +51,17 @@ const (
 type Revision string
 
 // Workflow is one parsed WORKFLOW.md: front matter (hooks, turn cap, hook
-// timeout) plus the prompt body, identified by its content revision.
+// timeout, tracker rules) plus the prompt body, identified by its content revision.
 type Workflow struct {
 	Hooks               map[HookName]string
 	PromptBody          string
 	MaxTurns            int
 	MaxConcurrentAgents int
 	HookTimeout         time.Duration
-	Revision            Revision
+	// RequiredLabels is the spec-mandated tracker.required_labels list.
+	// An issue must carry every listed label to be dispatched or continued.
+	RequiredLabels []string
+	Revision       Revision
 }
 
 // EnvLookup resolves an environment variable name to its value, reporting
@@ -152,6 +156,30 @@ func ParseWorkflow(content []byte, env EnvLookup) (*Workflow, error) {
 			return nil, fmt.Errorf("WORKFLOW.md: hook_timeout_ms must be a positive integer, got %v", v)
 		}
 		wf.HookTimeout = time.Duration(n) * time.Millisecond
+	}
+
+	if v, ok := raw["tracker"]; ok {
+		tracker, ok := v.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("WORKFLOW.md: tracker must be an object")
+		}
+		if labelsRaw, ok := tracker["required_labels"]; ok {
+			labels, ok := labelsRaw.([]any)
+			if !ok {
+				return nil, fmt.Errorf("WORKFLOW.md: tracker.required_labels must be a list of strings")
+			}
+			for i, item := range labels {
+				s, ok := item.(string)
+				if !ok {
+					return nil, fmt.Errorf("WORKFLOW.md: tracker.required_labels[%d] must be a string", i)
+				}
+				s = strings.ToLower(strings.TrimSpace(s))
+				if s == "" {
+					return nil, fmt.Errorf("WORKFLOW.md: tracker.required_labels[%d] must not be empty", i)
+				}
+				wf.RequiredLabels = append(wf.RequiredLabels, s)
+			}
+		}
 	}
 
 	wf.PromptBody = strings.TrimLeft(string(body), "\r\n")
@@ -282,9 +310,10 @@ var filters = map[string]func(string) string{
 
 // render expands a template strictly: every {{ name }} or
 // {{ name | filter }} token must reference a known variable and a known
-// filter. An unknown variable or filter is a hard error — rendering never
-// silently produces empty output.
-func render(tpl string, vars map[string]string) (string, error) {
+// filter. Dot notation (e.g. {{ issue.identifier }}) traverses nested maps.
+// An unknown variable or filter is a hard error — rendering never silently
+// produces empty output.
+func render(tpl string, vars map[string]any) (string, error) {
 	var b strings.Builder
 	for {
 		loc := templateToken.FindStringSubmatchIndex(tpl)
@@ -302,45 +331,107 @@ func render(tpl string, vars map[string]string) (string, error) {
 			name = strings.TrimSpace(before)
 			filter = strings.TrimSpace(after)
 		}
-		val, ok := vars[name]
-		if !ok {
-			return "", fmt.Errorf("render: unknown template variable %q", name)
+		val, err := resolveVar(vars, name)
+		if err != nil {
+			return "", fmt.Errorf("render: %w", err)
 		}
+		s := fmt.Sprint(val)
 		if filter != "" {
 			fn, ok := filters[filter]
 			if !ok {
 				return "", fmt.Errorf("render: unknown template filter %q", filter)
 			}
-			val = fn(val)
+			s = fn(s)
 		}
-		b.WriteString(val)
+		b.WriteString(s)
 		tpl = tpl[loc[1]:]
 	}
 }
 
-// RenderPrompt renders the WORKFLOW.md body over the spec-mandated
-// {issue, attempt} variables. Attempt count is rendered into the prompt.
-func RenderPrompt(body, issue string, attempt int) (string, error) {
-	return render(body, map[string]string{
-		"issue":   issue,
+// resolveVar looks up a dotted variable name in a nested map. If the path
+// has one part and resolves to a map containing a key equal to that part,
+// the key's value is returned — this lets {{ issue }} render the issue title
+// while {{ issue.identifier }} traverses normally.
+func resolveVar(vars map[string]any, name string) (any, error) {
+	parts := strings.Split(name, ".")
+	var current any = vars
+	for i, part := range parts {
+		m, ok := current.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("unknown template variable %q", name)
+		}
+		current, ok = m[part]
+		if !ok {
+			return nil, fmt.Errorf("unknown template variable %q", name)
+		}
+		// Bare variable name that resolved to a map: if the map has a key
+		// matching the variable's root name, treat that as the string value
+		// for backward compatibility (e.g. {{ issue }} == {{ issue.issue }}).
+		if i == len(parts)-1 {
+			if inner, ok := current.(map[string]any); ok {
+				if self, ok := inner[part]; ok {
+					return self, nil
+				}
+			}
+		}
+	}
+	return current, nil
+}
+
+// RenderPrompt renders the WORKFLOW.md body over the spec-mandated issue
+// object and attempt count. The issue map exposes identifier, title,
+// description, state, labels, blocked_by, url, and priority so templates can
+// use {{ issue.identifier }}, {{ issue.title }}, etc. For backward
+// compatibility, {{ issue }} still resolves to the issue title.
+func RenderPrompt(body string, issue tracker.Issue, attempt int) (string, error) {
+	vars := map[string]any{
+		"issue":   issueVars(issue),
 		"attempt": strconv.Itoa(attempt),
-	})
+	}
+	return render(body, vars)
+}
+
+// issueVars builds the template-visible map for one issue. Backward
+// compatibility: the bare "issue" key returns the title, matching the
+// original single-variable contract.
+func issueVars(issue tracker.Issue) map[string]any {
+	labels := strings.Join(issue.Labels, ", ")
+	blocked := ""
+	if len(issue.BlockedBy) > 0 {
+		parts := make([]string, 0, len(issue.BlockedBy))
+		for _, b := range issue.BlockedBy {
+			parts = append(parts, b.Identifier)
+		}
+		blocked = strings.Join(parts, ", ")
+	}
+	return map[string]any{
+		"issue":       issue.Title,
+		"identifier":  issue.Identifier,
+		"title":       issue.Title,
+		"description": issue.Description,
+		"state":       issue.State,
+		"status":      issue.Status,
+		"labels":      labels,
+		"blocked_by":  blocked,
+		"url":         issue.URL,
+		"priority":    strconv.Itoa(issue.Priority),
+	}
 }
 
 // continuationTemplate is the guidance sent on the same live thread between
 // turns of one attempt.
-const continuationTemplate = "Issue \"{{ issue }}\" is still active. This is attempt {{ attempt }}.\n{{ gate_output }}\nContinue or hand off."
+const continuationTemplate = "Issue \"{{ issue.title }}\" is still active. This is attempt {{ attempt }}.\n{{ gate_output }}\nContinue or hand off."
 
 // ContinuationGuidance renders the between-turns continuation message: the
 // issue title, the attempt number, the last gate output when present, and
 // the continue-or-hand-off instruction.
-func ContinuationGuidance(issue string, attempt int, lastGateOutput string) (string, error) {
+func ContinuationGuidance(issue tracker.Issue, attempt int, lastGateOutput string) (string, error) {
 	gate := "No gate output yet."
 	if lastGateOutput != "" {
 		gate = "Last gate output:\n" + lastGateOutput
 	}
-	return render(continuationTemplate, map[string]string{
-		"issue":       issue,
+	return render(continuationTemplate, map[string]any{
+		"issue":       issueVars(issue),
 		"attempt":     strconv.Itoa(attempt),
 		"gate_output": gate,
 	})

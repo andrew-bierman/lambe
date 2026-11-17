@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
 // fixedEnv is an EnvLookup over a fixed map.
@@ -100,9 +102,48 @@ body
 			wantErr: "unset environment variable",
 		},
 		{
-			name:    "unknown hook is an error",
-			content: "---\nhooks:\n  mid_run: \"echo hi\"\n---\nbody",
-			wantErr: "unknown hook",
+			name: "tracker required_labels parse",
+			content: `---
+tracker:
+  required_labels:
+    - "lambe:babysit"
+    - "priority:high"
+---
+body`,
+			check: func(t *testing.T, wf *Workflow) {
+				if len(wf.RequiredLabels) != 2 || wf.RequiredLabels[0] != "lambe:babysit" || wf.RequiredLabels[1] != "priority:high" {
+					t.Errorf("RequiredLabels = %v", wf.RequiredLabels)
+				}
+			},
+		},
+		{
+			name: "tracker required_labels normalizes case",
+			content: `---
+tracker:
+  required_labels:
+    - "  Lambe:Babysit  "
+---
+body`,
+			check: func(t *testing.T, wf *Workflow) {
+				if len(wf.RequiredLabels) != 1 || wf.RequiredLabels[0] != "lambe:babysit" {
+					t.Errorf("RequiredLabels = %v", wf.RequiredLabels)
+				}
+			},
+		},
+		{
+			name:    "tracker required_labels must be a list",
+			content: "---\ntracker:\n  required_labels: notalist\n---\nbody",
+			wantErr: "tracker.required_labels must be a list",
+		},
+		{
+			name:    "tracker required_labels rejects empty string",
+			content: "---\ntracker:\n  required_labels:\n    - \"\"\n---\nbody",
+			wantErr: "tracker.required_labels[0] must not be empty",
+		},
+		{
+			name:    "tracker must be an object",
+			content: "---\ntracker: \"not-an-object\"\n---\nbody",
+			wantErr: "tracker must be an object",
 		},
 		{
 			name:    "unterminated front matter is an error",
@@ -182,11 +223,26 @@ func TestRenderPromptStrict(t *testing.T) {
 			tpl:     "{{ }}",
 			wantErr: "empty template variable",
 		},
+		{
+			name: "issue object fields render",
+			tpl:  "{{ issue.identifier }}: {{ issue.title }} ({{ issue.priority }})",
+			want: "fix-1: fix the build (2)",
+		},
+		{
+			name: "issue object fields support filters",
+			tpl:  "{{ issue.title | upper }} — {{ issue.state | lower }}",
+			want: "FIX THE BUILD — open",
+		},
+		{
+			name:    "unknown issue subfield is a hard error",
+			tpl:     "{{ issue.secret }}",
+			wantErr: `unknown template variable "issue.secret"`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := RenderPrompt(tt.tpl, "fix the build", 3)
+			got, err := RenderPrompt(tt.tpl, tracker.Issue{ID: "fix-1", Identifier: "fix-1", Title: "fix the build", State: "open", Priority: 2}, 3)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
@@ -205,7 +261,8 @@ func TestRenderPromptStrict(t *testing.T) {
 
 func TestContinuationGuidance(t *testing.T) {
 	t.Parallel()
-	got, err := ContinuationGuidance("fix the build", 2, "tests failed")
+	issue := tracker.Issue{ID: "fix-1", Identifier: "fix-1", Title: "fix the build"}
+	got, err := ContinuationGuidance(issue, 2, "tests failed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +272,7 @@ func TestContinuationGuidance(t *testing.T) {
 		}
 	}
 
-	got, err = ContinuationGuidance("fix the build", 2, "")
+	got, err = ContinuationGuidance(issue, 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -82,7 +82,14 @@ const (
 	StatusClosed   = "closed"
 )
 
-// Issue is a single bead as lambe sees it.
+// BlockerRef names one blocking issue, normalized from tracker metadata.
+type BlockerRef struct {
+	ID         string
+	Identifier string
+	State      string
+}
+
+// Issue is one schedulable work item from the tracker.
 type Issue struct {
 	ID       string
 	Title    string
@@ -90,6 +97,26 @@ type Issue struct {
 	Assignee string
 	Revision string
 	Metadata map[string]string
+	// Identifier is the human-readable ticket key (spec §4.1.1).
+	Identifier string
+	// Description is the issue body, when available.
+	Description string
+	// State is the provider-native state name.
+	State string
+	// Priority is lower-is-higher; 0 means unset.
+	Priority int
+	// Labels are normalized to lowercase.
+	Labels []string
+	// BlockedBy lists blocking issues.
+	BlockedBy []BlockerRef
+	// URL links to the issue in the tracker.
+	URL string
+	// Dispatchable reports adapter-derived eligibility.
+	Dispatchable bool
+	// CreatedAt is the issue creation time.
+	CreatedAt time.Time
+	// UpdatedAt is the last update time.
+	UpdatedAt time.Time
 }
 
 // DispatchQuery selects the dispatchable work front. It expresses the
