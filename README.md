@@ -205,10 +205,19 @@ lambe logs -json                # shared read-only snapshot for scripts and othe
 ```
 
 Pass the same `-config FILE` to these commands when using a custom configuration.
-The TUI exits with Ctrl-C or `q`; press `/` to filter runs and Tab to switch panes. In Rex it reports an OSC
-status badge in its own pane. Rex is optional; agent execution stays headless
-and the views work in a normal terminal. A stopped daemon’s output is labeled
-historical, using its native process identity rather than a reusable PID alone.
+The TUI exits with Ctrl-C or `q`. Keybindings:
+
+- `j`/`k` or `↑`/`↓` — move through the run list
+- `Tab` — switch focus between the run list and the detail pane
+- `/` — filter runs; `Esc` clears the filter
+- `u`/`d` or `Ctrl-U`/`Ctrl-D` — half-page up/down in the detail pane
+- `g`/`G` — jump to top/bottom of the detail pane
+- mouse wheel — scroll the focused pane
+
+In Rex the daemon reports an OSC status badge in its own pane. Rex is optional;
+agent execution stays headless and the views work in a normal terminal. A
+stopped daemon's output is labeled historical, using its native process identity
+rather than a reusable PID alone.
 
 The private live snapshot keeps owned work visible and trims completed history
 when it reaches 100 issues,

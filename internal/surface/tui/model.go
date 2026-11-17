@@ -126,6 +126,8 @@ const (
 // keyMap is the dashboard's own keybindings; list navigation keys come from
 // bubbles/list and viewport scrolling from bubbles/viewport.
 type keyMap struct {
+	focus *focusArea
+
 	Quit     key.Binding
 	Focus    key.Binding
 	Help     key.Binding
@@ -140,8 +142,9 @@ type keyMap struct {
 	ListDown key.Binding
 }
 
-func defaultKeyMap() keyMap {
+func defaultKeyMap(focus *focusArea) keyMap {
 	return keyMap{
+		focus: focus,
 		Quit: key.NewBinding(
 			key.WithKeys("q", "ctrl+c"),
 			key.WithHelp("q", "quit"),
@@ -167,12 +170,12 @@ func defaultKeyMap() keyMap {
 			key.WithHelp("↓/j", "scroll"),
 		),
 		PageUp: key.NewBinding(
-			key.WithKeys("pgup", "K"),
-			key.WithHelp("pgup", "page up"),
+			key.WithKeys("pgup", "K", "u", "ctrl+u"),
+			key.WithHelp("u/pgup", "page up"),
 		),
 		PageDown: key.NewBinding(
-			key.WithKeys("pgdown", "J"),
-			key.WithHelp("pgdn", "page down"),
+			key.WithKeys("pgdown", "J", "d", "ctrl+d"),
+			key.WithHelp("d/pgdn", "page down"),
 		),
 		GoTop: key.NewBinding(
 			key.WithKeys("home", "g"),
@@ -193,9 +196,12 @@ func defaultKeyMap() keyMap {
 	}
 }
 
-// ShortHelp implements help.KeyMap.
+// ShortHelp implements help.KeyMap. Hints depend on which pane has focus.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.ListUp, k.ListDown, k.Focus, k.Filter, k.Help, k.Quit}
+	if k.focus != nil && *k.focus == focusDetail {
+		return []key.Binding{k.ScrollUp, k.ScrollDn, k.PageUp, k.PageDown, k.Focus, k.Help, k.Quit}
+	}
+	return []key.Binding{k.ListUp, k.ListDown, k.PageUp, k.PageDown, k.Focus, k.Filter, k.Help, k.Quit}
 }
 
 // FullHelp implements help.KeyMap.
@@ -242,12 +248,12 @@ type tickMsg time.Time
 func New(path string) *Model {
 	m := &Model{
 		path:    path,
-		keys:    defaultKeyMap(),
 		loading: true,
 	}
+	m.keys = defaultKeyMap(&m.focus)
 	delegate := list.NewDefaultDelegate()
 	m.list = list.New(nil, delegate, 0, 0)
-	m.list.Title = "Runs"
+	m.list.Title = "Runs ▸"
 	m.list.SetShowHelp(false)
 	m.list.SetShowTitle(true)
 	m.list.SetShowStatusBar(true)
@@ -340,8 +346,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Focus):
 		if m.focus == focusList {
 			m.focus = focusDetail
+			m.list.Title = "Runs"
 		} else {
 			m.focus = focusList
+			m.list.Title = "Runs ▸"
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.Help):
@@ -485,8 +493,11 @@ func (m *Model) refreshDetail() {
 		m.detail.SetContent(dimStyle.Render("No active run. Waiting for the daemon to claim work."))
 		return
 	}
+	follow := m.detail.AtBottom()
 	m.detail.SetContent(detailContent(run, m.detail.Width))
-	m.detail.GotoBottom()
+	if follow {
+		m.detail.GotoBottom()
+	}
 }
 
 // View implements tea.Model.
@@ -684,7 +695,7 @@ func Run(ctx context.Context, path string) error {
 	if !term.IsTerminal(os.Stdout.Fd()) {
 		return errors.New("lambe tui needs an interactive terminal; use `lambe logs -follow` for pipes")
 	}
-	p := tea.NewProgram(New(path), tea.WithContext(ctx), tea.WithAltScreen())
+	p := tea.NewProgram(New(path), tea.WithContext(ctx), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil
