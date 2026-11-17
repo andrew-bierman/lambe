@@ -297,6 +297,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.flusher = f
 	}
 
+	// Start the live projection before recovery so viewers see the new
+	// daemon as running while startup reconciliation is still in flight.
+	view := newLiveView(LivePath(d.opts.StateDir, d.opts.Config), func(err error) { d.log.Warn("live view update failed", "error", err) })
+	view.registry = d.asm.Registry
+	view.start()
+	defer view.close()
+
 	adopted, err := Recover(runCtx, TrackerOrphans{Tracker: primary}, primary, d.opts.Actor,
 		ShutdownBound, d.log)
 	if err != nil {
@@ -331,10 +338,6 @@ func (d *Daemon) Run(ctx context.Context) error {
 		if d.opts.Config != nil {
 			l.DispatchLabels = d.opts.Config.Labels
 		}
-		view := newLiveView(LivePath(d.opts.StateDir, d.opts.Config), func(err error) { d.log.Warn("live view update failed", "error", err) })
-		view.registry = d.asm.Registry
-		view.start()
-		defer view.close()
 		l.Observe = view.progress
 		if runner, ok := d.asm.Runner.(*harnessRunner); ok {
 			runner.live = view
