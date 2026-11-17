@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -1162,8 +1161,14 @@ func TestMaterializationLockGuardsTheWholeLedger(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = lock.Close() }()
-	if err := m.Materialize(t.Context(), Formula{Name: "repeat"}); !errors.Is(err, syscall.EWOULDBLOCK) {
-		t.Fatalf("concurrent ledger writer allowed: %v", err)
+	err = m.Materialize(t.Context(), Formula{Name: "repeat"})
+	if err == nil {
+		t.Fatal("concurrent ledger writer allowed")
+	}
+	// The lock acquisition waits materializationLockWait before giving up
+	// with a descriptive error; it no longer surfaces EWOULDBLOCK.
+	if !strings.Contains(err.Error(), "another process is materializing responsibilities") {
+		t.Fatalf("lock contention error = %v, want the materialization-lock message", err)
 	}
 	if _, err := os.Stat(m.ledgerPath()); !os.IsNotExist(err) {
 		t.Fatal("contender wrote a pour intent")
