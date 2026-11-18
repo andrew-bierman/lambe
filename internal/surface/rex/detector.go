@@ -9,6 +9,7 @@ package rex
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // CommandRunner executes one command and returns its stdout, exit code, and
@@ -62,6 +63,8 @@ type Availability struct {
 // exitAbsent is the exit code `rex ls` uses when no Rex server exists.
 const exitAbsent = 4
 
+const probeTimeout = 500 * time.Millisecond
+
 // Detector decides whether Rex is present. Env lookups and command execution
 // are injected so tests can script both.
 type Detector struct {
@@ -83,11 +86,13 @@ func (d Detector) Detect(ctx context.Context) Availability {
 	if d.Runner == nil {
 		return Availability{Reason: ReasonProbeFailed}
 	}
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
 	_, code, err := d.Runner(ctx, "rex", "ls", "--json")
 	switch {
 	case err == nil && code == 0:
 		return Availability{Available: true, Reason: ReasonProbe}
-	case err == nil && code == exitAbsent:
+	case code == exitAbsent:
 		return Availability{Reason: ReasonAbsent}
 	default:
 		return Availability{Reason: ReasonProbeFailed}

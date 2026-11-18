@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestDetect(t *testing.T) {
@@ -38,6 +39,12 @@ func TestDetect(t *testing.T) {
 			exitCode:  4,
 			wantAvail: false,
 			wantWhy:   ReasonAbsent,
+		},
+		{
+			name:     "probe exit 4 with exit error means rex absent",
+			exitCode: 4,
+			runErr:   errors.New("exit status 4"),
+			wantWhy:  ReasonAbsent,
 		},
 		{
 			name:      "probe other exit is inconclusive unavailable",
@@ -81,6 +88,40 @@ func TestDetect(t *testing.T) {
 			}
 			if probed && len(tt.env) > 0 {
 				t.Error("probe ran despite env indicating Rex")
+			}
+		})
+	}
+}
+
+func TestDetectTimesOutHungProbe(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name          string
+		callerTimeout time.Duration
+	}{
+		{name: "default timeout"},
+		{name: "shorter caller timeout", callerTimeout: 20 * time.Millisecond},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			if tt.callerTimeout > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tt.callerTimeout)
+				defer cancel()
+			}
+			d := Detector{Runner: func(probeCtx context.Context, _ string, _ ...string) (string, int, error) {
+				deadline, ok := probeCtx.Deadline()
+				if !ok || time.Until(deadline) > probeTimeout {
+					t.Fatal("probe has no bounded deadline")
+				}
+				if callerDeadline, ok := ctx.Deadline(); ok && !deadline.Equal(callerDeadline) {
+					t.Fatal("probe did not inherit the earlier caller deadline")
+				}
+				<-probeCtx.Done()
+				return "", -1, probeCtx.Err()
+			}}
+			if got := d.Detect(ctx); got != (Availability{Reason: ReasonProbeFailed}) {
+				t.Errorf("Detect() = %+v, want unavailable after timeout", got)
 			}
 		})
 	}

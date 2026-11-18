@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"time"
@@ -47,12 +48,23 @@ func NewLocal(bin, dir, actor string) (*Local, error) {
 // Init creates the tracker's .beads/ storage if the directory has none.
 // It is a no-op when storage already exists.
 func (l *Local) Init(ctx context.Context) error {
-	if out, err := l.shell.run(ctx, []string{"status"}); err == nil && len(out.Raw) > 0 {
+	status, err := l.shell.run(ctx, []string{"status"})
+	if err == nil && len(status.Raw) > 0 {
 		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	cmd := exec.CommandContext(ctx, l.bin, "init") // #nosec G204 -- fixed argv, binary resolved by the constructor
 	cmd.Dir = l.dir
+	cmd.WaitDelay = time.Second
 	if out, err := cmd.CombinedOutput(); err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		return fmt.Errorf("bd init in %s: %w: %s", l.dir, err, out)
 	}
 	return nil

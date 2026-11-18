@@ -377,6 +377,21 @@ func TestLoadDirSkipsFormulasWithoutGate(t *testing.T) {
 
 // ---- three-valued evaluation ----
 
+func TestEvaluateShellExportsIssueID(t *testing.T) {
+	t.Setenv("LAMBE_ISSUE_ID", "stale-issue")
+	dir := t.TempDir()
+	command := `printf '%s|%s|' "$0" "$#"; sh -c 'printf "<%s>" "$LAMBE_ISSUE_ID"'; exit 1`
+	writeFormula(t, dir, "tests", fmt.Sprintf("type = %q\ncommand = %q", "shell", command))
+	r := newTestRunner(t, dir, newFakeHub(), newMemKV(), gate.OsExec, nil)
+	req := reqWithWorkspace(t, 1, symphony.Revision("wf-1"))
+	req.Issue.ID = "-ac 'quoted'; $(printf INJECTED)\n$HOME & 日本語"
+
+	outcome, err := r.Evaluate(t.Context(), req)
+	if want := "sh|0|<" + req.Issue.ID + ">"; err != nil || outcome.Verdict != symphony.GateRed || outcome.Output != want {
+		t.Fatalf("shell gate got (%+v, %v), want red with output %q", outcome, err, want)
+	}
+}
+
 func TestEvaluateShellRedWritesRejectionComment(t *testing.T) {
 	dir := t.TempDir()
 	writeFormula(t, dir, "tests", "type = \"shell\"\ncommand = \"echo boom-failing-tests >&2; exit 3\"")

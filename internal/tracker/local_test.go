@@ -12,6 +12,35 @@ import (
 	"time"
 )
 
+func TestLocalInitDoesNotInitializeAfterStatusTimeout(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bd")
+	if err := os.WriteFile(bin, []byte(`#!/bin/sh
+case "$1" in
+  status) printf started > status-started; exec sleep 10 ;;
+  init) printf unexpected > init-started ;;
+esac
+`), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	l, err := NewLocal(bin, dir, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Exercise the transport's own timeout while the caller can still run commands.
+	l.shell.CommandTimeout = time.Second
+	if err := l.Init(t.Context()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Init = %v, want status timeout", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "status-started")); err != nil {
+		t.Fatalf("status did not start: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "init-started")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("init must not run after status timeout: %v", err)
+	}
+}
+
 // bdBin returns the bd binary path, or "" when the tests must skip. These
 // tests are skipped under -short and when bd is unavailable; a CI runner
 // that wants them must install bd and run the full suite. LAMBE_TEST_BD

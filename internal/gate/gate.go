@@ -64,8 +64,8 @@ func (k Kind) String() string {
 type Config struct {
 	// Kind selects the evaluation strategy.
 	Kind Kind
-	// Command is the shell gate's command; it runs with the workspace as
-	// cwd and a non-zero exit is a red verdict.
+	// Command is the shell gate's command. It runs in the workspace with
+	// LAMBE_ISSUE_ID set to the current issue ID. A non-zero exit is red.
 	Command string
 	// Ref is the gh:run gate's immutable ref: a full commit SHA or a
 	// numeric workflow run id. Bare branch names are rejected at parse

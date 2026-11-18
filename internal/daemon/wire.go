@@ -35,6 +35,8 @@ const (
 	driverCloseBound = 30 * time.Second
 	// persistBound bounds one persist-seam tracker round trip.
 	persistBound = 10 * time.Second
+	// Leave time for subprocess cleanup before the daemon's shutdown deadline.
+	persistTransactionBound = ShutdownBound - 5*time.Second
 	// settleDrainBound bounds how long a settled turn waits for the
 	// event drain to deliver the final assistant message.
 	settleDrainBound = 500 * time.Millisecond
@@ -439,32 +441,43 @@ func (r *harnessRunner) persistFor(issueID string) func(pgid int, session string
 // daemon opens its own trackers; bd's shell transport makes a second local
 // over the same directory safe.
 func newAttemptPersister(bdBin, dir, actor string, log *slog.Logger) func(sessionID string, pgid int) error {
-	return newAttemptPersisterFrom(func() (tracker.Tracker, error) {
+	persist := newAttemptPersisterFrom(func(ctx context.Context) (tracker.Tracker, error) {
 		local, err := tracker.NewLocal(bdBin, dir, actor)
 		if err != nil {
 			return nil, err
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), persistBound)
-		defer cancel()
 		if err := local.Init(ctx); err != nil {
 			return nil, err
 		}
 		return local, nil
 	}, log, proc.ProcessIdentity)
+	return func(sessionID string, pgid int) error {
+		return persist(context.Background(), sessionID, pgid)
+	}
 }
 
 // newAttemptPersisterFrom is newAttemptPersister with the tracker opener
 // injected, so tests can substitute an in-memory tracker.
-func newAttemptPersisterFrom(openTracker func() (tracker.Tracker, error), log *slog.Logger, identity func(int) (string, error)) func(sessionID string, pgid int) error {
-	var mu sync.Mutex
+func newAttemptPersisterFrom(openTracker func(context.Context) (tracker.Tracker, error), log *slog.Logger, identity func(int) (string, error)) func(context.Context, string, int) error {
+	// Serialize lazy initialization without blocking past a caller's deadline.
+	opening := make(chan struct{}, 1)
 	var opened tracker.Tracker
-	open := func() (tracker.Tracker, error) {
-		mu.Lock()
-		defer mu.Unlock()
+	open := func(ctx context.Context) (tracker.Tracker, error) {
+		select {
+		case opening <- struct{}{}:
+			defer func() { <-opening }()
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 		if opened != nil {
 			return opened, nil
 		}
-		tr, err := openTracker()
+		var tr tracker.Tracker
+		err := retryPersistTimeout(ctx, func(ctx context.Context) error {
+			var err error
+			tr, err = openTracker(ctx)
+			return err
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -474,15 +487,20 @@ func newAttemptPersisterFrom(openTracker func() (tracker.Tracker, error), log *s
 		opened = tr
 		return tr, nil
 	}
-	return func(sessionID string, pgid int) error {
-		tr, err := open()
+	return func(ctx context.Context, sessionID string, pgid int) error {
+		ctx, cancel := context.WithTimeout(ctx, persistTransactionBound)
+		defer cancel()
+		tr, err := open(ctx)
 		if err != nil {
 			return err
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), persistBound)
-		defer cancel()
-		attempts, err := tr.Attempts(ctx, sessionID)
+		var attempts []tracker.Attempt
+		err = retryPersistTimeout(ctx, func(ctx context.Context) error {
+			var readErr error
+			attempts, readErr = tr.Attempts(ctx, sessionID)
+			return readErr
+		})
 		if err != nil {
 			log.Error("persist: read attempts", "session", sessionID, "error", err)
 			return err
@@ -500,11 +518,28 @@ func newAttemptPersisterFrom(openTracker func() (tracker.Tracker, error), log *s
 		if err != nil {
 			return fmt.Errorf("read process identity: %w", err)
 		}
-		if err := tr.PutAttempt(ctx, tracker.Attempt{SessionID: sessionID, Number: number, PGID: pgid, ProcessIdentity: token}); err != nil {
+		if err := retryPersistTimeout(ctx, func(ctx context.Context) error {
+			return tr.PutAttempt(ctx, tracker.Attempt{SessionID: sessionID, Number: number, PGID: pgid, ProcessIdentity: token})
+		}); err != nil {
 			log.Error("persist: record pgid", "session", sessionID, "error", err)
 			return err
 		}
 		return nil
+	}
+}
+
+// retryPersistTimeout retries an idempotent tracker operation once after a timeout.
+func retryPersistTimeout(ctx context.Context, operation func(context.Context) error) error {
+	for i := 0; ; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, persistBound)
+		err := operation(attemptCtx)
+		cancel()
+		if i > 0 || !errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
 	}
 }
 
