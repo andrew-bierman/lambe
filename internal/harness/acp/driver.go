@@ -108,12 +108,13 @@ type Driver struct {
 	opts Options
 	log  *slog.Logger
 
-	mu        sync.Mutex // guards client, sessionID, streaming, result, stats, pendingMessage
-	client    *client
-	sessionID string
-	streaming bool
-	result    chan harness.Outcome
-	stats     harness.SessionStats
+	mu            sync.Mutex // guards client and turn state
+	client        *client
+	sessionID     string
+	streaming     bool
+	result        chan harness.Outcome
+	abortRequests int
+	stats         harness.SessionStats
 	// pendingMessage buffers streamed assistant-message chunks until the
 	// next boundary (tool call or stop) completes the message.
 	pendingMessage string
@@ -287,18 +288,31 @@ func (d *Driver) Steer(ctx context.Context, text string) error {
 
 // Abort asks the agent to abort its current operation via the session/cancel
 // notification. Agents that honor it answer the in-flight prompt with
-// stopReason "cancelled".
+// stopReason "cancelled" or a cancellation error.
 func (d *Driver) Abort(ctx context.Context) error {
 	d.mu.Lock()
 	client := d.client
 	sessionID := d.sessionID
+	var turn chan harness.Outcome
+	if client != nil && d.streaming && d.result != nil && ctx.Err() == nil {
+		turn = d.result
+		d.abortRequests++
+	}
 	d.mu.Unlock()
 	if client == nil {
 		return fmt.Errorf("acp: abort before start")
 	}
 	cctx, cancel := context.WithTimeout(ctx, d.opts.CallTimeout)
 	defer cancel()
-	return client.cancel(cctx, sessionID)
+	err := client.cancel(cctx, sessionID)
+	if err != nil && turn != nil {
+		d.mu.Lock()
+		if d.result == turn {
+			d.abortRequests--
+		}
+		d.mu.Unlock()
+	}
+	return err
 }
 
 // Resume replaces an idle agent process and loads the named backend conversation.
@@ -348,6 +362,7 @@ func (d *Driver) Run(ctx context.Context, promptText string) (harness.Outcome, e
 
 	d.mu.Lock()
 	d.result = make(chan harness.Outcome, 1)
+	d.abortRequests = 0
 	d.mu.Unlock()
 	d.armWatchdog()
 	defer d.stopWatchdog()
@@ -515,11 +530,14 @@ func (d *Driver) ensureStarted(ctx context.Context) (*client, string, error) {
 // turn's lifetime is the agent's, not the caller's) and routes the stop
 // response into the run machinery.
 func (d *Driver) submitTurn(_ context.Context, client *client, sessionID string, text string) error {
+	d.mu.Lock()
+	turn := d.result
+	d.mu.Unlock()
 	go func() { //nolint:gosec // G118: deliberate; the turn's lifetime is the agent's, not the caller's context's.
 		ctx, cancel := context.WithTimeout(context.Background(), d.turnDeadline())
 		defer cancel()
 		resp, err := client.prompt(ctx, sessionID, text)
-		d.onStop(resp, err)
+		d.onStop(turn, resp, err)
 	}()
 	return nil
 }
@@ -538,8 +556,16 @@ func (d *Driver) turnDeadline() time.Duration {
 
 // onStop is the completion path: the prompt response carries the protocol's
 // stop reason, the only signal that no automatic work remains.
-func (d *Driver) onStop(resp acpsdk.PromptResponse, err error) {
-	if err != nil {
+func (d *Driver) onStop(turn chan harness.Outcome, resp acpsdk.PromptResponse, err error) {
+	d.mu.Lock()
+	if turn != d.result {
+		d.mu.Unlock()
+		return
+	}
+	abortRequested := d.abortRequests > 0
+	d.mu.Unlock()
+	aborted := resp.StopReason == acpsdk.StopReasonCancelled || (abortRequested && isPromptCancellation(err))
+	if err != nil && !aborted {
 		if _, found := d.takeResult(0); !found {
 			d.setStreaming(false)
 			d.emit(harness.AgentEndedEvent{})
@@ -552,7 +578,6 @@ func (d *Driver) onStop(resp acpsdk.PromptResponse, err error) {
 		}
 		return
 	}
-	aborted := resp.StopReason == acpsdk.StopReasonCancelled
 	d.flushMessage()
 	d.observeUsage(resp.Usage)
 	d.setStreaming(false)
@@ -574,6 +599,19 @@ func (d *Driver) onStop(resp acpsdk.PromptResponse, err error) {
 		}
 	}
 	d.deliverResult(out)
+}
+
+func isPromptCancellation(err error) bool {
+	var rpc *acpsdk.RequestError
+	if !errors.As(err, &rpc) {
+		return false
+	}
+	if rpc.Code == -32800 { // Request cancelled.
+		return true
+	}
+	data, _ := rpc.Data.(map[string]any)
+	reason, _ := data["error"].(string)
+	return rpc.Code == -32603 && reason == context.Canceled.Error()
 }
 
 // observeUsage folds an optional per-turn usage report into the cumulative
