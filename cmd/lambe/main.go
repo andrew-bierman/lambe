@@ -38,7 +38,7 @@ usage:
   lambe status  [-config FILE] print the morning report
   lambe mcp     [-config FILE] serve lambe's MCP tools over stdio
   lambe logs    [-config FILE] [-issue ID] [-follow] [-json] show agent output
-  lambe tui     [-config FILE]                 interactive dashboard (split panes, scrollback)
+  lambe tui     [-config FILE | -demo]                 interactive dashboard (split panes, scrollback)
   lambe version print build information
 `
 

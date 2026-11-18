@@ -21,9 +21,10 @@ import (
 // LiveRun combines supervisor progress with the latest agent output.
 type LiveRun struct {
 	symphony.Progress
-	UpdatedAt time.Time
-	Tail      string
-	TailBytes int64
+	UpdatedAt    time.Time
+	Tail         string
+	TailBytes    int64
+	LastOutputAt time.Time
 }
 
 // LiveSnapshot is a derived view; checkpoints and the tracker remain authoritative.
@@ -32,6 +33,7 @@ type LiveSnapshot struct {
 	Identity  string
 	UpdatedAt time.Time
 	Runs      []LiveRun
+	History   []LiveRun `json:",omitempty"`
 }
 
 // LivePath returns the private projection path for one configured daemon.
@@ -73,9 +75,24 @@ type liveView struct {
 	logError func(error)
 }
 
+const maxLiveHistory = 100
+
 func newLiveView(path string, report func(error)) *liveView {
 	identity, _ := proc.ProcessIdentity(os.Getpid())
 	v := &liveView{stop: make(chan struct{}), done: make(chan struct{}), path: path, snapshot: LiveSnapshot{PID: os.Getpid(), Identity: identity, UpdatedAt: time.Now()}, logError: report}
+	previous, _, err := ReadLive(path)
+	if err == nil {
+		v.snapshot.History = previous.History
+		for _, run := range previous.Runs {
+			if run.Attempt == 0 && run.Phase == "" {
+				continue
+			}
+			if !strings.HasPrefix(run.Phase, "stopped:") {
+				run.Phase = "interrupted"
+			}
+			v.archive(run)
+		}
+	}
 	if err := v.save(); err != nil && report != nil {
 		report(err)
 	}
@@ -83,7 +100,15 @@ func newLiveView(path string, report func(error)) *liveView {
 }
 
 func (v *liveView) progress(p symphony.Progress) {
-	v.update(p.IssueID, func(r *LiveRun) { r.Progress = p })
+	v.update(p.IssueID, func(r *LiveRun) {
+		if r.Attempt > 0 && p.Attempt > r.Attempt {
+			v.archive(*r)
+			r.Tail = ""
+			r.TailBytes = 0
+			r.LastOutputAt = time.Time{}
+		}
+		r.Progress = p
+	})
 }
 
 func (v *liveView) event(id string, event harness.Event) {
@@ -107,6 +132,7 @@ func (v *liveView) event(id string, event harness.Event) {
 	}
 	v.update(id, func(r *LiveRun) {
 		if text != "" {
+			r.LastOutputAt = time.Now()
 			r.TailBytes += int64(len(text) + 1)
 			r.Tail += text + "\n"
 			if len(r.Tail) > maxRunTail {
@@ -133,6 +159,7 @@ func (v *liveView) update(id string, change func(*LiveRun)) {
 				if !strings.HasPrefix(old.Phase, "stopped:") {
 					continue
 				}
+				v.archive(old)
 				v.snapshot.Runs = slices.Delete(v.snapshot.Runs, i, i+1)
 				if reg := v.registry; reg != nil {
 					reg.mu.Lock()
@@ -177,6 +204,19 @@ func (v *liveView) update(id string, change func(*LiveRun)) {
 	}
 	v.snapshot.UpdatedAt = time.Now()
 	v.snapshot.Runs[index].UpdatedAt = v.snapshot.UpdatedAt
+}
+
+// archive retains the newest attempts by their last observed activity.
+func (v *liveView) archive(run LiveRun) {
+	history := v.snapshot.History
+	index, _ := slices.BinarySearchFunc(history, run, func(a, b LiveRun) int {
+		return b.UpdatedAt.Compare(a.UpdatedAt)
+	})
+	if index >= maxLiveHistory {
+		return
+	}
+	history = slices.Insert(history, index, run)
+	v.snapshot.History = history[:min(maxLiveHistory, len(history))]
 }
 
 func (v *liveView) save() error {

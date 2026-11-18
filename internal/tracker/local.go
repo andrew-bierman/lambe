@@ -45,6 +45,15 @@ func NewLocal(bin, dir, actor string) (*Local, error) {
 	return &Local{Beads: NewBeads(shell, actor), shell: shell, bin: bin, dir: dir}, nil
 }
 
+// CreateTask adds an open task for the supervisor to pick up on its next poll.
+func (l *Local) CreateTask(ctx context.Context, title string, labels []string) (Issue, error) {
+	result, err := l.shell.Create(ctx, CreateRequest{Title: title, Type: "task", Priority: 2, Labels: labels})
+	if err != nil {
+		return Issue{}, err
+	}
+	return decodeOneIssue(result.Data)
+}
+
 // Init creates the tracker's .beads/ storage if the directory has none.
 // It is a no-op when storage already exists.
 func (l *Local) Init(ctx context.Context) error {

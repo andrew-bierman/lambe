@@ -212,6 +212,9 @@ checkpoint are deliberately migrated.
 
 ## Watching agent work
 
+Run `lambe tui -demo` to explore the dashboard with sample active, retrying,
+passed, and failed runs. The demo runs in memory and needs no daemon or tracker.
+
 Keep `lambe run` running, then open another terminal:
 
 ```sh
@@ -222,9 +225,17 @@ lambe logs -json                # shared read-only snapshot for scripts and othe
 ```
 
 Pass the same `-config FILE` to these commands when using a custom configuration.
+In the command palette, **Queue an agent task** creates a Beads task in the
+primary tracker with the workflow's configured labels. Enter a task title and
+press Enter to queue it for the running supervisor's next poll. The demo adds
+the task to its in-memory queue. Pick **Show activity chart** for a breakdown
+of current runs and recent attempt outcomes.
+
 The TUI exits with Ctrl-C or `q`. Keybindings:
 
 - `j`/`k` or `↑`/`↓` — move through the run list
+- `:` or `Ctrl-P` — search commands, inspect a run, or open a shell in its workspace or the Beads tracker
+- `h` — switch between the run queue and recent attempt history
 - `Tab` — switch focus between the run list and the detail pane
 - `/` — filter runs. While filtering, `Esc` clears the filter.
 - `u`/`d` or `Ctrl-U`/`Ctrl-D` — half-page up/down in the detail pane
