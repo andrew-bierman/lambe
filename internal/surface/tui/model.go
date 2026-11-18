@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -44,13 +45,13 @@ const (
 var (
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#FAFAFA")).
-			Background(lipgloss.Color("#7D56F4")).
+			Foreground(lipgloss.AdaptiveColor{Light: "#241447", Dark: "#F4EBFF"}).
+			Background(lipgloss.AdaptiveColor{Light: "#EBE1FF", Dark: "#29203A"}).
 			Padding(0, 1)
 
 	footerStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#A0A0A0")).
-			Background(lipgloss.Color("#1E1E2E")).
+			Foreground(lipgloss.AdaptiveColor{Light: "#494256", Dark: "#C7BFD1"}).
+			Background(lipgloss.AdaptiveColor{Light: "#F3EFF7", Dark: "#211B2A"}).
 			Padding(0, 1)
 
 	separatorStyle = lipgloss.NewStyle().
@@ -60,7 +61,7 @@ var (
 			Foreground(lipgloss.Color("#A0A0A0"))
 
 	valueStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FAFAFA"))
+			Foreground(lipgloss.AdaptiveColor{Light: "#21182B", Dark: "#FAFAFA"})
 
 	dimStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#808080"))
@@ -137,6 +138,8 @@ type keyMap struct {
 	Back     key.Binding
 	Help     key.Binding
 	Filter   key.Binding
+	History  key.Binding
+	Commands key.Binding
 	ScrollUp key.Binding
 	ScrollDn key.Binding
 	PageUp   key.Binding
@@ -164,6 +167,8 @@ func defaultKeyMap(focus *focusArea) keyMap {
 			key.WithKeys("?"),
 			key.WithHelp("?", "help"),
 		),
+		Commands: key.NewBinding(key.WithKeys(":", "ctrl+p"), key.WithHelp(":", "commands")),
+		History:  key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "history")),
 		Filter: key.NewBinding(
 			key.WithKeys("/"),
 			key.WithHelp("/", "filter"),
@@ -190,7 +195,7 @@ func defaultKeyMap(focus *focusArea) keyMap {
 		),
 		GoBottom: key.NewBinding(
 			key.WithKeys("end", "G"),
-			key.WithHelp("G", "bottom"),
+			key.WithHelp("G", "latest"),
 		),
 		ListUp: key.NewBinding(
 			key.WithKeys("up", "k"),
@@ -206,15 +211,15 @@ func defaultKeyMap(focus *focusArea) keyMap {
 // ShortHelp implements help.KeyMap. Hints depend on which pane has focus.
 func (k keyMap) ShortHelp() []key.Binding {
 	if k.focus != nil && *k.focus == focusDetail {
-		return []key.Binding{k.ScrollUp, k.ScrollDn, k.PageUp, k.PageDown, k.Focus, k.Help, k.Quit}
+		return []key.Binding{k.Back, k.Commands, k.History, k.ScrollUp, k.GoBottom, k.Focus, k.Help, k.Quit}
 	}
-	return []key.Binding{k.ListUp, k.ListDown, k.PageUp, k.PageDown, k.Focus, k.Filter, k.Help, k.Quit}
+	return []key.Binding{k.OpenRun, k.Commands, k.History, k.Filter, k.ListDown, k.Help, k.Quit}
 }
 
 // FullHelp implements help.KeyMap.
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.ListUp, k.ListDown, k.Focus, k.Filter},
+		{k.ListUp, k.ListDown, k.Focus, k.Filter, k.History},
 		{k.ScrollUp, k.ScrollDn, k.PageUp, k.PageDown},
 		{k.GoTop, k.GoBottom, k.Help, k.Quit},
 	}
@@ -222,23 +227,34 @@ func (k keyMap) FullHelp() [][]key.Binding {
 
 // Model is the Bubble Tea dashboard model.
 type Model struct {
-	path string
-	keys keyMap
+	path          string
+	keys          keyMap
+	trackerPath   string
+	palette       *commandPalette
+	commandStatus string
+	commandErr    error
+	queueTask     func(string) (string, error)
+	queuePending  bool
+	showActivity  bool
 
 	list    list.Model
 	detail  viewport.Model
 	help    help.Model
 	spinner spinner.Model
 
-	snapshot   daemon.LiveSnapshot
-	alive      bool
-	err        error
-	width      int
-	height     int
-	focus      focusArea
-	selectedID string
-	lastRead   time.Time
-	loading    bool
+	snapshot        daemon.LiveSnapshot
+	alive           bool
+	err             error
+	width           int
+	height          int
+	focus           focusArea
+	selectedID      string
+	selectedAt      time.Time
+	selectedAttempt int
+	showHistory     bool
+	loading         bool
+	paneHeaders     bool
+	panelInset      int
 }
 
 // snapshotMsg carries a freshly read live snapshot.
@@ -259,11 +275,16 @@ func New(path string) *Model {
 	}
 	m.keys = defaultKeyMap(&m.focus)
 	delegate := list.NewDefaultDelegate()
+	accent := lipgloss.AdaptiveColor{Light: "#6941A5", Dark: "#C5A7FF"}
+	selection := lipgloss.AdaptiveColor{Light: "#EBE1FF", Dark: "#29203A"}
+	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
+		Bold(true).Foreground(accent).Background(selection).BorderForeground(accent)
+	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.
+		Foreground(accent).Background(selection).BorderForeground(accent)
 	m.list = list.New(nil, delegate, 0, 0)
-	m.list.Title = "Runs ▸"
 	m.list.SetShowHelp(false)
-	m.list.SetShowTitle(true)
-	m.list.SetShowStatusBar(true)
+	m.list.SetShowTitle(false)
+	m.list.SetShowStatusBar(false)
 	m.list.DisableQuitKeybindings()
 
 	m.detail = viewport.New(0, 0)
@@ -278,6 +299,9 @@ func New(path string) *Model {
 
 // Init implements tea.Model.
 func (m *Model) Init() tea.Cmd {
+	if m.path == "" {
+		return nil
+	}
 	return tea.Batch(readSnapshot(m.path), tick(), m.spinner.Tick)
 }
 
@@ -299,7 +323,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case snapshotMsg:
 		m.loading = false
-		m.lastRead = time.Now()
 		if msg.err != nil {
 			// Keep the last good snapshot on transient errors (for example a
 			// daemon restart rewriting the file) instead of flashing empty.
@@ -309,10 +332,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.err = nil
+		runs, history := m.snapshot.Runs, m.snapshot.History
+		runsChanged := !slices.Equal(runs, msg.snapshot.Runs)
+		historyChanged := !slices.Equal(history, msg.snapshot.History)
+		if runsChanged {
+			runs = slices.Clone(msg.snapshot.Runs)
+		}
+		if historyChanged {
+			history = slices.Clone(msg.snapshot.History)
+		}
 		m.snapshot = msg.snapshot
+		m.snapshot.Runs, m.snapshot.History = runs, history
+		aliveChanged := m.alive != msg.alive
 		m.alive = msg.alive
-		m.setRuns(msg.snapshot.Runs)
-		m.refreshDetail(m.detail.AtBottom())
+		if runsChanged || (m.showHistory && (historyChanged || aliveChanged)) {
+			m.setRuns(m.visibleRuns())
+			m.refreshDetail(m.detail.AtBottom())
+		}
 		return m, nil
 
 	case list.FilterMatchesMsg:
@@ -329,9 +365,45 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case tea.KeyMsg:
+		if m.showActivity {
+			switch msg.Type {
+			case tea.KeyCtrlC:
+				return m, tea.Quit
+			case tea.KeyEsc, tea.KeyEnter:
+				m.showActivity = false
+			}
+			if key.Matches(msg, m.keys.Commands) {
+				m.showActivity = false
+				return m, m.openPalette()
+			}
+			return m, nil
+		}
+		if m.palette != nil {
+			return m, m.updatePalette(msg)
+		}
 		return m.handleKey(msg)
+	case commandResult:
+		m.commandErr = msg.err
+		m.commandStatus = msg.status
+		if msg.queued {
+			m.queuePending = false
+		}
+		return m, nil
+	case tea.MouseMsg:
+		if m.palette != nil || m.showActivity {
+			return m, nil
+		}
+		if m.list.FilterState() != list.Filtering && (msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown) {
+			m.scrollMouse(msg)
+			return m, nil
+		}
 	}
 
+	if m.palette != nil {
+		var cmd tea.Cmd
+		m.palette.input, cmd = m.palette.input.Update(msg)
+		return m, cmd
+	}
 	if m.list.FilterState() == list.Filtering {
 		return m, m.updateFilter(msg)
 	}
@@ -359,11 +431,16 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setFocus(focusList)
 		}
 		return m, nil
-	case m.width < splitWidth && m.focus == focusList && m.selectedID != "" && key.Matches(msg, m.keys.OpenRun):
+	case m.focus == focusList && m.selectedID != "" && key.Matches(msg, m.keys.OpenRun):
 		m.setFocus(focusDetail)
 		return m, nil
-	case m.width < splitWidth && m.focus == focusDetail && key.Matches(msg, m.keys.Back):
+	case m.focus == focusDetail && key.Matches(msg, m.keys.Back):
 		m.setFocus(focusList)
+		return m, nil
+	case key.Matches(msg, m.keys.Commands):
+		return m, m.openPalette()
+	case key.Matches(msg, m.keys.History):
+		m.setHistory(!m.showHistory)
 		return m, nil
 	case key.Matches(msg, m.keys.Help):
 		follow := m.detail.AtBottom()
@@ -389,9 +466,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if cmd, handled := m.scrollDetail(msg); handled {
 			return m, cmd
 		}
-		if m.width < splitWidth {
-			return m, m.updateFocused(msg)
-		}
+		return m, m.updateFocused(msg)
 	}
 
 	var cmd tea.Cmd
@@ -416,10 +491,6 @@ func (m *Model) updateFilter(msg tea.Msg) tea.Cmd {
 
 func (m *Model) setFocus(focus focusArea) {
 	m.focus = focus
-	m.list.Title = "Runs"
-	if focus == focusList {
-		m.list.Title = "Runs ▸"
-	}
 }
 
 // scrollDetail applies viewport scrolling keys when the detail pane has focus.
@@ -447,6 +518,37 @@ func (m *Model) scrollDetail(msg tea.KeyMsg) (tea.Cmd, bool) {
 	return nil, false
 }
 
+func (m *Model) scrollMouse(msg tea.MouseMsg) {
+	firstRow := 1 + m.panelInset
+	if m.paneHeaders {
+		firstRow++
+	}
+	if msg.Y < firstRow || msg.Y >= firstRow+m.list.Height() {
+		return
+	}
+	pane := m.focus
+	if m.width >= splitWidth {
+		switch {
+		case msg.X < m.list.Width()+4*m.panelInset:
+			pane = focusList
+		case msg.X >= m.list.Width()+3+4*m.panelInset:
+			pane = focusDetail
+		default:
+			return
+		}
+	}
+	if pane == focusDetail {
+		m.detail, _ = m.detail.Update(msg)
+		return
+	}
+	if msg.Button == tea.MouseButtonWheelUp {
+		m.list.CursorUp()
+	} else {
+		m.list.CursorDown()
+	}
+	m.syncSelection()
+}
+
 func (m *Model) updateFocused(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	if m.focus == focusDetail {
@@ -469,11 +571,57 @@ func (m *Model) layout() {
 		detailWidth = m.width - listWidth - 3
 	}
 
-	m.list.SetShowTitle(bodyHeight >= 7)
-	m.list.SetShowStatusBar(bodyHeight >= 7)
+	m.paneHeaders = bodyHeight > 1
+	if m.paneHeaders {
+		bodyHeight--
+	}
+	m.panelInset = 0
+	if m.width >= 28 && bodyHeight >= 5 {
+		m.panelInset = 1
+		bodyHeight -= 2
+		listWidth -= 4
+		detailWidth -= 4
+	}
 	m.list.SetSize(listWidth, bodyHeight)
 	m.detail.Width = detailWidth
 	m.detail.Height = bodyHeight
+}
+
+func (m *Model) setHistory(show bool) {
+	if m.showHistory == show {
+		return
+	}
+	m.showHistory = show
+	if show {
+		m.keys.History.SetHelp("h", "queue")
+	} else {
+		m.keys.History.SetHelp("h", "history")
+	}
+	m.setFocus(focusList)
+	m.list.ResetFilter()
+	m.list.ResetSelected()
+	m.selectedID = ""
+	m.setRuns(m.visibleRuns())
+	m.refreshDetail(!show)
+	if show {
+		m.detail.GotoTop()
+	}
+}
+
+func (m *Model) visibleRuns() []daemon.LiveRun {
+	if !m.showHistory {
+		return m.snapshot.Runs
+	}
+	history := slices.Clone(m.snapshot.History)
+	for _, run := range m.snapshot.Runs {
+		if !m.alive || strings.HasPrefix(run.Phase, "stopped:") {
+			history = append(history, run)
+		}
+	}
+	slices.SortStableFunc(history, func(a, b daemon.LiveRun) int {
+		return b.UpdatedAt.Compare(a.UpdatedAt)
+	})
+	return history
 }
 
 // setRuns replaces the list contents while preserving the selected issue.
@@ -485,7 +633,8 @@ func (m *Model) setRuns(runs []daemon.LiveRun) {
 	m.replaceListItems(items)
 	if m.selectedID != "" {
 		for i, item := range m.list.VisibleItems() {
-			if runItem, ok := item.(runItem); ok && runItem.run.IssueID == m.selectedID {
+			if runItem, ok := item.(runItem); ok && runItem.run.IssueID == m.selectedID &&
+				(!m.showHistory || (runItem.run.Attempt == m.selectedAttempt && runItem.run.UpdatedAt.Equal(m.selectedAt))) {
 				m.list.Select(i)
 				return
 			}
@@ -507,14 +656,19 @@ func (m *Model) replaceListItems(items []list.Item) {
 // syncSelection records the selected issue and refreshes the detail pane when
 // the selection moved.
 func (m *Model) syncSelection() {
-	previous := m.selectedID
+	previousID, previousAt, previousAttempt := m.selectedID, m.selectedAt, m.selectedAttempt
 	if item, ok := m.list.SelectedItem().(runItem); ok {
 		m.selectedID = item.run.IssueID
+		m.selectedAt = item.run.UpdatedAt
+		m.selectedAttempt = item.run.Attempt
 	} else {
 		m.selectedID = ""
 	}
-	if m.selectedID != previous {
-		m.refreshDetail(m.detail.AtBottom())
+	if m.selectedID != previousID || (m.showHistory && (!m.selectedAt.Equal(previousAt) || m.selectedAttempt != previousAttempt)) {
+		m.refreshDetail(!m.showHistory && m.detail.AtBottom())
+		if m.showHistory {
+			m.detail.GotoTop()
+		}
 	}
 }
 
@@ -529,7 +683,7 @@ func (m *Model) selectedRun() (daemon.LiveRun, bool) {
 func (m *Model) refreshDetail(follow bool) {
 	run, ok := m.selectedRun()
 	if !ok {
-		m.detail.SetContent(dimStyle.Render("No active run. Waiting for the daemon to claim work."))
+		m.detail.SetContent(dimStyle.Render("No active run. Output appears here when a run starts."))
 		return
 	}
 	m.detail.SetContent(detailContent(run, m.detail.Width))
@@ -544,6 +698,12 @@ func (m *Model) refreshDetail(follow bool) {
 func (m *Model) View() string {
 	if m.width == 0 || m.height == 0 {
 		return "Initializing..."
+	}
+	if m.showActivity {
+		return m.renderActivity()
+	}
+	if m.palette != nil {
+		return m.renderPalette()
 	}
 	if m.loading && m.snapshot.UpdatedAt.IsZero() {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
@@ -568,43 +728,118 @@ func (m *Model) renderHeader() string {
 		state = "running"
 		stateStyle = runningStyle
 	}
-	identity := m.snapshot.Identity
-	if identity == "" {
-		identity = "lambe"
-	}
 	updated := "never"
 	if !m.snapshot.UpdatedAt.IsZero() {
 		updated = m.snapshot.UpdatedAt.Format("15:04:05")
 	}
-	runs := len(m.snapshot.Runs)
-	text := fmt.Sprintf(" lambe  ·  %s  ·  %s  ·  %d runs  ·  updated %s ",
-		stateStyle.Render(state), identity, runs, updated)
-	if m.err != nil {
+	active, waiting := 0, 0
+	if m.alive {
+		for _, run := range m.snapshot.Runs {
+			switch run.Phase {
+			case "running", "claiming", "preparing", "gating":
+				active++
+			case "queued", "retry", "deferred", "interrupted":
+				waiting++
+			}
+		}
+	}
+	text := fmt.Sprintf("lambe  %s   %d active / %d waiting", stateStyle.Render(state), active, waiting)
+	if m.commandErr != nil {
+		text = "lambe  ·  " + errorStyle.Render(strings.Join(strings.Fields(ansi.Strip(m.commandErr.Error())), " "))
+	} else if m.commandStatus != "" {
+		text = "lambe  ·  " + m.commandStatus
+	} else if m.err != nil {
 		text += " · " + errorStyle.Render("read error: "+truncate(m.err.Error(), 60))
+	}
+	if m.path == "" {
+		text = "Demo" + strings.TrimPrefix(text, "lambe")
+	} else if m.width >= splitWidth {
+		text += "  ·  Updated " + updated
 	}
 	return headerStyle.Width(m.width).MaxWidth(m.width).Render(ansi.Truncate(text, max(1, m.width-2), "…"))
 }
 
 func (m *Model) renderBody() string {
 	if m.width < splitWidth && m.focus == focusDetail {
-		return m.detail.View()
+		return m.renderInspector()
+	}
+	queueContent := m.list.View()
+	if len(m.list.Items()) == 0 {
+		empty := "No runs yet."
+		if m.showHistory {
+			empty = "No past attempts yet."
+		}
+		queueContent = labelStyle.Padding(1, 1).Render(empty)
 	}
 	listView := lipgloss.NewStyle().
 		Width(m.list.Width()).
 		MaxWidth(m.list.Width()).
+		Height(m.list.Height()).
 		MaxHeight(m.list.Height()).
-		Render(m.list.View())
+		Render(queueContent)
+	if m.paneHeaders {
+		name := "Run queue"
+		if m.showHistory {
+			name = "History"
+		}
+		queue := fmt.Sprintf("%s  ·  %d", name, len(m.list.VisibleItems()))
+		listView = lipgloss.JoinVertical(lipgloss.Left, m.paneHeader(queue, m.list.Width(), focusList), listView)
+	}
+	listView = m.framePanel(listView, focusList)
 	if m.width < splitWidth {
 		return listView
 	}
-	separator := separatorStyle.Render(strings.Repeat("│\n", m.detail.Height-1) + "│")
+	separator := "   "
+	if m.panelInset == 0 {
+		separator = lipgloss.JoinHorizontal(lipgloss.Top, " ", separatorStyle.Render(strings.Repeat("│\n", lipgloss.Height(listView)-1)+"│"), " ")
+	}
 	return lipgloss.JoinHorizontal(lipgloss.Top,
 		listView,
-		" ",
 		separator,
-		" ",
-		m.detail.View(),
+		m.renderInspector(),
 	)
+}
+
+func (m *Model) renderInspector() string {
+	if !m.paneHeaders {
+		return m.detail.View()
+	}
+	label := "Inspector"
+	if run, ok := m.selectedRun(); ok {
+		label = run.IssueID + "  ·  " + phaseLabel(run.Phase)
+		if !m.showHistory {
+			now := time.Now()
+			switch {
+			case !run.WakeAt.IsZero():
+				label += "  ·  retry in " + max(0, run.WakeAt.Sub(now)).Round(time.Second).String()
+			case !run.LastOutputAt.IsZero() && run.Phase == "running":
+				label += "  ·  output " + max(0, now.Sub(run.LastOutputAt)).Round(time.Second).String() + " ago"
+			}
+		}
+	}
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		m.paneHeader(label, m.detail.Width, focusDetail), m.detail.View())
+	return m.framePanel(content, focusDetail)
+}
+
+func (m *Model) framePanel(content string, pane focusArea) string {
+	if m.panelInset == 0 {
+		return content
+	}
+	color := lipgloss.AdaptiveColor{Light: "#80748D", Dark: "#574A68"}
+	if m.focus == pane {
+		color = lipgloss.AdaptiveColor{Light: "#6941A5", Dark: "#C5A7FF"}
+	}
+	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(color).Padding(0, 1).Render(content)
+}
+
+func (m *Model) paneHeader(label string, width int, pane focusArea) string {
+	style := footerStyle.Bold(true)
+	if m.focus == pane {
+		style = headerStyle
+	}
+	return style.Width(width).MaxWidth(width).
+		Render(ansi.Truncate(label, max(1, width-2), "…"))
 }
 
 func (m *Model) renderFooter() string {
@@ -617,7 +852,11 @@ func (m *Model) renderFooter() string {
 		compactHelp := m.help
 		compactHelp.Width = max(1, m.width-2)
 		compactHelp.ShortSeparator = " "
-		lines := []string{compactHelp.ShortHelpView([]key.Binding{switchPane, m.keys.Filter, m.keys.Quit, m.keys.Help})}
+		shortcuts := []key.Binding{switchPane, m.keys.Commands, m.keys.History, m.keys.Filter, m.keys.Help, m.keys.Quit}
+		if m.focus == focusDetail {
+			shortcuts = []key.Binding{switchPane, m.keys.GoBottom, m.keys.Commands, m.keys.History, m.keys.Help, m.keys.Quit}
+		}
+		lines := []string{compactHelp.ShortHelpView(shortcuts)}
 		if m.help.ShowAll {
 			for _, group := range m.keys.FullHelp() {
 				lines = append(lines, compactHelp.ShortHelpView(group))
@@ -630,11 +869,20 @@ func (m *Model) renderFooter() string {
 	}
 
 	left := m.help.View(m.keys)
-	focus := "list"
-	if m.focus == focusDetail {
-		focus = "detail"
+	status := "Run queue"
+	if m.showHistory {
+		status = "History"
 	}
-	right := dimStyle.Render(fmt.Sprintf("focus %s · %s", focus, m.lastRead.Format("15:04:05")))
+	if m.focus == focusDetail {
+		status = "Following output"
+		if m.showHistory {
+			status = "Archived output"
+		}
+		if !m.detail.AtBottom() && !m.showHistory {
+			status = fmt.Sprintf("Scrollback %d%%", int(m.detail.ScrollPercent()*100))
+		}
+	}
+	right := valueStyle.Render(status)
 	contentWidth := m.width - 2
 	leftWidth := lipgloss.Width(left)
 	rightWidth := lipgloss.Width(right)
@@ -664,7 +912,7 @@ func detailContent(run daemon.LiveRun, width int) string {
 	if title == "" {
 		title = "(untitled)"
 	}
-	sections = append(sections, lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FAFAFA")).
+	sections = append(sections, lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#21182B", Dark: "#FAFAFA"}).
 		Render(ansi.Truncate(title, width, "…")))
 
 	row := func(k, v string) string {
@@ -762,11 +1010,18 @@ func tick() tea.Cmd {
 }
 
 // Run starts the dashboard and blocks until the user quits.
-func Run(ctx context.Context, path string) error {
+func Run(ctx context.Context, path, trackerPath string, queue func(string) (string, error)) error {
+	model := New(path)
+	model.trackerPath = trackerPath
+	model.queueTask = queue
+	return run(ctx, model)
+}
+
+func run(ctx context.Context, model *Model) error {
 	if !term.IsTerminal(os.Stdout.Fd()) {
 		return errors.New("lambe tui needs an interactive terminal; use `lambe logs -follow` for pipes")
 	}
-	p := tea.NewProgram(New(path), tea.WithContext(ctx), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(model, tea.WithContext(ctx), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil

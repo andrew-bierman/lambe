@@ -17,6 +17,7 @@ import (
 	"github.com/andrew-bierman/lambe/internal/config"
 	"github.com/andrew-bierman/lambe/internal/daemon"
 	"github.com/andrew-bierman/lambe/internal/surface/tui"
+	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
 func terminalText(text string) string {
@@ -29,8 +30,13 @@ func terminalText(text string) string {
 }
 
 func runLive(args []string, useTUI bool, _ io.Reader, out io.Writer) error {
-	fs := flag.NewFlagSet("lambe logs", flag.ContinueOnError)
+	command := "lambe logs"
+	if useTUI {
+		command = "lambe tui"
+	}
+	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	configFile := fs.String("config", "", "config file")
+	demo := fs.Bool("demo", false, "open the dashboard with sample runs")
 	issue := fs.String("issue", "", "show one issue")
 	follow := fs.Bool("follow", false, "follow live output")
 	asJSON := fs.Bool("json", false, "print the shared live snapshot as JSON")
@@ -42,6 +48,14 @@ func runLive(args []string, useTUI bool, _ io.Reader, out io.Writer) error {
 	}
 	if useTUI && (*issue != "" || *follow || *asJSON) {
 		return fmt.Errorf("tui does not support -issue, -follow, or -json")
+	}
+	if *demo {
+		if !useTUI || *configFile != "" {
+			return errors.New("-demo requires lambe tui without -config")
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		return tui.RunDemo(ctx)
 	}
 	configPath, err := cliConfigPath(*configFile)
 	if err != nil {
@@ -59,7 +73,22 @@ func runLive(args []string, useTUI bool, _ io.Reader, out io.Writer) error {
 	if useTUI {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
-		return tui.Run(ctx, path)
+		trackerPath := ""
+		if len(cfg.Trackers) > 0 {
+			trackerPath = cfg.Trackers[0].Path
+		}
+		var queue func(string) (string, error)
+		if trackerPath != "" {
+			queue = func(title string) (string, error) {
+				local, err := tracker.NewLocal("", trackerPath, "lambe@"+daemon.DefaultMachine())
+				if err != nil {
+					return "", err
+				}
+				issue, err := local.CreateTask(ctx, title, cfg.Labels)
+				return issue.ID, err
+			}
+		}
+		return tui.Run(ctx, path, trackerPath, queue)
 	}
 
 	return runLogsFollow(path, *issue, *follow, *asJSON, out)

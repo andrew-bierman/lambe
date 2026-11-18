@@ -472,3 +472,120 @@ func TestEmptySnapshotShowsPlaceholder(t *testing.T) {
 		t.Fatalf("header should show stopped state:\n%s", view)
 	}
 }
+
+func TestDashboardShowsActivityAndResumeShortcut(t *testing.T) {
+	m := withSnapshot(t, newSized(t))
+	for _, want := range []string{"1 active", "1 waiting", "enter details"} {
+		if view := m.View(); !strings.Contains(view, want) {
+			t.Fatalf("dashboard missing %q:\n%s", want, view)
+		}
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	for _, want := range []string{"Following output", "G latest", "esc runs"} {
+		if view := m.View(); !strings.Contains(view, want) {
+			t.Fatalf("detail missing %q:\n%s", want, view)
+		}
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.focus != focusList || m.selectedID != "ac-1" {
+		t.Fatalf("back lost run selection: focus %v, run %q", m.focus, m.selectedID)
+	}
+}
+
+func TestInspectorKeepsRunVisibleDuringScrollback(t *testing.T) {
+	m := newSized(t)
+	m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
+	snapshot := testSnapshot()
+	snapshot.Runs[0].Tail = strings.Repeat("agent output\n", 40)
+	m.Update(snapshotMsg{snapshot: snapshot, alive: true})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) != 12 || !strings.Contains(lines[1], "╭") || !strings.Contains(lines[2], "ac-1") || !strings.Contains(lines[3], "agent output") {
+		t.Fatalf("expected pinned run identity above transcript:\n%s", view)
+	}
+}
+
+func TestHistorySelectionSurvivesNewerAttempts(t *testing.T) {
+	m := newSized(t)
+	now := time.Now()
+	snapshot := daemon.LiveSnapshot{
+		UpdatedAt: now,
+		History: []daemon.LiveRun{
+			{Progress: symphony.Progress{IssueID: "ac-1", Attempt: 2}, UpdatedAt: now, Tail: "second output"},
+			{Progress: symphony.Progress{IssueID: "ac-1", Attempt: 1}, UpdatedAt: now.Add(-time.Minute), Tail: "first output"},
+		},
+	}
+	m.Update(snapshotMsg{snapshot: snapshot, alive: true})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	snapshot.History = append([]daemon.LiveRun{
+		{Progress: symphony.Progress{IssueID: "ac-1", Attempt: 3}, UpdatedAt: now.Add(time.Minute)},
+	}, snapshot.History...)
+	m.Update(snapshotMsg{snapshot: snapshot, alive: true})
+	if run, ok := m.selectedRun(); !ok || run.Attempt != 1 || !strings.Contains(m.View(), "first output") {
+		t.Fatalf("history moved away from the first attempt: %+v\n%s", run, m.View())
+	}
+}
+
+func TestCommandPaletteExecutesFilteredCommandAfterResize(t *testing.T) {
+	m := withSnapshot(t, newSized(t))
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("history")})
+	m.Update(tea.WindowSizeMsg{Width: 36, Height: 12})
+	view := m.View()
+	if !strings.Contains(view, "Show attempt history") || strings.Contains(view, "Show run queue") {
+		t.Fatalf("unexpected palette matches:\n%s", view)
+	}
+	if w, h := lipgloss.Size(view); w > 36 || h > 12 {
+		t.Fatalf("palette exceeds terminal: %dx%d", w, h)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.palette != nil || !m.showHistory {
+		t.Fatal("Enter did not open history and close the palette")
+	}
+}
+
+func TestQueueCommandSubmitsOnlyAfterConfirmation(t *testing.T) {
+	m := withSnapshot(t, newSized(t))
+	var submitted string
+	m.queueTask = func(title string) (string, error) {
+		submitted = title
+		return "ac-42", nil
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("agent task")})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("  Confirmed task  ")})
+	if submitted != "" {
+		t.Fatal("typing submitted a task")
+	}
+	_, submit := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if submit == nil {
+		t.Fatal("confirmation did not return a submit command")
+	}
+	m.Update(submit())
+	if submitted != "Confirmed task" || !strings.Contains(m.View(), "Queued ac-42") {
+		t.Fatalf("missing task confirmation: %q\n%s", submitted, m.View())
+	}
+}
+
+func TestActivityLongestBarStaysOnItsLabelRow(t *testing.T) {
+	m := newSized(t)
+	m.Update(tea.WindowSizeMsg{Width: 40, Height: 15})
+	m.Update(snapshotMsg{snapshot: demoSnapshot(time.Now()), alive: true})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("activity")})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	view := m.View()
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "Active") && strings.Contains(line, "━") {
+			return
+		}
+	}
+	t.Fatalf("activity chart wrapped the active bar:\n%s", view)
+}

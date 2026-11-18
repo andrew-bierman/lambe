@@ -94,3 +94,27 @@ func TestLiveDriverEventsNeverWriteTheSnapshot(t *testing.T) {
 		t.Fatalf("writer lost final progress: %+v %v", after, err)
 	}
 }
+
+func TestLiveHistoryKeepsAttemptsAcrossRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "live.json")
+	view := newLiveView(path, nil)
+	view.progress(symphony.Progress{IssueID: "run", Phase: "retry", Attempt: 1})
+	view.event("run", harness.MessageCompletedEvent{Role: "assistant", Text: "first attempt"})
+	view.progress(symphony.Progress{IssueID: "run", Phase: "running", Attempt: 2})
+	view.event("run", harness.MessageCompletedEvent{Role: "assistant", Text: "second attempt"})
+	view.progress(symphony.Progress{IssueID: "run", Phase: "stopped: gate green", Attempt: 2})
+	if err := view.save(); err != nil {
+		t.Fatal(err)
+	}
+
+	newLiveView(path, nil)
+	snapshot, alive, err := ReadLive(path)
+	if err != nil || !alive || len(snapshot.Runs) != 0 || len(snapshot.History) != 2 {
+		t.Fatalf("expected two historical attempts and no active runs: %+v, alive=%t, err=%v", snapshot, alive, err)
+	}
+	for i, want := range []string{"second attempt\n", "first attempt\n"} {
+		if attempt := snapshot.History[i]; attempt.Attempt != 2-i || attempt.Tail != want {
+			t.Fatalf("unexpected historical attempt: %+v", attempt)
+		}
+	}
+}
