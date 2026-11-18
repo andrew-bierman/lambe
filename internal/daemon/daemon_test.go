@@ -32,7 +32,7 @@ func TestExecCommandBoundsWaitForInheritedStdout(t *testing.T) {
 	if !errors.Is(err, exec.ErrWaitDelay) {
 		t.Fatalf("execCommand = %q, %v; want inherited stdout wait delay", out, err)
 	}
-	data, err := os.ReadFile(pidFile)
+	data, err := os.ReadFile(pidFile) // #nosec G304 -- PID file is inside the test temporary directory.
 	if err != nil {
 		t.Fatal(err)
 	}

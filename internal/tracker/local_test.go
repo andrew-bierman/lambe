@@ -21,7 +21,10 @@ case "$1" in
   status) printf started > status-started; exec sleep 10 ;;
   init) printf unexpected > init-started ;;
 esac
-`), 0o700); err != nil {
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(bin, 0o700); err != nil { // #nosec G302 -- private executable test fixture.
 		t.Fatal(err)
 	}
 	l, err := NewLocal(bin, dir, "test")
