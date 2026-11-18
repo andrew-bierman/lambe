@@ -472,3 +472,24 @@ func TestEmptySnapshotShowsPlaceholder(t *testing.T) {
 		t.Fatalf("header should show stopped state:\n%s", view)
 	}
 }
+
+func TestDashboardShowsActivityAndResumeShortcut(t *testing.T) {
+	m := withSnapshot(t, newSized(t))
+	for _, want := range []string{"1 active", "1 waiting", "enter details"} {
+		if view := m.View(); !strings.Contains(view, want) {
+			t.Fatalf("dashboard missing %q:\n%s", want, view)
+		}
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	for _, want := range []string{"Following output", "G latest", "esc runs"} {
+		if view := m.View(); !strings.Contains(view, want) {
+			t.Fatalf("detail missing %q:\n%s", want, view)
+		}
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.focus != focusList || m.selectedID != "ac-1" {
+		t.Fatalf("back lost run selection: focus %v, run %q", m.focus, m.selectedID)
+	}
+}
