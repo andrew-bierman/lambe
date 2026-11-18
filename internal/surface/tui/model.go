@@ -237,10 +237,11 @@ type Model struct {
 	queuePending  bool
 	showActivity  bool
 
-	list    list.Model
-	detail  viewport.Model
-	help    help.Model
-	spinner spinner.Model
+	list     list.Model
+	delegate list.DefaultDelegate
+	detail   viewport.Model
+	help     help.Model
+	spinner  spinner.Model
 
 	snapshot        daemon.LiveSnapshot
 	alive           bool
@@ -281,6 +282,7 @@ func New(path string) *Model {
 		Bold(true).Foreground(accent).Background(selection).BorderForeground(accent)
 	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.
 		Foreground(accent).Background(selection).BorderForeground(accent)
+	m.delegate = delegate
 	m.list = list.New(nil, delegate, 0, 0)
 	m.list.SetShowHelp(false)
 	m.list.SetShowTitle(false)
@@ -582,6 +584,12 @@ func (m *Model) layout() {
 		listWidth -= 4
 		detailWidth -= 4
 	}
+	spacing := 1
+	if m.width < splitWidth {
+		spacing = 0
+	}
+	m.delegate.SetSpacing(spacing)
+	m.list.SetDelegate(m.delegate)
 	m.list.SetSize(listWidth, bodyHeight)
 	m.detail.Width = detailWidth
 	m.detail.Height = bodyHeight
@@ -744,6 +752,12 @@ func (m *Model) renderHeader() string {
 		}
 	}
 	text := fmt.Sprintf("lambe  %s   %d active / %d waiting", stateStyle.Render(state), active, waiting)
+	if m.width < 44 {
+		text = "lambe  ·  " + stateStyle.Render(state)
+		if m.alive {
+			text = fmt.Sprintf("lambe %d active · %d waiting", active, waiting)
+		}
+	}
 	if m.commandErr != nil {
 		text = "lambe  ·  " + errorStyle.Render(strings.Join(strings.Fields(ansi.Strip(m.commandErr.Error())), " "))
 	} else if m.commandStatus != "" {
@@ -809,11 +823,18 @@ func (m *Model) renderInspector() string {
 		label = run.IssueID + "  ·  " + phaseLabel(run.Phase)
 		if !m.showHistory {
 			now := time.Now()
+			timing := ""
 			switch {
 			case !run.WakeAt.IsZero():
-				label += "  ·  retry in " + max(0, run.WakeAt.Sub(now)).Round(time.Second).String()
+				timing = "retry in " + max(0, run.WakeAt.Sub(now)).Round(time.Second).String()
 			case !run.LastOutputAt.IsZero() && run.Phase == "running":
-				label += "  ·  output " + max(0, now.Sub(run.LastOutputAt)).Round(time.Second).String() + " ago"
+				timing = max(0, now.Sub(run.LastOutputAt)).Round(time.Second).String() + " ago"
+				if m.detail.Width >= 44 {
+					timing = "output " + timing
+				}
+			}
+			if timing != "" && lipgloss.Width(label)+lipgloss.Width(timing)+5 <= m.detail.Width-2 {
+				label += "  ·  " + timing
 			}
 		}
 	}
@@ -855,6 +876,26 @@ func (m *Model) renderFooter() string {
 		shortcuts := []key.Binding{switchPane, m.keys.Commands, m.keys.History, m.keys.Filter, m.keys.Help, m.keys.Quit}
 		if m.focus == focusDetail {
 			shortcuts = []key.Binding{switchPane, m.keys.GoBottom, m.keys.Commands, m.keys.History, m.keys.Help, m.keys.Quit}
+		}
+		if m.width < 44 {
+			commands := m.keys.Commands
+			commands.SetHelp(":", "cmd")
+			history := m.keys.History
+			if !m.showHistory {
+				history.SetHelp("h", "hist")
+			}
+			helpKey := m.keys.Help
+			helpKey.SetHelp("?", "")
+			if m.focus == focusDetail {
+				latest := m.keys.GoBottom
+				latest.SetHelp("G", "end")
+				shortcuts = []key.Binding{switchPane, latest, commands, helpKey}
+			} else {
+				if m.width < 34 {
+					switchPane.SetHelp("enter", "view")
+				}
+				shortcuts = []key.Binding{switchPane, commands, history, helpKey}
+			}
 		}
 		lines := []string{compactHelp.ShortHelpView(shortcuts)}
 		if m.help.ShowAll {
