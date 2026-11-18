@@ -240,9 +240,9 @@ The TUI exits with Ctrl-C or `q`. Keybindings:
 - `/` — filter runs. While filtering, `Esc` clears the filter.
 - `u`/`d` or `Ctrl-U`/`Ctrl-D` — half-page up/down in the detail pane
 - `g`/`G` — jump to top/bottom of the detail pane
-- mouse wheel — scroll the focused pane
+- mouse wheel — scroll the pane under the pointer
 
-On narrow terminals the TUI shows one pane at a time. Press `Enter` to open
+On narrow terminals and Rex splits, the TUI shows one pane at a time and fits more runs per page. Press `Enter` to open
 the selected run, `Esc` from its details to return to the run list, or `Tab`
 to switch between panes.
 

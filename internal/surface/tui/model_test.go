@@ -589,3 +589,22 @@ func TestActivityLongestBarStaysOnItsLabelRow(t *testing.T) {
 	}
 	t.Fatalf("activity chart wrapped the active bar:\n%s", view)
 }
+
+func TestPhoneWidthKeepsCoreControlsVisible(t *testing.T) {
+	for _, width := range []int{28, 32, 40} {
+		m := newSized(t)
+		m.Update(tea.WindowSizeMsg{Width: width, Height: 12})
+		m.Update(snapshotMsg{snapshot: demoSnapshot(time.Now()), alive: true})
+		view := m.View()
+		for _, want := range []string{"2 active · 1 waiting", "demo-43", ": cmd", "h hist", "?"} {
+			if !strings.Contains(view, want) {
+				t.Fatalf("%d columns missing %q:\n%s", width, want, view)
+			}
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		view = m.View()
+		if !strings.Contains(view, "esc runs G end : cmd ?") || !strings.Contains(view, "demo-42") {
+			t.Fatalf("%d columns hid inspector controls or run identity:\n%s", width, view)
+		}
+	}
+}
