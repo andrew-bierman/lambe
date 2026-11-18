@@ -247,7 +247,14 @@ func TestPermissionAutoDenied(t *testing.T) {
 // TestInterruptAborts covers Abort → session/cancel: an agent that honors
 // the interrupt answers cancelled, which surfaces as a settled, aborted run.
 func TestInterruptAborts(t *testing.T) {
-	drv, events := newDriver(t, "stream", nil)
+	for _, behavior := range []string{"stream", "cancel-error"} {
+		t.Run(behavior, func(t *testing.T) { testInterruptAborts(t, behavior) })
+	}
+}
+
+func testInterruptAborts(t *testing.T, behavior string) {
+	t.Helper()
+	drv, events := newDriver(t, behavior, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -276,6 +283,16 @@ func TestInterruptAborts(t *testing.T) {
 		settled, ok := ev.(harness.AgentSettledEvent)
 		return ok && settled.Aborted
 	})
+}
+
+func TestUnrequestedPromptCancellationFails(t *testing.T) {
+	drv, _ := newDriver(t, "unrequested-cancel-error", nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	out, err := drv.Run(ctx, "do not abort")
+	if err == nil || out.Kind != harness.OutcomeFailed || out.Aborted {
+		t.Fatalf("Run = (%+v, %v), want prompt failure", out, err)
+	}
 }
 
 // TestIgnoreInterruptStillSettles covers an agent that ignores session/cancel:

@@ -151,6 +151,19 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.
 		return a.turnWork(ctx, p)
 	case "stream":
 		return a.turnStream(ctx, p)
+	case "cancel-error":
+		if err := sendUpdate(ctx, currentConn, p.SessionId, acpsdk.SessionUpdate{ToolCallUpdate: &acpsdk.SessionToolCallUpdate{
+			SessionUpdate: "tool_call_update",
+			ToolCallId:    "cancel-test",
+			Title:         ptrString("waiting for cancellation"),
+			Status:        ptrStatus(acpsdk.ToolCallStatusInProgress),
+		}}); err != nil {
+			return acpsdk.PromptResponse{}, err
+		}
+		<-ctx.Done()
+		fallthrough
+	case "unrequested-cancel-error":
+		return acpsdk.PromptResponse{}, acpsdk.NewInternalError(map[string]string{"error": context.Canceled.Error()})
 	case "error":
 		return acpsdk.PromptResponse{}, acpsdk.NewInternalError(map[string]string{"cause": "boom"})
 	case "permission":

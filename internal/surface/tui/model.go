@@ -9,8 +9,9 @@
 //   - bubbles/help      keybinding footer
 //   - bubbles/spinner   refresh indicator
 //
-// The left pane is the list, the right pane is the detail viewport. Tab moves
-// focus between them. Filtering with "/" is provided by bubbles/list.
+// Wide terminals show the list and detail side by side. Narrow terminals
+// show the focused pane, with Enter opening details and Esc returning to runs.
+// Tab switches panes and "/" filters the list.
 package tui
 
 import (
@@ -30,12 +31,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
-	"github.com/muesli/reflow/wordwrap"
 
 	"github.com/andrew-bierman/lambe/internal/daemon"
 )
 
-const tickInterval = 250 * time.Millisecond
+const (
+	tickInterval = 250 * time.Millisecond
+	splitWidth   = 72
+)
 
 // Styles.
 var (
@@ -130,6 +133,8 @@ type keyMap struct {
 
 	Quit     key.Binding
 	Focus    key.Binding
+	OpenRun  key.Binding
+	Back     key.Binding
 	Help     key.Binding
 	Filter   key.Binding
 	ScrollUp key.Binding
@@ -153,6 +158,8 @@ func defaultKeyMap(focus *focusArea) keyMap {
 			key.WithKeys("tab"),
 			key.WithHelp("tab", "focus"),
 		),
+		OpenRun: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "details")),
+		Back:    key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "runs")),
 		Help: key.NewBinding(
 			key.WithKeys("?"),
 			key.WithHelp("?", "help"),
@@ -280,10 +287,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		follow := m.detail.AtBottom()
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.width < splitWidth && m.list.FilterState() == list.Filtering {
+			m.setFocus(focusList)
+		}
 		m.layout()
-		m.refreshDetail()
+		m.refreshDetail(follow)
 		return m, nil
 
 	case snapshotMsg:
@@ -300,15 +311,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.snapshot = msg.snapshot
 		m.alive = msg.alive
-		cmd := m.setRuns(msg.snapshot.Runs)
-		m.refreshDetail()
-		return m, cmd
+		m.setRuns(msg.snapshot.Runs)
+		m.refreshDetail(m.detail.AtBottom())
+		return m, nil
 
 	case list.FilterMatchesMsg:
-		var cmd tea.Cmd
-		m.list, cmd = m.list.Update(msg)
-		m.syncSelection()
-		return m, cmd
+		// The current results were applied synchronously; this message may be stale.
+		return m, nil
 
 	case tickMsg:
 		return m, tea.Batch(readSnapshot(m.path), tick())
@@ -323,6 +332,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 	}
 
+	if m.list.FilterState() == list.Filtering {
+		return m, m.updateFilter(msg)
+	}
 	// Non-key messages (mouse, etc.) go to the focused component.
 	cmds = append(cmds, m.updateFocused(msg))
 	return m, tea.Batch(cmds...)
@@ -334,10 +346,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if msg.Type == tea.KeyCtrlC {
 			return m, tea.Quit
 		}
-		var cmd tea.Cmd
-		m.list, cmd = m.list.Update(msg)
-		m.syncSelection()
-		return m, cmd
+		return m, m.updateFilter(msg)
 	}
 
 	switch {
@@ -345,19 +354,31 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case key.Matches(msg, m.keys.Focus):
 		if m.focus == focusList {
-			m.focus = focusDetail
-			m.list.Title = "Runs"
+			m.setFocus(focusDetail)
 		} else {
-			m.focus = focusList
-			m.list.Title = "Runs ▸"
+			m.setFocus(focusList)
 		}
 		return m, nil
+	case m.width < splitWidth && m.focus == focusList && m.selectedID != "" && key.Matches(msg, m.keys.OpenRun):
+		m.setFocus(focusDetail)
+		return m, nil
+	case m.width < splitWidth && m.focus == focusDetail && key.Matches(msg, m.keys.Back):
+		m.setFocus(focusList)
+		return m, nil
 	case key.Matches(msg, m.keys.Help):
+		follow := m.detail.AtBottom()
 		m.help.ShowAll = !m.help.ShowAll
 		m.layout()
+		if follow {
+			m.detail.GotoBottom()
+		} else {
+			m.detail.SetYOffset(m.detail.YOffset)
+		}
 		return m, nil
 	case key.Matches(msg, m.keys.Filter):
-		// Hand the filter key to the list even when detail has focus.
+		if m.width < splitWidth {
+			m.setFocus(focusList)
+		}
 		var cmd tea.Cmd
 		m.list, cmd = m.list.Update(msg)
 		m.syncSelection()
@@ -368,12 +389,37 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if cmd, handled := m.scrollDetail(msg); handled {
 			return m, cmd
 		}
+		if m.width < splitWidth {
+			return m, m.updateFocused(msg)
+		}
 	}
 
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
 	m.syncSelection()
 	return m, cmd
+}
+
+func (m *Model) updateFilter(msg tea.Msg) tea.Cmd {
+	query := m.list.FilterInput.Value()
+	var cmd tea.Cmd
+	m.list, cmd = m.list.Update(msg)
+	if current := m.list.FilterInput.Value(); m.list.FilterState() == list.Filtering && current != query {
+		// Bubbles' queued filter shares the old rune slice, which text edits can overwrite.
+		m.list.FilterInput.SetValue(current)
+		// Update matches before Enter can accept the query, while keeping cursor commands.
+		m.replaceListItems(m.list.Items())
+	}
+	m.syncSelection()
+	return cmd
+}
+
+func (m *Model) setFocus(focus focusArea) {
+	m.focus = focus
+	m.list.Title = "Runs"
+	if focus == focusList {
+		m.list.Title = "Runs ▸"
+	}
 }
 
 // scrollDetail applies viewport scrolling keys when the detail pane has focus.
@@ -416,53 +462,46 @@ func (m *Model) layout() {
 	if m.width <= 0 || m.height <= 0 {
 		return
 	}
-	headerHeight := 1
-	footerHeight := lipgloss.Height(m.renderFooter())
-	bodyHeight := m.height - headerHeight - footerHeight
-	if bodyHeight < 3 {
-		bodyHeight = 3
+	bodyHeight := max(1, m.height-1-lipgloss.Height(m.renderFooter()))
+	listWidth, detailWidth := m.width, m.width
+	if m.width >= splitWidth {
+		listWidth = min(48, m.width/3)
+		detailWidth = m.width - listWidth - 3
 	}
 
-	listWidth := m.width / 3
-	if listWidth < 24 {
-		listWidth = 24
-	}
-	if listWidth > m.width/2 {
-		listWidth = m.width / 2
-	}
-	if listWidth > 48 {
-		listWidth = 48
-	}
-
+	m.list.SetShowTitle(bodyHeight >= 7)
+	m.list.SetShowStatusBar(bodyHeight >= 7)
 	m.list.SetSize(listWidth, bodyHeight)
-
-	detailWidth := m.width - listWidth - 3 // separator column + padding
-	if detailWidth < 5 {
-		detailWidth = 5
-	}
 	m.detail.Width = detailWidth
 	m.detail.Height = bodyHeight
 }
 
 // setRuns replaces the list contents while preserving the selected issue.
-func (m *Model) setRuns(runs []daemon.LiveRun) tea.Cmd {
+func (m *Model) setRuns(runs []daemon.LiveRun) {
 	items := make([]list.Item, len(runs))
 	for i, run := range runs {
 		items[i] = runItem{run: run}
 	}
-	cmd := m.list.SetItems(items)
-	if m.selectedID == "" {
-		m.syncSelection()
-		return cmd
-	}
-	for i, item := range items {
-		if runItem, ok := item.(runItem); ok && runItem.run.IssueID == m.selectedID {
-			m.list.Select(i)
-			return cmd
+	m.replaceListItems(items)
+	if m.selectedID != "" {
+		for i, item := range m.list.VisibleItems() {
+			if runItem, ok := item.(runItem); ok && runItem.run.IssueID == m.selectedID {
+				m.list.Select(i)
+				return
+			}
 		}
 	}
+	if visible := m.list.VisibleItems(); len(visible) > 0 && m.list.SelectedItem() == nil {
+		m.list.Select(len(visible) - 1)
+	}
 	m.syncSelection()
-	return cmd
+}
+
+func (m *Model) replaceListItems(items []list.Item) {
+	if filter := m.list.SetItems(items); filter != nil {
+		m.list, _ = m.list.Update(filter())
+		m.list.SetSize(m.list.Width(), m.list.Height())
+	}
 }
 
 // syncSelection records the selected issue and refreshes the detail pane when
@@ -475,7 +514,7 @@ func (m *Model) syncSelection() {
 		m.selectedID = ""
 	}
 	if m.selectedID != previous {
-		m.refreshDetail()
+		m.refreshDetail(m.detail.AtBottom())
 	}
 }
 
@@ -487,16 +526,17 @@ func (m *Model) selectedRun() (daemon.LiveRun, bool) {
 	return item.run, true
 }
 
-func (m *Model) refreshDetail() {
+func (m *Model) refreshDetail(follow bool) {
 	run, ok := m.selectedRun()
 	if !ok {
 		m.detail.SetContent(dimStyle.Render("No active run. Waiting for the daemon to claim work."))
 		return
 	}
-	follow := m.detail.AtBottom()
 	m.detail.SetContent(detailContent(run, m.detail.Width))
 	if follow {
 		m.detail.GotoBottom()
+	} else {
+		m.detail.SetYOffset(m.detail.YOffset)
 	}
 }
 
@@ -507,13 +547,18 @@ func (m *Model) View() string {
 	}
 	if m.loading && m.snapshot.UpdatedAt.IsZero() {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-			m.spinner.View()+" Waiting for lambe daemon...")
+			ansi.Truncate(m.spinner.View()+" Waiting for lambe daemon...", m.width, "…"))
 	}
 
-	header := m.renderHeader()
-	body := m.renderBody()
 	footer := m.renderFooter()
-	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+	if m.height == 1 {
+		return footer
+	}
+	header := m.renderHeader()
+	if m.height == 2 {
+		return lipgloss.JoinVertical(lipgloss.Left, header, footer)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, header, m.renderBody(), footer)
 }
 
 func (m *Model) renderHeader() string {
@@ -537,17 +582,24 @@ func (m *Model) renderHeader() string {
 	if m.err != nil {
 		text += " · " + errorStyle.Render("read error: "+truncate(m.err.Error(), 60))
 	}
-	return headerStyle.Width(m.width).Render(ansi.Truncate(text, m.width-2, "…"))
+	return headerStyle.Width(m.width).MaxWidth(m.width).Render(ansi.Truncate(text, max(1, m.width-2), "…"))
 }
 
 func (m *Model) renderBody() string {
-	bodyHeight := m.height - 1 - lipgloss.Height(m.renderFooter())
-	if bodyHeight < 1 {
-		bodyHeight = 1
+	if m.width < splitWidth && m.focus == focusDetail {
+		return m.detail.View()
 	}
-	separator := separatorStyle.Render(strings.Repeat("│\n", bodyHeight-1) + "│")
+	listView := lipgloss.NewStyle().
+		Width(m.list.Width()).
+		MaxWidth(m.list.Width()).
+		MaxHeight(m.list.Height()).
+		Render(m.list.View())
+	if m.width < splitWidth {
+		return listView
+	}
+	separator := separatorStyle.Render(strings.Repeat("│\n", m.detail.Height-1) + "│")
 	return lipgloss.JoinHorizontal(lipgloss.Top,
-		m.list.View(),
+		listView,
 		" ",
 		separator,
 		" ",
@@ -556,6 +608,27 @@ func (m *Model) renderBody() string {
 }
 
 func (m *Model) renderFooter() string {
+	style := footerStyle.Width(m.width).MaxWidth(m.width).MaxHeight(max(1, m.height-2))
+	if m.width < splitWidth {
+		switchPane := m.keys.OpenRun
+		if m.focus == focusDetail {
+			switchPane = m.keys.Back
+		}
+		compactHelp := m.help
+		compactHelp.Width = max(1, m.width-2)
+		compactHelp.ShortSeparator = " "
+		lines := []string{compactHelp.ShortHelpView([]key.Binding{switchPane, m.keys.Filter, m.keys.Quit, m.keys.Help})}
+		if m.help.ShowAll {
+			for _, group := range m.keys.FullHelp() {
+				lines = append(lines, compactHelp.ShortHelpView(group))
+			}
+		}
+		for i, line := range lines {
+			lines[i] = ansi.Truncate(line, compactHelp.Width, "…")
+		}
+		return style.Render(strings.Join(lines, "\n"))
+	}
+
 	left := m.help.View(m.keys)
 	focus := "list"
 	if m.focus == focusDetail {
@@ -577,7 +650,7 @@ func (m *Model) renderFooter() string {
 	if space < 1 {
 		space = 1
 	}
-	return footerStyle.Width(m.width).Render(left + strings.Repeat(" ", space) + right)
+	return style.Render(left + strings.Repeat(" ", space) + right)
 }
 
 // detailContent formats one run for the detail viewport.
@@ -592,7 +665,7 @@ func detailContent(run daemon.LiveRun, width int) string {
 		title = "(untitled)"
 	}
 	sections = append(sections, lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FAFAFA")).
-		Render(truncate(title, width-2)))
+		Render(ansi.Truncate(title, width, "…")))
 
 	row := func(k, v string) string {
 		return lipgloss.JoinHorizontal(lipgloss.Left,
@@ -619,24 +692,22 @@ func detailContent(run daemon.LiveRun, width int) string {
 	}
 
 	meta := lipgloss.JoinVertical(lipgloss.Left, left...)
-	if len(right) > 0 && width >= 70 {
-		meta = lipgloss.JoinHorizontal(lipgloss.Top, meta, "    ",
-			lipgloss.JoinVertical(lipgloss.Left, right...))
+	if len(right) > 0 {
+		if width >= 70 {
+			meta = lipgloss.JoinHorizontal(lipgloss.Top, meta, "    ",
+				lipgloss.JoinVertical(lipgloss.Left, right...))
+		} else {
+			meta = lipgloss.JoinVertical(lipgloss.Left, append(left, right...)...)
+		}
 	}
 	sections = append(sections, meta)
 
 	text := strings.TrimSpace(run.Tail)
 	if text == "" {
 		text = "(no output yet)"
-	} else {
-		wrapWidth := width - 2
-		if wrapWidth < 20 {
-			wrapWidth = 20
-		}
-		text = wordwrap.String(text, wrapWidth)
 	}
 	sections = append(sections, dimStyle.Render("--- output ---")+"\n"+text)
-	return strings.Join(sections, "\n\n")
+	return ansi.Wrap(strings.Join(sections, "\n\n"), width, "")
 }
 
 // phaseLabel renders a phase with an icon and color.

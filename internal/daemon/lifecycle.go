@@ -605,6 +605,7 @@ func (d *Daemon) poke() {
 // and shell client.
 func execCommand(ctx context.Context, name string, args ...string) (string, int, error) {
 	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- fixed argv against a named CLI
+	cmd.WaitDelay = time.Second
 	out, err := cmd.Output()
 	if err == nil {
 		return string(out), 0, nil

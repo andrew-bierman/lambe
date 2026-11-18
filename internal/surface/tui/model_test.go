@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/andrew-bierman/lambe/internal/daemon"
 	"github.com/andrew-bierman/lambe/internal/symphony"
@@ -110,6 +111,101 @@ func TestSelectionPreservedAcrossSnapshots(t *testing.T) {
 	}
 }
 
+func TestFilteredSelectionSurvivesSnapshots(t *testing.T) {
+	snapshot := testSnapshot()
+	snapshot.Runs[1].Title = "matching second issue"
+	snapshot.Runs[2].Title = "matching third issue"
+	m := newSized(t)
+	m.Update(snapshotMsg{snapshot: snapshot, alive: true})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("matching")})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if m.selectedID != "ac-3" {
+		m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	}
+	if run, ok := m.selectedRun(); !ok || run.IssueID != "ac-3" {
+		t.Fatalf("expected ac-3 before refresh, got %q (%v)", run.IssueID, ok)
+	}
+
+	snapshot.Runs[2].Tail = "fresh output"
+	for range 2 {
+		_, refresh := m.Update(snapshotMsg{snapshot: snapshot, alive: true})
+		if refresh != nil {
+			m.Update(refresh())
+		}
+		if run, ok := m.selectedRun(); !ok || run.IssueID != "ac-3" || run.Tail != "fresh output" {
+			t.Fatalf("expected refreshed ac-3, got %q with output %q (%v)", run.IssueID, run.Tail, ok)
+		}
+	}
+	snapshot.Runs = snapshot.Runs[:2]
+	m.Update(snapshotMsg{snapshot: snapshot, alive: true})
+	if run, ok := m.selectedRun(); !ok || run.IssueID != "ac-2" || m.selectedID != "ac-2" {
+		t.Fatalf("expected remaining match ac-2 after removal, got %q (%v)", run.IssueID, ok)
+	}
+}
+
+func TestFilterIgnoresOutOfOrderResults(t *testing.T) {
+	m := newSized(t)
+	snapshot := testSnapshot()
+	m.Update(snapshotMsg{snapshot: snapshot, alive: true})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	_, older := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("second")})
+	m.Update(tea.KeyMsg{Type: tea.KeyHome})
+	m.Update(tea.KeyMsg{Type: tea.KeyDelete})
+	if value, pos := m.list.FilterInput.Value(), m.list.FilterInput.Position(); value != "econd" || pos != 0 {
+		t.Fatalf("middle edit left filter %q at cursor %d, want econd at cursor 0", value, pos)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	_, newer := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("third")})
+	if run, ok := m.selectedRun(); !ok || run.IssueID != "ac-3" {
+		t.Fatalf("expected current query to match immediately, got %q (%v)", run.IssueID, ok)
+	}
+
+	snapshot.Runs[2].Tail = "fresh output"
+	m.Update(snapshotMsg{snapshot: snapshot, alive: true})
+	for i, pending := range []tea.Cmd{newer, older} {
+		result := pending()
+		if batch, ok := result.(tea.BatchMsg); ok {
+			for _, cmd := range batch {
+				if matches, ok := cmd().(list.FilterMatchesMsg); ok {
+					result = matches
+					break
+				}
+			}
+		}
+		matches, ok := result.(list.FilterMatchesMsg)
+		if !ok {
+			t.Fatalf("expected an asynchronous filter result, got %T", result)
+		}
+		probe, _ := m.list.Update(matches)
+		want := []string{"ac-3", "ac-2"}[i]
+		if visible := probe.VisibleItems(); len(visible) != 1 || visible[0].(runItem).run.IssueID != want {
+			t.Fatalf("queued filter lost its original query, want %q, got %v", want, visible)
+		}
+		m.Update(result)
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if run, ok := m.selectedRun(); !ok || run.IssueID != "ac-3" || run.Tail != "fresh output" {
+		t.Fatalf("expected current query and fresh output, got %q with output %q (%v)", run.IssueID, run.Tail, ok)
+	}
+}
+
+func TestResizeKeepsFollowingOutput(t *testing.T) {
+	snapshot := testSnapshot()
+	snapshot.Runs[0].Tail = strings.Repeat("a line of output with several words written by the agent\n", 30) + "latest output"
+	m := newSized(t)
+	m.Update(snapshotMsg{snapshot: snapshot, alive: true})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	m.Update(tea.WindowSizeMsg{Width: 34, Height: 14})
+	if view := m.View(); !strings.Contains(view, "latest output") {
+		t.Fatalf("resize lost the end of the output:\n%s", view)
+	}
+}
+
 func TestTabTogglesFocus(t *testing.T) {
 	m := withSnapshot(t, newSized(t))
 	if m.focus != focusList {
@@ -141,6 +237,141 @@ func TestViewContainsExpectedContent(t *testing.T) {
 	for _, want := range []string{"lambe", "running", "ac-1", "first issue", "quit"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestNarrowViewSwitchesPanesAndShowsFilter(t *testing.T) {
+	m := withSnapshot(t, newSized(t))
+	m.Update(tea.WindowSizeMsg{Width: 36, Height: 14})
+	if view := m.View(); !strings.Contains(view, "enter details") || strings.Contains(view, "--- output ---") {
+		t.Fatalf("expected run picker and details shortcut:\n%s", view)
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if view := m.View(); !strings.Contains(view, "second issue") ||
+		!strings.Contains(view, "--- output ---") || !strings.Contains(view, "esc runs") ||
+		strings.Contains(view, "first issue") {
+		t.Fatalf("expected details for selected run:\n%s", view)
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if view := m.View(); !strings.Contains(view, "Filter: a") || strings.Contains(view, "--- output ---") {
+		t.Fatalf("expected visible filter input:\n%s", view)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	if view := m.View(); !strings.Contains(view, "│") || !strings.Contains(view, "--- output ---") {
+		t.Fatalf("expected split layout after resizing:\n%s", view)
+	}
+}
+
+func TestNarrowEnterAndEscapeSwitchPanes(t *testing.T) {
+	m := withSnapshot(t, newSized(t))
+	m.Update(tea.WindowSizeMsg{Width: 36, Height: 14})
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if view := m.View(); !strings.Contains(view, "esc runs") ||
+		!strings.Contains(view, "second issue") || !strings.Contains(view, "--- output ---") {
+		t.Fatalf("expected selected run details after enter:\n%s", view)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if view := m.View(); !strings.Contains(view, "enter details") || strings.Contains(view, "--- output ---") {
+		t.Fatalf("expected run picker after escape:\n%s", view)
+	}
+}
+
+func TestNarrowDetailKeysLeaveHiddenListSelectionAlone(t *testing.T) {
+	m := withSnapshot(t, newSized(t))
+	m.Update(tea.WindowSizeMsg{Width: 36, Height: 9})
+	if m.list.Paginator.TotalPages < 2 {
+		t.Fatal("test needs multiple pages of runs")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if m.focus != focusDetail || m.selectedID != "ac-1" {
+		t.Fatalf("detail navigation moved focus to %v and selection to %q", m.focus, m.selectedID)
+	}
+}
+
+func TestResizeRevealsFilterWhileDetailHasFocus(t *testing.T) {
+	m := withSnapshot(t, newSized(t))
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	m.Update(tea.WindowSizeMsg{Width: 36, Height: 14})
+
+	if view := m.View(); !strings.Contains(view, "Filter:") || strings.Contains(view, "--- output ---") {
+		t.Fatalf("expected filter to stay visible after resizing:\n%s", view)
+	}
+}
+
+func TestNarrowFocusChangesFitWindow(t *testing.T) {
+	m := withSnapshot(t, newSized(t))
+	const height = 14
+	for width := 33; width <= 35; width++ {
+		m.Update(tea.KeyMsg{Type: tea.KeyTab})
+		m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+		for _, input := range []tea.KeyMsg{
+			{Type: tea.KeyTab},
+			{Type: tea.KeyTab},
+			{Type: tea.KeyRunes, Runes: []rune{'/'}},
+		} {
+			m.Update(input)
+			if w, h := lipgloss.Size(m.View()); w > width || h > height {
+				t.Fatalf("view after %q measures %dx%d, window is %dx%d", input, w, h, width, height)
+			}
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	}
+}
+
+func TestViewFitsWindow(t *testing.T) {
+	cases := []struct {
+		name string
+		w, h int
+	}{
+		{"wide", 120, 30},
+		{"narrow", 36, 14},
+		{"short", 24, 5},
+		{"tiny", 1, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New("/tmp/live.json")
+			m.Update(tea.WindowSizeMsg{Width: tc.w, Height: tc.h})
+			assertFits := func() {
+				t.Helper()
+				if w, h := lipgloss.Size(m.View()); w > tc.w || h > tc.h {
+					t.Fatalf("view measures %dx%d, window is %dx%d:\n%s", w, h, tc.w, tc.h, m.View())
+				}
+			}
+			assertFits()
+			withSnapshot(t, m)
+			assertFits()
+			m.Update(tea.KeyMsg{Type: tea.KeyTab})
+			assertFits()
+			m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+			assertFits()
+		})
+	}
+}
+
+func TestNarrowDetailWrapsUnicodeOutput(t *testing.T) {
+	run := daemon.LiveRun{
+		Progress: symphony.Progress{Title: "狭い画面で情報を確認する", Workspace: "/tmp/workspace"},
+		Tail:     strings.Repeat("長", 24) + "-end",
+	}
+	const width = 20
+	content := detailContent(run, width)
+	if got := lipgloss.Width(content); got > width {
+		t.Fatalf("content width = %d, want <= %d:\n%s", got, width, content)
+	}
+	for _, want := range []string{"Workspace:", "-end"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("detail content missing %q:\n%s", want, content)
 		}
 	}
 }
@@ -200,6 +431,7 @@ func TestTruncate(t *testing.T) {
 
 func TestFilterLifecycle(t *testing.T) {
 	m := withSnapshot(t, newSized(t))
+	m.Update(tea.WindowSizeMsg{Width: 36, Height: 14})
 	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	m = model.(*Model)
 	for _, r := range "ac-2" {
@@ -214,8 +446,8 @@ func TestFilterLifecycle(t *testing.T) {
 	}
 	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = model.(*Model)
-	if m.list.FilterState() != list.FilterApplied {
-		t.Fatalf("filter state = %v, want FilterApplied", m.list.FilterState())
+	if m.list.FilterState() != list.FilterApplied || m.focus != focusList {
+		t.Fatalf("enter should apply the filter and keep the run picker visible, got filter %v and focus %v", m.list.FilterState(), m.focus)
 	}
 	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = model.(*Model)

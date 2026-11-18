@@ -1,6 +1,6 @@
 # Precedent & Activity Dossier — Pigeon direction (agent-orchestration candidate)
 
-Scouted 2026-11-15. Repo: /home/andrew-bierman/Code/pigeon; tracker: andrew-bierman/pigeon (gh authenticated; PR diffs not read).
+Scouted 2026-11-15. Repo: ~/Code/pigeon; tracker: andrew-bierman/pigeon (gh authenticated; PR diffs not read).
 
 ## Precedent (prior decisions / abandoned attempts / stated direction)
 

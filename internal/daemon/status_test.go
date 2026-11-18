@@ -1,14 +1,17 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/andrew-bierman/lambe/internal/gate"
 	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
@@ -108,6 +111,109 @@ func TestBuildReportDegradesWhenAttemptReadFails(t *testing.T) {
 	}
 	if len(rep.Deferred) != 0 {
 		t.Errorf("deferred = %+v, want none without attempt state", rep.Deferred)
+	}
+}
+
+type parkedReadFailure struct {
+	tracker.Tracker
+	err error
+}
+
+func (tr parkedReadFailure) Dispatchable(ctx context.Context, query tracker.DispatchQuery) ([]tracker.Issue, error) {
+	if len(query.Statuses) > 0 && query.Statuses[0] == tracker.StatusBlocked {
+		return nil, tr.err
+	}
+	return tr.Tracker.Dispatchable(ctx, query)
+}
+
+func TestBuildReportPropagatesParkedReadFailure(t *testing.T) {
+	t.Parallel()
+	tr := parkedReadFailure{
+		Tracker: newFakeTracker(),
+		err:     &tracker.ExitError{Code: 1, Stderr: "Error: database unavailable\n"},
+	}
+	if _, err := BuildReport(t.Context(), tr, nil); !errors.Is(err, tr.err) {
+		t.Fatalf("BuildReport error = %v, want %v", err, tr.err)
+	}
+}
+
+func TestBuildReportListsEscalationsAgainstBdTracker(t *testing.T) {
+	bin := bdBin()
+	if bin == "" {
+		t.Skip("bd binary not found; set LAMBE_TEST_BD=1 with bd on PATH to run")
+	}
+	ctx := t.Context()
+	dir := t.TempDir()
+	local, err := tracker.NewLocal(bin, dir, "lambe@testbox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	hub, err := gate.NewBdHub(bin, dir, "lambe@testbox")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	park := func(title, label, status string) string {
+		t.Helper()
+		issue, err := local.EnsureIssue(ctx, title, tracker.IssueSpec{Title: title, Priority: 2, Labels: []string{label}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := hub.NeedsHuman(ctx, issue.ID, "completion check failed", "test output"); err != nil {
+			t.Fatal(err)
+		}
+		rows, err := local.Dispatchable(ctx, tracker.DispatchQuery{IDs: []string{issue.ID}})
+		if err != nil || len(rows) != 1 || rows[0].Status != status {
+			t.Fatalf("parked issue = %+v, err = %v, want status %q", rows, err, status)
+		}
+		return issue.ID
+	}
+	assertParked := func(want ...string) {
+		t.Helper()
+		rep, err := BuildReport(ctx, local, []string{"supervised"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := make(map[string]bool)
+		for _, issue := range rep.NeedsHuman {
+			got[issue.Issue] = true
+		}
+		if len(rep.NeedsHuman) != len(want) {
+			t.Fatalf("needs human = %+v, want %v", rep.NeedsHuman, want)
+		}
+		for _, id := range want {
+			if !got[id] {
+				t.Errorf("needs human lacks %s: %+v", id, rep.NeedsHuman)
+			}
+		}
+	}
+	_, err = local.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusBlocked, gate.StatusNeedsHuman}})
+	var exitErr *tracker.ExitError
+	if !errors.As(err, &exitErr) || !strings.Contains(exitErr.Stderr, `Error: invalid status "needs-human" in multi-status filter`) {
+		t.Fatalf("unconfigured status error = %v, want wrapped native invalid-status error on stderr", err)
+	}
+
+	fallback := park("status-fallback", "supervised", tracker.StatusBlocked)
+	assertParked(fallback)
+	if err := hub.EnsureNeedsHumanStatus(ctx); err != nil {
+		t.Fatal(err)
+	}
+	custom := park("status-custom", "supervised", gate.StatusNeedsHuman)
+	park("status-unrelated", "unrelated", gate.StatusNeedsHuman)
+	assertParked(fallback, custom)
+}
+
+func TestRenderReportMarksGateHistoryUnavailable(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	if err := RenderReport(&out, Report{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "last-night gate rejections:\n  (history unavailable)\n") {
+		t.Fatalf("gate history not marked unavailable:\n%s", &out)
 	}
 }
 

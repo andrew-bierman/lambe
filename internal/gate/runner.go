@@ -356,7 +356,8 @@ func (r *Runner) evaluateSpec(ctx context.Context, cfg Config, req symphony.Gate
 		if fn == nil {
 			fn = OsExec
 		}
-		out, err := fn(ctx, req.Workspace, "sh", "-lc", cfg.Command)
+		// Pass the issue ID as data, then restore the gate's empty positional arguments.
+		out, err := fn(ctx, req.Workspace, "sh", "-lc", `export LAMBE_ISSUE_ID="$1"; shift; `+cfg.Command, "sh", req.Issue.ID)
 		if err == nil {
 			return symphony.GateGreen, trimSpace(out), false
 		}

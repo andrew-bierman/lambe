@@ -248,8 +248,8 @@ func TestDaemonCrashHelper(t *testing.T) {
 			if err := child.Start(); err != nil {
 				return symphony.TurnResult{}, err
 			}
-			persist := newAttemptPersisterFrom(func() (tracker.Tracker, error) { return tr, nil }, slog.Default(), proc.ProcessIdentity)
-			if err := persist(req.SessionID, child.Process.Pid); err != nil {
+			persist := newAttemptPersisterFrom(func(context.Context) (tracker.Tracker, error) { return tr, nil }, slog.Default(), proc.ProcessIdentity)
+			if err := persist(ctx, req.SessionID, child.Process.Pid); err != nil {
 				proc.AbortStart(child)
 				return symphony.TurnResult{}, fmt.Errorf("%w: %w", proc.ErrBindingUnavailable, err)
 			}

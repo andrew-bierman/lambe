@@ -2,7 +2,7 @@
 
 <img src="docs/assets/lambe-mascot.png" alt="Lambe, a colorful friendly lambeosaurus" width="180">
 
-[![CI](https://github.com/andrew-bierman/lambe/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/andrew-bierman/lambe/actions/workflows/ci.yml)
+[![CI](https://github.com/andrew-bierman/lambe/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/andrew-bierman/lambe/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/andrew-bierman/lambe.svg)](https://pkg.go.dev/github.com/andrew-bierman/lambe)
 [![Go Report Card](https://goreportcard.com/badge/github.com/andrew-bierman/lambe)](https://goreportcard.com/report/github.com/andrew-bierman/lambe)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -25,25 +25,6 @@ through work item by work item, and treats a task as done only when external
 checks are green — never because a process exited zero. That last property,
 verified completion, is the product.
 
-## First-run setup
-
-Run `lambe init` from the repository you want to supervise. It writes a config
-that pins that repository’s `WORKFLOW.md`, so running Lambe from another folder
-does not accidentally select a different prompt. Existing files are preserved.
-
-Before dispatching real work, configure the workflow’s workspace hooks and the
-completion check in a `[gate]` table in that starter or a separate formula file.
-Every configured gate applies to every task in this tracker. Lambe refuses to
-start without a completion gate, before claiming existing work. The starter’s automatic
-trigger starts disabled; the starter uses native Beads formula and step fields.
-Lambe starts the configured agent itself when an eligible task appears—you do
-not start a second agent session. Queue a task with `bd create` after configuring
-its completion gate, and inspect it with `lambe status`.
-
-`lambe version` reports the installed Go module version for upstream installs,
-even when no release linker flags were supplied. Bare commands read the default
-configuration written by init; `-config FILE` selects another one.
-
 ## Quickstart
 
 Production installs use a tagged GitHub release archive, never a local build or
@@ -54,65 +35,88 @@ an untagged `master` commit. For macOS on Apple Silicon:
 set -eu
 install_dir=$(mktemp -d)
 trap 'rm -rf "$install_dir"' EXIT
-gh release download v0.1.0 --repo andrew-bierman/lambe --dir "$install_dir" \
-  --pattern lambe_0.1.0_darwin_arm64.tar.gz --pattern checksums.txt
-(cd "$install_dir" && awk '$2 == "lambe_0.1.0_darwin_arm64.tar.gz"' checksums.txt | shasum -a 256 -c -)
-tar -xzf "$install_dir/lambe_0.1.0_darwin_arm64.tar.gz" -C "$install_dir"
+gh release download --repo andrew-bierman/lambe --dir "$install_dir" \
+  --pattern 'lambe_*_darwin_arm64.tar.gz' --pattern checksums.txt
+set -- "$install_dir"/lambe_*_darwin_arm64.tar.gz
+[ "$#" -eq 1 ]
+[ -f "$1" ]
+archive=$(basename "$1")
+(cd "$install_dir" && awk -v name="$archive" '$2 == name {print; found=1} END {if (!found) exit 1}' checksums.txt | shasum -a 256 -c -)
+tar -xzf "$1" -C "$install_dir"
 mkdir -p "$HOME/.local/bin"
 install -m 755 "$install_dir/lambe" "$HOME/.local/bin/lambe"
-lambe version
+"$HOME/.local/bin/lambe" version
 )
 ```
 
-The private repository requires an authenticated `gh` account. Other platform
-archives are listed on the [releases page](https://github.com/andrew-bierman/lambe/releases).
+The `gh` CLI requires authentication (`gh auth login`), even for public
+repositories. To download without it, use the [releases page](https://github.com/andrew-bierman/lambe/releases),
+which also lists archives for other platforms.
 Release binaries report their version, commit and build date. Upgrading a binary
 does not upgrade a running daemon: stop it in its owning terminal, then restart.
+Add `~/.local/bin` to your `PATH` to use the `lambe` command by name.
 
-### Development installs
+### Run a disposable task
 
-Keep development builds out of the production PATH. From this checkout:
+Install [Beads](https://github.com/gastownhall/beads) (`bd`) and authenticate
+[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) with
+your model provider. Lambe starts Pi when eligible work appears. For Codex or
+another ACP agent, see [Agent harnesses](#agent-harnesses).
 
-```sh
-go build -ldflags='-X main.version=dev-local' -o .dev/bin/lambe-dev ./cmd/lambe
-LAMBE_STATE_DIR="$PWD/.dev/state" LAMBE_WORKSPACE_ROOT="$PWD/.dev/workspaces" \
-  ./.dev/bin/lambe-dev run -config /absolute/path/to/dev-config.yaml
-```
-
-Use a disposable Beads tracker and an explicit development configuration. The
-separate state directory alone does not isolate tracker mutations. Do not run
-`go install` into the production binary directory while developing, and do not
-point a development instance at production tasks. These development builds report `dev-local`;
-release archives report the tagged version.
-
-Install `bd` and your chosen agent harness. Pi is the default; authenticate it
-with your model provider before starting Lambe. For Codex or another ACP agent,
-see [Agent harnesses](#agent-harnesses).
-
-On a single machine, start from the project containing your Beads tracker:
+Run this in a fresh terminal. It creates a local tracker with one task, a
+separate state directory, and a workspace hook that supplies the task's input.
 
 ```sh
-cd ~/Code/my-beads-repo
-lambe init
+mkdir -p "$HOME/Code"
+demo=$(mktemp -d "$HOME/Code/lambe-demo.XXXXXX")
+cd "$demo" || exit
+git init -q
+bd init --non-interactive --prefix demo --skip-agents --skip-hooks
+lambe init -non-interactive -config "$PWD/lambe.yaml"
+
+cat > WORKFLOW.md <<'EOF'
+---
+hooks:
+  after_create: "printf 'hello, lambe!\\n' > input.txt"
+---
+
+Complete this task in the current workspace: {{ issue }}
+EOF
+
+cat >> .beads/formulas/keep-tests-green.formula.toml <<'EOF'
+
+[gate]
+type = "shell"
+command = "test \"$(cat greeting.txt)\" = 'HELLO, LAMBE!'"
+EOF
+
+bd create 'Write an uppercase copy of input.txt to greeting.txt' --type task
+export LAMBE_STATE_DIR="$PWD/state" LAMBE_WORKSPACE_ROOT="$PWD/workspaces"
+lambe run -config "$PWD/lambe.yaml"
 ```
 
-Init creates configuration and starter workflow files, preserving existing
-workflows. Review the generated prompt, workspace hooks, responsibility trigger,
-and completion gate before running:
+Lambe runs the gate in the agent's workspace and closes the task when the check
+passes. Watch the daemon output, then press Ctrl-C and confirm the closure with
+`bd list --status closed` in the demo directory.
 
-```sh
-lambe run
-```
+### Set up a project
 
-A gate must prove completion with your project's checks. Agents work in separate
-directories; configure the workflow's `after_create` hook to clone the project
-into each workspace before running those checks. The generated CI example
-contains placeholders you must replace for your repository.
+Run `lambe init` from the project containing your Beads tracker. It preserves
+existing workflow files and records the absolute workflow path in the config.
+Set `after_create` to populate each workspace with your project and add a
+`[gate]` in `.beads/formulas/` that verifies completion. Every configured gate
+applies to every task in the tracker. The starter trigger is disabled, and
+existing eligible tasks can dispatch at startup. Set `labels` before running
+against a shared tracker if Lambe should only claim a dedicated set of tasks.
+For task-specific checks, shell gates receive the issue ID in `LAMBE_ISSUE_ID`.
+Quote the variable as `"$LAMBE_ISSUE_ID"` when using it in a command.
 
-To use a tracker elsewhere, create a config file and pass it to both commands:
+To use a tracker elsewhere, point the config at its workflow and tracker.
+Put its completion gate in the tracker's `.beads/formulas/` directory.
 
 ```yaml
 # lambe.yaml
+workflow_path: /absolute/path/to/project/WORKFLOW.md
 trackers:
   - name: main
     type: hub
@@ -134,9 +138,22 @@ The morning read:
 lambe status
 ```
 
-`lambe run` is the daemon (single instance per machine, enforced with flock).
-`lambe status` prints the current snapshot: agents, assignments, gate results,
-and anything waiting on a human. `lambe version` prints the build version.
+`lambe status` shows active and deferred work and items needing human attention.
+Gate-rejection history is not yet available there. `lambe version` prints the
+build version.
+
+### Development installs
+
+Keep development builds out of the production PATH. From this checkout:
+
+```sh
+go build -ldflags='-X main.version=dev-local' -o .dev/bin/lambe-dev ./cmd/lambe
+LAMBE_STATE_DIR="$PWD/.dev/state" LAMBE_WORKSPACE_ROOT="$PWD/.dev/workspaces" \
+  ./.dev/bin/lambe-dev run -config /absolute/path/to/dev-config.yaml
+```
+
+Use a disposable Beads tracker and an explicit development configuration. A
+separate state directory still allows mutations to the configured tracker.
 
 ## Agent harnesses
 
@@ -209,10 +226,14 @@ The TUI exits with Ctrl-C or `q`. Keybindings:
 
 - `j`/`k` or `↑`/`↓` — move through the run list
 - `Tab` — switch focus between the run list and the detail pane
-- `/` — filter runs; `Esc` clears the filter
+- `/` — filter runs. While filtering, `Esc` clears the filter.
 - `u`/`d` or `Ctrl-U`/`Ctrl-D` — half-page up/down in the detail pane
 - `g`/`G` — jump to top/bottom of the detail pane
 - mouse wheel — scroll the focused pane
+
+On narrow terminals the TUI shows one pane at a time. Press `Enter` to open
+the selected run, `Esc` from its details to return to the run list, or `Tab`
+to switch between panes.
 
 In Rex the daemon reports an OSC status badge in its own pane. Rex is optional;
 agent execution stays headless and the views work in a normal terminal. A

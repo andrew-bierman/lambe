@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -21,6 +22,27 @@ import (
 
 func TestMain(m *testing.M) {
 	testchild.Main(m)
+}
+
+func TestExecCommandBoundsWaitForInheritedStdout(t *testing.T) {
+	t.Parallel()
+	// The shell exits successfully, but sleep retains its copy of stdout.
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	out, _, err := execCommand(t.Context(), "sh", "-c", `sleep 4 & printf '%s\n' "$!" > "$1"`, "sh", pidFile)
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		t.Fatalf("execCommand = %q, %v; want inherited stdout wait delay", out, err)
+	}
+	data, err := os.ReadFile(pidFile) // #nosec G304 -- PID file is inside the test temporary directory.
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 1 {
+		t.Fatalf("invalid child PID: %q", data)
+	}
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("clean up child %d: %v", pid, err)
+	}
 }
 
 // fakeTracker is an in-memory tracker.Tracker fixture. All methods are

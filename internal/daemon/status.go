@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/andrew-bierman/lambe/internal/config"
+	"github.com/andrew-bierman/lambe/internal/gate"
 	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
@@ -56,17 +57,15 @@ type Report struct {
 	GateRejections []GateRejection
 }
 
-// gateOutputMeta is the tracker metadata key the gate seam stamps its last
-// rejection summary under; empty until the gate unit is wired.
+// gateOutputMeta is an optional tracker field for a summary of the last gate output.
 const gateOutputMeta = "lambe_last_gate_output"
 
 // BuildReport reads the morning report from the local tracker: active runs
 // from the in-progress front joined with each session's newest attempt,
-// deferred runs from armed wake timers, and needs-human items from blocked
-// issues carrying a gate-output summary. When labels is non-empty, only
+// deferred runs from armed wake timers, and issues parked as needs-human or
+// blocked. When labels is non-empty, only
 // issues carrying every listed label are included (opt-in work lane on a
-// shared tracker). Unreadable sections degrade to empty with their error
-// reported once.
+// shared tracker).
 //
 // Attempt state arrives as one grouped read. On a shell transport every
 // per-issue query costs an engine start, so joining the attempt records that
@@ -111,19 +110,25 @@ func BuildReport(ctx context.Context, tr tracker.Tracker, labels []string) (Repo
 		sort.Slice(rep.Deferred, func(i, j int) bool { return rep.Deferred[i].WakeAt.Before(rep.Deferred[j].WakeAt) })
 	}
 
-	// Needs-human and gate rejections both read from this one blocked-front
-	// scan; no section of the report queries per issue.
-	blocked, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusBlocked}, Labels: labels})
-	if err == nil {
-		for _, issue := range blocked {
-			if issue.Metadata[tracker.MetaKind] != "" {
-				continue
-			}
-			rep.NeedsHuman = append(rep.NeedsHuman, NeedsHumanItem{
-				Issue:          issue.ID,
-				LastGateOutput: summarizeGateOutput(issue.Metadata[gateOutputMeta]),
-			})
+	query := tracker.DispatchQuery{Statuses: []string{tracker.StatusBlocked, gate.StatusNeedsHuman}, Labels: labels, Unlimited: true}
+	parked, err := tr.Dispatchable(ctx, query)
+	var exitErr *tracker.ExitError
+	if errors.As(err, &exitErr) && strings.HasPrefix(exitErr.Stderr, `Error: invalid status "`+gate.StatusNeedsHuman+`" `) {
+		// Beads rejects the entire filter when the custom status is unconfigured.
+		query.Statuses = query.Statuses[:1]
+		parked, err = tr.Dispatchable(ctx, query)
+	}
+	if err != nil {
+		return rep, fmt.Errorf("read issues needing human attention: %w", err)
+	}
+	for _, issue := range parked {
+		if issue.Metadata[tracker.MetaKind] != "" {
+			continue
 		}
+		rep.NeedsHuman = append(rep.NeedsHuman, NeedsHumanItem{
+			Issue:          issue.ID,
+			LastGateOutput: summarizeGateOutput(issue.Metadata[gateOutputMeta]),
+		})
 	}
 
 	return rep, nil
@@ -228,7 +233,7 @@ func RenderReport(w io.Writer, rep Report) error {
 		return err
 	}
 	if len(rep.GateRejections) == 0 {
-		return reportf(w, "  (none)")
+		return reportf(w, "  (history unavailable)")
 	}
 	tw := tabwriter.NewWriter(w, 2, 4, 2, ' ', 0)
 	if _, err := fmt.Fprintln(tw, "  ISSUE\tATTEMPT\tOUTPUT"); err != nil {

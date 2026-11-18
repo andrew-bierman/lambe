@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Adapt the terminal dashboard to narrow screens and keep filtered selection and follow mode stable across refreshes and resizes.
+- Expose the current issue ID to shell gates, bound optional Rex detection, and retry timed-out process-binding reads and writes once.
+- Make the release install and first-run walkthrough work from a fresh setup.
+
 ## [0.1.0] - 2026-11-16
 
 - Publish tagged release archives and checksums; keep local development binaries and state separate from production.

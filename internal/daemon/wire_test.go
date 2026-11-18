@@ -359,8 +359,8 @@ func TestAttemptPersisterRecordsPGIDOnLatestAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	persist := newAttemptPersisterFrom(func() (tracker.Tracker, error) { return rec, nil }, slog.New(slog.DiscardHandler), func(int) (string, error) { return "test:identity", nil })
-	if err := persist("ses-1", 4242); err != nil {
+	persist := newAttemptPersisterFrom(func(context.Context) (tracker.Tracker, error) { return rec, nil }, slog.New(slog.DiscardHandler), func(int) (string, error) { return "test:identity", nil })
+	if err := persist(t.Context(), "ses-1", 4242); err != nil {
 		t.Fatal(err)
 	}
 
@@ -379,8 +379,8 @@ func TestAttemptPersisterRecordsPGIDOnLatestAttempt(t *testing.T) {
 func TestAttemptPersisterCreatesFirstAttempt(t *testing.T) {
 	t.Parallel()
 	rec := newPgidRecorder()
-	persist := newAttemptPersisterFrom(func() (tracker.Tracker, error) { return rec, nil }, slog.New(slog.DiscardHandler), func(int) (string, error) { return "test:identity", nil })
-	if err := persist("fresh-1", 7); err != nil {
+	persist := newAttemptPersisterFrom(func(context.Context) (tracker.Tracker, error) { return rec, nil }, slog.New(slog.DiscardHandler), func(int) (string, error) { return "test:identity", nil })
+	if err := persist(t.Context(), "fresh-1", 7); err != nil {
 		t.Fatal(err)
 	}
 
@@ -452,17 +452,17 @@ func TestCloseSessionPreservesShutdownDeadlineAfterCancellation(t *testing.T) {
 func TestAttemptPersisterRetriesOpeningAfterTransientFailure(t *testing.T) {
 	rec := newPgidRecorder()
 	calls := 0
-	persist := newAttemptPersisterFrom(func() (tracker.Tracker, error) {
+	persist := newAttemptPersisterFrom(func(context.Context) (tracker.Tracker, error) {
 		calls++
-		if calls == 1 {
+		if calls <= 2 {
 			return nil, context.DeadlineExceeded
 		}
 		return rec, nil
 	}, slog.New(slog.DiscardHandler), func(int) (string, error) { return "test:identity", nil })
-	if err := persist("recovery", 1234); !errors.Is(err, context.DeadlineExceeded) {
+	if err := persist(t.Context(), "recovery", 1234); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("first persistence error = %v", err)
 	}
-	if err := persist("recovery", 1234); err != nil {
+	if err := persist(t.Context(), "recovery", 1234); err != nil {
 		t.Fatal(err)
 	}
 	if got := rec.recorded(); len(got) != 1 || got[0].ProcessIdentity != "test:identity" {
@@ -719,5 +719,118 @@ func TestSwitchingBackToPiStartsUniqueConversation(t *testing.T) {
 	res, err := runner.RunTurn(t.Context(), symphony.TurnRequest{SessionID: "issue", ThreadID: "codex-thread", ThreadHarness: "codex", Turn: 1})
 	if err != nil || res.ThreadID == sessionIDFor("issue") {
 		t.Fatalf("stale conversation: %+v %v", res, err)
+	}
+}
+
+type timeoutBindingTracker struct {
+	*pgidRecorder
+	reads, writes int
+}
+
+func (t *timeoutBindingTracker) Attempts(ctx context.Context, sessionID string) ([]tracker.Attempt, error) {
+	t.reads++
+	if t.reads == 1 {
+		return nil, context.DeadlineExceeded
+	}
+	return t.pgidRecorder.Attempts(ctx, sessionID)
+}
+
+func (t *timeoutBindingTracker) PutAttempt(ctx context.Context, a tracker.Attempt) error {
+	t.writes++
+	if err := t.pgidRecorder.PutAttempt(ctx, a); err != nil {
+		return err
+	}
+	if t.writes == 1 {
+		return context.DeadlineExceeded // The first write may have succeeded despite the timeout.
+	}
+	return nil
+}
+
+func TestAttemptPersisterRetriesTimedOutBinding(t *testing.T) {
+	t.Parallel()
+	tr := &timeoutBindingTracker{pgidRecorder: newPgidRecorder()}
+	persist := newAttemptPersisterFrom(func(context.Context) (tracker.Tracker, error) { return tr, nil }, slog.New(slog.DiscardHandler), func(int) (string, error) { return "test:identity", nil })
+	if err := persist(t.Context(), "session", 42); err != nil {
+		t.Fatal(err)
+	}
+	attempts, err := tr.pgidRecorder.Attempts(t.Context(), "session")
+	if err != nil || len(attempts) != 1 || attempts[0].PGID != 42 || tr.reads != 2 || tr.writes != 2 {
+		t.Fatalf("retry lost or duplicated binding: attempts=%+v reads=%d writes=%d err=%v", attempts, tr.reads, tr.writes, err)
+	}
+}
+
+func TestRetryPersistDoesNotRetryPermanentErrors(t *testing.T) {
+	t.Parallel()
+	permanent := errors.New("permission denied")
+	calls := 0
+	err := retryPersistTimeout(t.Context(), func(context.Context) error { calls++; return permanent })
+	if !errors.Is(err, permanent) || calls != 1 {
+		t.Fatalf("permanent error: calls=%d err=%v", calls, err)
+	}
+}
+
+func TestAttemptPersisterObservesDeadlineWhileWaitingForOpen(t *testing.T) {
+	t.Parallel()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+	persist := newAttemptPersisterFrom(func(ctx context.Context) (tracker.Tracker, error) {
+		close(started)
+		select {
+		case <-release:
+			return newPgidRecorder(), nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}, slog.New(slog.DiscardHandler), func(int) (string, error) { return "test:identity", nil })
+	first := make(chan error, 1)
+	go func() { first <- persist(t.Context(), "first", 41) }()
+	<-started
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	second := make(chan error, 1)
+	go func() { second <- persist(ctx, "second", 42) }()
+	select {
+	case err := <-second:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("persist waiting for open: got %v, want deadline exceeded", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("persist did not stop waiting at the deadline")
+	}
+	select {
+	case err := <-first:
+		t.Fatalf("first opener should still hold the lock, got %v", err)
+	default:
+	}
+}
+
+func TestRetryPersistUsesSharedDeadline(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	want, _ := ctx.Deadline()
+	calls := 0
+	err := retryPersistTimeout(ctx, func(attempt context.Context) error {
+		calls++
+		if got, ok := attempt.Deadline(); !ok || !got.Equal(want) {
+			t.Fatalf("attempt deadline = %v, want transaction deadline %v", got, want)
+		}
+		if calls == 1 {
+			return context.DeadlineExceeded
+		}
+		<-attempt.Done()
+		return attempt.Err()
+	})
+	if !errors.Is(err, context.DeadlineExceeded) || calls != 2 {
+		t.Fatalf("shared deadline: calls=%d err=%v", calls, err)
+	}
+	err = retryPersistTimeout(ctx, func(context.Context) error {
+		t.Fatal("expired transaction must not start another operation")
+		return nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expired transaction: %v", err)
 	}
 }
