@@ -229,15 +229,16 @@ func (k keyMap) FullHelp() [][]key.Binding {
 
 // Model is the Bubble Tea dashboard model.
 type Model struct {
-	path          string
-	keys          keyMap
-	trackerPath   string
-	palette       *commandPalette
-	commandStatus string
-	commandErr    error
-	queueTask     func(string) (string, error)
-	queuePending  bool
-	showActivity  bool
+	path           string
+	keys           keyMap
+	trackerPath    string
+	palette        *commandPalette
+	commandStatus  string
+	commandErr     error
+	queueTask      func(string) (string, error)
+	queueWorkflows []QueueWorkflow
+	queuePending   bool
+	showActivity   bool
 
 	list     list.Model
 	delegate list.DefaultDelegate
@@ -1003,6 +1004,9 @@ func detailContent(run daemon.LiveRun, width int) string {
 		row("Attempt:", fmt.Sprintf("%d", run.Attempt)),
 		row("Turn:", fmt.Sprintf("%d", run.Turn)),
 	}
+	if run.Workflow != "" {
+		left = append(left, row("Workflow:", run.Workflow))
+	}
 	if run.Thread != "" {
 		left = append(left, row("Thread:", run.Thread))
 	}
@@ -1112,10 +1116,11 @@ func tick() tea.Cmd {
 }
 
 // Run starts the dashboard and blocks until the user quits.
-func Run(ctx context.Context, path, trackerPath string, queue func(string) (string, error)) error {
+func Run(ctx context.Context, path, trackerPath string, queue func(string) (string, error), workflows ...QueueWorkflow) error {
 	model := New(path)
 	model.trackerPath = trackerPath
 	model.queueTask = queue
+	model.queueWorkflows = workflows
 	return run(ctx, model)
 }
 

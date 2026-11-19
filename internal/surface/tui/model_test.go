@@ -642,3 +642,29 @@ func TestAttentionFiltersAndReturnsToQueue(t *testing.T) {
 		t.Fatal("return did not restore the queue")
 	}
 }
+
+func TestQueuePaletteUsesOnlySelectedWorkflow(t *testing.T) {
+	m := withSnapshot(t, newSized(t))
+	selected := ""
+	for _, name := range []string{"Repo", "Fleet"} {
+		m.queueWorkflows = append(m.queueWorkflows, QueueWorkflow{
+			Name: name,
+			Queue: func(title string) (string, error) {
+				selected = name + ":" + title
+				return "ac-42", nil
+			},
+		})
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Fleet")})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Check this PR")})
+	_, enqueue := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if enqueue == nil || selected != "" {
+		t.Fatal("queue should submit through a command only after confirmation")
+	}
+	m.Update(enqueue())
+	if selected != "Fleet:Check this PR" {
+		t.Fatalf("selected %q", selected)
+	}
+}

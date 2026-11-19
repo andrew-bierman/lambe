@@ -3,6 +3,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -38,6 +39,7 @@ usage:
   lambe status  [-config FILE] print the morning report
   lambe mcp     [-config FILE] serve lambe's MCP tools over stdio
   lambe logs    [-config FILE] [-issue ID] [-follow] [-json] show agent output
+  lambe enqueue [-config FILE] -workflow NAME [-apply] ISSUE_ID
   lambe tui     [-config FILE | -demo]                 interactive dashboard (split panes, scrollback)
   lambe version print build information
 `
@@ -60,6 +62,11 @@ func main() {
 		if err := runDaemon(args[1:]); err != nil {
 			logging.Default().Error("lambe run failed", "error", err.Error())
 			os.Exit(exitCodeFor(err))
+		}
+	case "enqueue":
+		if err := runEnqueue(args[1:], os.Stdout); err != nil {
+			logging.Default().Error("queueing task failed", "error", err)
+			os.Exit(1)
 		}
 	case "logs", "tui":
 		if err := runLive(args[1:], args[0] == "tui", os.Stdin, os.Stdout); err != nil {
@@ -501,6 +508,19 @@ func requireGates(cfg *config.Config) error {
 		return errors.New("no trackers configured; run lambe init or configure a local tracker")
 	}
 	dir := filepath.Join(cfg.Trackers[0].Path, ".beads", "formulas")
+	if len(cfg.Workflows) > 0 {
+		for _, route := range cfg.Workflows {
+			gateDir := cmp.Or(route.GateDir, dir)
+			if err := requireGateDir(gateDir); err != nil {
+				return fmt.Errorf("workflow %s: %w", route.Name, err)
+			}
+		}
+		return nil
+	}
+	return requireGateDir(dir)
+}
+
+func requireGateDir(dir string) error {
 	specs, err := gate.LoadDir(dir)
 	if err != nil {
 		return fmt.Errorf("completion gates invalid: %w", err)

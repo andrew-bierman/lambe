@@ -238,6 +238,48 @@ work; if saved checkpoints use another root, startup names both paths and
 refuses to resume until the previous root is restored or the workspace and
 checkpoint are deliberately migrated.
 
+## Named workflows
+
+Configure multiple workflows in one daemon to use a shared Beads tracker.
+Give each workflow a distinct label and a `WORKFLOW.md` file. Use `gate_dir`
+to select a separate directory of TOML completion gates for each workflow.
+
+```yaml
+workflows:
+  - name: Repo tasks
+    label: lambe:repo
+    path: workflows/REPO.md
+    gate_dir: workflows/repo-gates
+  - name: Fleet
+    label: lambe:babysit
+    path: workflows/FLEET.md
+    gate_dir: workflows/fleet-gates
+```
+
+Paths are relative to the config file. With named workflows, put routing labels
+on the workflows instead of configuring top-level `labels`. An issue with zero
+or multiple matching routes is skipped. The command palette has a
+**Queue task** action for each workflow, and applies the correct label when
+you submit. For an existing ready issue, preview the route and then queue it:
+
+```sh
+lambe enqueue -workflow 'Repo tasks' ISSUE_ID
+lambe enqueue -workflow 'Repo tasks' -apply ISSUE_ID
+```
+
+You can also apply exactly one workflow label in Beads or a companion
+such as B9S.
+
+Named workflows share the daemon's configured harness and workspace root.
+Their instructions, hooks, and completion gates are saved in the run
+checkpoint at claim time. Edits apply to new runs. When `gate_dir` is omitted,
+the workflow uses the primary tracker's `.beads/formulas` directory.
+
+Use B9S or another Beads board to plan work and manage dependencies. Use Lambe
+to verify execution and inspect run attempts. The inspector shows the workflow,
+workspace, and native agent thread ID so you can find the same session in a
+session browser such as Show Agent.
+
 ## Watching agent work
 
 Run `lambe tui -demo` to explore the dashboard with sample active, retrying,

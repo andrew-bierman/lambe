@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -62,6 +63,8 @@ type Workflow struct {
 	// An issue must carry every listed label to be dispatched or continued.
 	RequiredLabels []string
 	Revision       Revision
+	Name           string
+	GateSpec       json.RawMessage
 }
 
 // EnvLookup resolves an environment variable name to its value, reporting

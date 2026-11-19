@@ -23,11 +23,19 @@ type paletteCommand struct {
 	run   func() tea.Cmd
 }
 
+// QueueWorkflow describes an explicitly selectable workflow in the queue palette.
+type QueueWorkflow struct {
+	Name    string
+	Preview string
+	Queue   func(string) (string, error)
+}
+
 type commandPalette struct {
 	input     textinput.Model
 	commands  []paletteCommand
 	selected  int
 	queueForm bool
+	workflow  QueueWorkflow
 }
 
 type commandResult struct {
@@ -79,15 +87,26 @@ func (m *Model) openPalette() tea.Cmd {
 			return openDirectoryShell(m.trackerPath)
 		}})
 	}
-	if !m.queuePending && (m.queueTask != nil || m.path == "") {
-		p.commands = append(p.commands, paletteCommand{"Queue an agent task", func() tea.Cmd {
-			p.queueForm = true
-			p.input.SetValue("")
-			p.input.Placeholder = "Task title"
-			p.input.CharLimit = 160
-			m.palette = p
-			return nil
-		}})
+	if !m.queuePending {
+		choices := m.queueWorkflows
+		if len(choices) == 0 && (m.queueTask != nil || m.path == "") {
+			choices = []QueueWorkflow{{Queue: m.queueTask}}
+		}
+		for _, choice := range choices {
+			label := "Queue an agent task"
+			if choice.Name != "" {
+				label = "Queue task · " + choice.Name
+			}
+			p.commands = append(p.commands, paletteCommand{label, func() tea.Cmd {
+				p.queueForm = true
+				p.workflow = choice
+				p.input.SetValue("")
+				p.input.Placeholder = "Task title"
+				p.input.CharLimit = 160
+				m.palette = p
+				return nil
+			}})
+		}
 	}
 	m.palette = p
 	return p.input.Focus()
@@ -101,7 +120,7 @@ func (m *Model) updatePalette(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		m.palette = nil
-		return m.submitTask(title)
+		return m.submitTask(title, p.workflow.Queue)
 	}
 	switch msg.Type {
 	case tea.KeyCtrlC:
@@ -154,11 +173,15 @@ func (m *Model) renderPalette() string {
 	}
 	lines = append(lines, dimStyle.Render("↑↓ select   Enter run   Esc close"))
 	if p.queueForm {
-		lines = []string{
-			headerStyle.Width(width).MaxWidth(width).Render("Queue an agent task"),
-			p.input.View(),
-			dimStyle.Render("Enter queue   Esc cancel"),
+		title := "Queue an agent task"
+		if p.workflow.Name != "" {
+			title = "Queue task · " + p.workflow.Name
 		}
+		lines = []string{headerStyle.Width(width).MaxWidth(width).Render(title), p.input.View()}
+		if p.workflow.Preview != "" && m.height >= 8 {
+			lines = append(lines, dimStyle.Render(p.workflow.Preview))
+		}
+		lines = append(lines, dimStyle.Render("Enter queue   Esc cancel"))
 	}
 	return m.centerPanel(lines, width, frame)
 }
@@ -175,7 +198,7 @@ func (m *Model) centerPanel(lines []string, width int, frame bool) string {
 		lipgloss.NewStyle().MaxHeight(m.height).Render(content))
 }
 
-func (m *Model) submitTask(title string) tea.Cmd {
+func (m *Model) submitTask(title string, queue func(string) (string, error)) tea.Cmd {
 	if m.path == "" {
 		id := fmt.Sprintf("demo-%d", 42+len(m.snapshot.Runs))
 		m.snapshot.Runs = append(m.snapshot.Runs, daemon.LiveRun{
@@ -190,7 +213,7 @@ func (m *Model) submitTask(title string) tea.Cmd {
 	m.commandStatus = "Queuing…"
 	m.queuePending = true
 	return func() tea.Msg {
-		id, err := m.queueTask(title)
+		id, err := queue(title)
 		if err != nil {
 			return commandResult{err: err, queued: true}
 		}

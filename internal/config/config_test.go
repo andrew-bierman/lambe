@@ -316,3 +316,34 @@ func TestLabelsRejectNonList(t *testing.T) {
 		t.Fatal("non-list labels should be rejected")
 	}
 }
+
+func TestNamedWorkflowConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		body      string
+		wantError bool
+	}{
+		{"valid", "workflows:\n  - name: General\n    label: lambe:general\n    path: GENERAL.md\n    gate_dir: gates/general\n", false},
+		{"invalid collection", "workflows: typo\n", true},
+		{"duplicate label", "workflows:\n  - {name: A, label: route, path: A.md}\n  - {name: B, label: Route, path: B.md}\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "lambe.yaml")
+			if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(Options{File: path, Env: []string{}})
+			if tc.wantError {
+				if err == nil {
+					t.Fatal("expected invalid workflow configuration to fail")
+				}
+				return
+			}
+			if err != nil || len(cfg.Workflows) != 1 || cfg.WorkflowPath != filepath.Join(dir, "GENERAL.md") ||
+				cfg.Workflows[0].GateDir != filepath.Join(dir, "gates", "general") {
+				t.Fatalf("unexpected workflow config: %+v, %v", cfg, err)
+			}
+		})
+	}
+}

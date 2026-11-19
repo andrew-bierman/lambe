@@ -51,6 +51,14 @@ type ACP struct {
 	Command []string
 }
 
+// NamedWorkflow maps a Beads routing label to a workflow file.
+type NamedWorkflow struct {
+	Name    string
+	Label   string
+	Path    string
+	GateDir string
+}
+
 // Config is the fully resolved daemon configuration.
 type Config struct {
 	// WorkspaceRoot overrides the per-issue workspace directory; empty uses the state directory.
@@ -65,6 +73,7 @@ type Config struct {
 	// workflow_path override if set, otherwise the first existing candidate
 	// from DefaultWorkflowPath's search order.
 	WorkflowPath string
+	Workflows    []NamedWorkflow
 	// Labels is the opt-in work lane: when non-empty, the daemon claims
 	// only issues that carry every listed label. An empty slice (the
 	// default) dispatches every ready issue, preserving the pre-filter
@@ -198,6 +207,38 @@ func Load(opts Options) (*Config, error) {
 		}
 	}
 
+	routes := k.Slices("workflows")
+	if raw := k.Get("workflows"); raw != nil {
+		items, ok := raw.([]any)
+		if !ok || len(items) == 0 || len(items) != len(routes) {
+			return nil, fmt.Errorf("workflows must be a non-empty YAML list of workflow mappings")
+		}
+	}
+	workflowNames, workflowLabels := map[string]bool{}, map[string]bool{}
+	for _, raw := range routes {
+		name := strings.TrimSpace(raw.String("name"))
+		label := strings.ToLower(strings.TrimSpace(raw.String("label")))
+		path := strings.TrimSpace(raw.String("path"))
+		if name == "" || label == "" || path == "" || strings.ContainsAny(label, ", \t\n\r") {
+			return nil, fmt.Errorf("each workflow requires a name, a single label, and a path")
+		}
+		if workflowNames[name] || workflowLabels[label] {
+			return nil, fmt.Errorf("duplicate workflow name or label: %s (%s)", name, label)
+		}
+		if opts.File != "" && !filepath.IsAbs(path) {
+			path = filepath.Join(filepath.Dir(opts.File), path)
+		}
+		gateDir := strings.TrimSpace(raw.String("gate_dir"))
+		if gateDir != "" && opts.File != "" && !filepath.IsAbs(gateDir) {
+			gateDir = filepath.Join(filepath.Dir(opts.File), gateDir)
+		}
+		workflowNames[name], workflowLabels[label] = true, true
+		cfg.Workflows = append(cfg.Workflows, NamedWorkflow{Name: name, Label: label, Path: path, GateDir: gateDir})
+	}
+	if len(cfg.Workflows) > 0 && len(cfg.Labels) > 0 {
+		return nil, fmt.Errorf("use workflow labels instead of top-level labels when workflows are configured")
+	}
+
 	if cfg.WorkspaceRoot != "" {
 		if strings.IndexByte(cfg.WorkspaceRoot, 0) >= 0 {
 			return nil, fmt.Errorf("workspace.root must not contain NUL")
@@ -213,7 +254,11 @@ func Load(opts Options) (*Config, error) {
 	}
 
 	if cfg.WorkflowPath == "" {
-		cfg.WorkflowPath = DefaultWorkflowPath(cfg.Trackers)
+		if len(cfg.Workflows) > 0 {
+			cfg.WorkflowPath = cfg.Workflows[0].Path
+		} else {
+			cfg.WorkflowPath = DefaultWorkflowPath(cfg.Trackers)
+		}
 	}
 
 	if errs := validate(cfg); len(errs) > 0 {

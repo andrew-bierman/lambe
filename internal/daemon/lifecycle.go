@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/andrew-bierman/lambe/internal/config"
+	"github.com/andrew-bierman/lambe/internal/gate"
 	"github.com/andrew-bierman/lambe/internal/httpstate"
 	"github.com/andrew-bierman/lambe/internal/mcp"
 	"github.com/andrew-bierman/lambe/internal/surface/rex"
@@ -337,6 +339,50 @@ func (d *Daemon) Run(ctx context.Context) error {
 		l := symphony.NewLoop(filtered, loader, d.asm.Runner, d.asm.Gates, spaces, d.log)
 		if d.opts.Config != nil {
 			l.DispatchLabels = d.opts.Config.Labels
+			if routes := d.opts.Config.Workflows; len(routes) > 0 {
+				l.WorkflowRoutes = make(map[string]*symphony.Loader, len(routes))
+				for _, route := range routes {
+					routeLoader := loader
+					if route.Path != d.opts.WorkflowPath {
+						routeLoader, err = symphony.NewLoader(route.Path, symphony.OSEnv, d.log)
+						if err != nil {
+							return fmt.Errorf("load workflow %s: %w", route.Name, err)
+						}
+					}
+					l.WorkflowRoutes[route.Label] = routeLoader
+				}
+				l.PrepareWorkflow = func(label string, wf symphony.Workflow) (symphony.Workflow, error) {
+					dir := formulaDir(primaryDir)
+					for _, route := range routes {
+						if route.Label == label {
+							wf.Name = route.Name
+							if route.GateDir != "" {
+								dir = route.GateDir
+							}
+							break
+						}
+					}
+					specs, err := gate.LoadDir(dir)
+					if err != nil {
+						return wf, err
+					}
+					if len(specs) == 0 {
+						return wf, fmt.Errorf("no completion gates in %s", dir)
+					}
+					wf.GateSpec, err = json.Marshal(specs)
+					return wf, err
+				}
+				for label, routeLoader := range l.WorkflowRoutes {
+					if routeLoader == loader {
+						continue
+					}
+					go func() {
+						if err := routeLoader.Watch(runCtx); err != nil {
+							d.log.Warn("workflow watcher stopped", "label", label, "error", err)
+						}
+					}()
+				}
+			}
 		}
 		l.Observe = view.progress
 		if runner, ok := d.asm.Runner.(*harnessRunner); ok {

@@ -2,6 +2,7 @@ package gate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -298,7 +299,13 @@ func (r *Runner) ShouldDispatch(ctx context.Context, issue string) (bool, error)
 // gate), so a defer here would collide with the caller's own retry
 // scheduling and reconcile.
 func (r *Runner) Evaluate(ctx context.Context, req symphony.GateRequest) (symphony.GateOutcome, error) {
-	specs, err := r.ensurePin(req.Revision)
+	var specs []Spec
+	var err error
+	if len(req.GateSpec) > 0 {
+		err = json.Unmarshal(req.GateSpec, &specs)
+	} else {
+		specs, err = r.ensurePin(req.Revision)
+	}
 	if err != nil {
 		return r.settleErr(ctx, req, "gate config unreadable: "+err.Error(), true)
 	}

@@ -83,17 +83,28 @@ func runLive(args []string, useTUI bool, _ io.Reader, out io.Writer) error {
 			trackerPath = cfg.Trackers[0].Path
 		}
 		var queue func(string) (string, error)
+		var workflows []tui.QueueWorkflow
 		if trackerPath != "" {
-			queue = func(title string) (string, error) {
+			create := func(title string, labels []string) (string, error) {
 				local, err := tracker.NewLocal("", trackerPath, "lambe@"+daemon.DefaultMachine())
 				if err != nil {
 					return "", err
 				}
-				issue, err := local.CreateTask(ctx, title, cfg.Labels)
+				issue, err := local.CreateTask(ctx, title, labels)
 				return issue.ID, err
 			}
+			if len(cfg.Workflows) == 0 {
+				queue = func(title string) (string, error) { return create(title, cfg.Labels) }
+			}
+			for _, route := range cfg.Workflows {
+				workflows = append(workflows, tui.QueueWorkflow{
+					Name:    route.Name,
+					Preview: fmt.Sprintf("%s · %s", cfg.Harness, route.Label),
+					Queue:   func(title string) (string, error) { return create(title, []string{route.Label}) },
+				})
+			}
 		}
-		return tui.Run(ctx, path, trackerPath, queue)
+		return tui.Run(ctx, path, trackerPath, queue, workflows...)
 	}
 
 	return runLogsFollow(path, issue, follow, asJSON, out)

@@ -1242,3 +1242,32 @@ func TestGateErrorsEscalateToTerminal(t *testing.T) {
 		t.Fatalf("runner calls = %d, want 1: a gate error never re-prompts the agent", len(calls))
 	}
 }
+
+func TestNamedWorkflowDispatchSkipsUnroutedAndAmbiguousIssues(t *testing.T) {
+	work := func(TurnRequest) TurnResult { return TurnResult{Exit: TurnSuccess} }
+	f := newFixture(t, "General task: {{ issue.title }}", work, work)
+	fleetPath := filepath.Join(f.dir, "FLEET.md")
+	if err := os.WriteFile(fleetPath, []byte("---\n---\nFleet task: {{ issue.title }}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fleet, err := NewLoader(fleetPath, fixedEnv(nil), f.loop.Log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.loop.WorkflowRoutes = map[string]*Loader{"lambe:general": f.loader, "lambe:fleet": fleet}
+	f.tr.issues["i-1"] = tracker.Issue{ID: "i-1", Title: "Fix tests", Status: "ready", Labels: []string{"lambe:general"}}
+	f.tr.issues["i-2"] = tracker.Issue{ID: "i-2", Title: "Check PRs", Status: "ready", Labels: []string{"lambe:fleet"}}
+	f.tr.issues["i-3"] = tracker.Issue{ID: "i-3", Title: "Ambiguous", Status: "ready", Labels: []string{"lambe:general", "lambe:fleet"}}
+	f.tr.issues["i-4"] = tracker.Issue{ID: "i-4", Title: "Unrouted", Status: "ready"}
+	if err := f.loop.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string]string{}
+	for _, request := range f.runner.recorded() {
+		got[request.Issue.ID] = request.Prompt
+	}
+	if len(got) != 2 || !strings.Contains(got["i-1"], "General task: Fix tests") || !strings.Contains(got["i-2"], "Fleet task: Check PRs") {
+		t.Fatalf("unexpected dispatches: %+v", got)
+	}
+}

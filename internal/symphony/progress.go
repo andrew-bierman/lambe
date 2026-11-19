@@ -13,6 +13,7 @@ type Progress struct {
 	Workspace string
 	WakeAt    time.Time
 	LastGate  string
+	Workflow  string
 }
 
 func (l *Loop) progress(s *session, phase string, retry *Retry) {
@@ -22,6 +23,7 @@ func (l *Loop) progress(s *session, phase string, retry *Retry) {
 	p := Progress{IssueID: s.issue.ID, Title: s.issue.Title, Phase: phase, Attempt: s.attempt, Turn: s.turn, Thread: s.thread, Workspace: s.workspace}
 	const maxGatePreview = 2048
 	p.LastGate = s.lastGate[:min(maxGatePreview, len(s.lastGate))]
+	p.Workflow = s.wf.Name
 	if retry != nil {
 		p.WakeAt = retry.At
 	}

@@ -1533,3 +1533,24 @@ func TestNeedsHumanFallsBackToBlocked(t *testing.T) {
 		t.Fatalf("parking reason missing from comments:\n%s", comments)
 	}
 }
+
+func TestCheckpointGateSnapshotSurvivesRunnerRestart(t *testing.T) {
+	dir := t.TempDir()
+	writeFormula(t, dir, "tests", "type = \"shell\"\ncommand = \"exit 0\"")
+	specs, err := gate.LoadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := json.Marshal(specs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFormula(t, dir, "tests", "type = \"shell\"\ncommand = \"exit 1\"")
+	r := newTestRunner(t, dir, newFakeHub(), newMemKV(), gate.OsExec, nil)
+	req := reqWithWorkspace(t, 1, symphony.Revision("named-workflow"))
+	req.GateSpec = snapshot
+	outcome, err := r.Evaluate(t.Context(), req)
+	if err != nil || outcome.Verdict != symphony.GateGreen {
+		t.Fatalf("checkpoint-pinned gate: verdict=%v err=%v", outcome.Verdict, err)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -106,6 +107,7 @@ type GateRequest struct {
 	Attempt   int
 	Workspace string
 	Revision  Revision
+	GateSpec  json.RawMessage
 	Output    string
 }
 
@@ -534,7 +536,11 @@ type Loop struct {
 	// listed label (opt-in work lane). An empty slice dispatches every
 	// ready issue.
 	DispatchLabels []string
-	RetryCap       time.Duration
+	// WorkflowRoutes maps routing labels to named workflow loaders.
+	WorkflowRoutes map[string]*Loader
+	// PrepareWorkflow snapshots deployment-specific settings before the claim is persisted.
+	PrepareWorkflow func(label string, workflow Workflow) (Workflow, error)
+	RetryCap        time.Duration
 	// ControlTimeout bounds each formula trigger and materialization.
 	// Non-positive values use the tracker command timeout; agent turns
 	// retain their own runner deadlines.
@@ -713,13 +719,11 @@ func (l *Loop) serviceRetries(ctx context.Context) error {
 // whose claim wins. Issues are sorted by priority and filtered by workflow
 // required_labels and blocked-by metadata.
 func (l *Loop) dispatch(ctx context.Context) error {
-	issues, err := l.Tracker.Dispatchable(ctx, tracker.DispatchQuery{Statuses: l.DispatchStatuses, Labels: l.DispatchLabels})
+	issues, err := l.dispatchCandidates(ctx)
 	if err != nil {
 		return fmt.Errorf("dispatch read: %w", err)
 	}
-
-	wf := l.Loader.Current()
-	issues = sortIssuesForDispatch(issues, wf.RequiredLabels)
+	issues = sortIssuesForDispatch(issues, nil)
 
 	for _, issue := range issues {
 		// Record creation and its blocked-state update are separate tracker writes.
@@ -746,6 +750,10 @@ func (l *Loop) dispatch(ctx context.Context) error {
 		if _, recovering := l.recovery[issue.ID]; recovering {
 			continue
 		}
+		wf, routeLabel := l.dispatchWorkflow(issue)
+		if wf == nil {
+			continue
+		}
 		s := &session{issue: issue, wf: wf, key: issue.ID}
 		kind := RetryFailure
 		if l.CheckpointDir != "" {
@@ -766,6 +774,14 @@ func (l *Loop) dispatch(ctx context.Context) error {
 				l.Log.Error("cannot read continuation; refusing fresh attempt", "issue", issue.ID, "error", readErr)
 				continue
 			}
+		}
+		if s.wf == wf && l.PrepareWorkflow != nil {
+			prepared, err := l.PrepareWorkflow(routeLabel, *wf)
+			if err != nil {
+				l.Log.Error("cannot prepare workflow; skipping claim", "issue", issue.ID, "error", err)
+				continue
+			}
+			s.wf = &prepared
 		}
 		if err := l.saveCheckpoint(s, checkpointClaiming, &Retry{IssueID: issue.ID, Kind: kind, At: time.Now()}); err != nil {
 			l.Log.Error("cannot persist prospective claim", "issue", issue.ID, "error", err)
@@ -791,10 +807,58 @@ func (l *Loop) dispatch(ctx context.Context) error {
 			}
 		}
 		l.sessions[claimed.ID] = s
-		l.Log.Info("issue claimed", "issue", claimed.ID, "revision", wf.Revision)
+		l.Log.Info("issue claimed", "issue", claimed.ID, "revision", s.wf.Revision)
 		l.start(ctx, s, kind)
 	}
 	return nil
+}
+
+func (l *Loop) dispatchCandidates(ctx context.Context) ([]tracker.Issue, error) {
+	if len(l.WorkflowRoutes) == 0 {
+		return l.Tracker.Dispatchable(ctx, tracker.DispatchQuery{Statuses: l.DispatchStatuses, Labels: l.DispatchLabels})
+	}
+	seen := map[string]bool{}
+	var candidates []tracker.Issue
+	for label := range l.WorkflowRoutes {
+		issues, err := l.Tracker.Dispatchable(ctx, tracker.DispatchQuery{Statuses: l.DispatchStatuses, Labels: []string{label}})
+		if err != nil {
+			return nil, err
+		}
+		for _, issue := range issues {
+			if !seen[issue.ID] {
+				seen[issue.ID] = true
+				candidates = append(candidates, issue)
+			}
+		}
+	}
+	return candidates, nil
+}
+
+func (l *Loop) dispatchWorkflow(issue tracker.Issue) (*Workflow, string) {
+	loader := l.Loader
+	chosen := ""
+	if len(l.WorkflowRoutes) > 0 {
+		loader = nil
+		for _, label := range issue.Labels {
+			if route := l.WorkflowRoutes[label]; route != nil {
+				if chosen != "" && chosen != label {
+					l.Log.Warn("multiple workflow labels; skipping issue", "issue", issue.ID)
+					return nil, ""
+				}
+				loader, chosen = route, label
+			}
+		}
+	}
+	if loader == nil {
+		return nil, ""
+	}
+	wf := loader.Current()
+	for _, label := range wf.RequiredLabels {
+		if !slices.Contains(issue.Labels, label) {
+			return nil, ""
+		}
+	}
+	return wf, chosen
 }
 
 // sortIssuesForDispatch orders issues by Symphony §8.2 priority rules and
@@ -1114,6 +1178,7 @@ func (w *worker) evaluateGate(ctx context.Context, s *session, output string, lo
 		Attempt:   s.attempt,
 		Workspace: s.workspace,
 		Revision:  s.wf.Revision,
+		GateSpec:  s.wf.GateSpec,
 		Output:    output,
 	})
 	if gerr != nil || outcome.Verdict == GateErr {

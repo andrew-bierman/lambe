@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -52,6 +53,17 @@ func (l *Local) CreateTask(ctx context.Context, title string, labels []string) (
 		return Issue{}, err
 	}
 	return decodeOneIssue(result.Data)
+}
+
+// AddWorkflowLabel adds a routing label without replacing existing labels.
+func (l *Local) AddWorkflowLabel(ctx context.Context, id, label string) error {
+	if id == "" || strings.HasPrefix(id, "-") {
+		return fmt.Errorf("invalid task ID %q", id)
+	}
+	_, err := l.shell.run(ctx, []string{
+		"update", id, "--add-label", label, "--json",
+	})
+	return err
 }
 
 // Init creates the tracker's .beads/ storage if the directory has none.
