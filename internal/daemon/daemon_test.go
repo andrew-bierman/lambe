@@ -494,6 +494,7 @@ func TestTrackerOrphansSkipsFailingAttemptsRead(t *testing.T) {
 	tr.issues["broken"] = tracker.Issue{ID: "broken", Status: "in_progress", Assignee: "lambe@test"}
 	tr.issues["healthy"] = tracker.Issue{ID: "healthy", Status: "in_progress", Assignee: "lambe@test"}
 	tr.attemptsErr["broken"] = errors.New("journal unreadable")
+	tr.metadataErr[tracker.MetaKind+"="+tracker.KindAttempt] = errors.New("grouped journal unreadable")
 	tr.attempts["healthy"] = []tracker.Attempt{{SessionID: "healthy", Number: 1, PGID: 4242}}
 
 	orphans, err := TrackerOrphans{Tracker: tr}.Orphans(context.Background())
@@ -608,7 +609,7 @@ func TestFilteredTrackerSkipsForeignMachines(t *testing.T) {
 	tr.issues["local-1"] = tracker.Issue{ID: "local-1", Status: "ready"}
 	tr.issues["foreign"] = tracker.Issue{ID: "foreign", Status: "ready", Metadata: map[string]string{"labels": "lambe/machine:elsewhere"}}
 	tr.issues["pinned-here"] = tracker.Issue{ID: "pinned-here", Status: "ready", Metadata: map[string]string{"labels": "lambe/machine:boxy"}}
-	tr.issues["running-elsewhere"] = tracker.Issue{ID: "running-elsewhere", Status: "ready", Metadata: map[string]string{"labels": "bug,lambe/machine:other"}}
+	tr.issues["running-elsewhere"] = tracker.Issue{ID: "running-elsewhere", Status: "ready", Labels: []string{"bug", "lambe/machine:other"}}
 
 	filtered := &FilteredTracker{
 		Tracker: tr,
@@ -984,5 +985,24 @@ func TestHeartbeatLoopBoundsBeatConcurrency(t *testing.T) {
 	}
 	if peak := tr.peakInFlight(); peak > heartbeatConcurrency {
 		t.Errorf("peak concurrent beats = %d, want at most %d", peak, heartbeatConcurrency)
+	}
+}
+
+func TestTrackerOrphansReadsAttemptsInBulk(t *testing.T) {
+	tr := newFakeTracker()
+	for _, id := range []string{"tracked", "no-attempt"} {
+		tr.issues[id] = tracker.Issue{ID: id, Status: tracker.StatusInProgress}
+	}
+	tr.attempts["tracked"] = []tracker.Attempt{
+		{SessionID: "tracked", Number: 1, PGID: 111},
+		{SessionID: "tracked", Number: 2, PGID: 222},
+	}
+	orphans, err := (TrackerOrphans{Tracker: tr}).Orphans(t.Context())
+	if err != nil || len(orphans) != 1 || orphans[0].PGID != 222 {
+		t.Fatalf("orphans = %+v, error = %v", orphans, err)
+	}
+	attempts, metadata := tr.readCounts()
+	if attempts != 0 || metadata != 1 {
+		t.Fatalf("attempt reads = %d, grouped reads = %d", attempts, metadata)
 	}
 }

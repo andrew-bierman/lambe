@@ -180,9 +180,18 @@ func (t TrackerOrphans) Orphans(ctx context.Context) ([]Orphan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read in-progress sessions: %w", err)
 	}
+	if len(issues) == 0 {
+		return nil, nil
+	}
+	records, bulkErr := t.Tracker.ListByMetadata(ctx, tracker.MetaKind, tracker.KindAttempt)
+	grouped := tracker.GroupAttempts(records)
 	var orphans []Orphan
 	for _, issue := range issues {
-		attempts, err := t.Tracker.Attempts(ctx, issue.ID)
+		attempts := grouped[issue.ID]
+		var err error
+		if bulkErr != nil {
+			attempts, err = t.Tracker.Attempts(ctx, issue.ID)
+		}
 		if err != nil {
 			log.Warn("orphan scan: attempts read failed, skipping session",
 				"session", issue.ID, "category", ErrorCategory(err), "error", err)

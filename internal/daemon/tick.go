@@ -84,7 +84,10 @@ func (m MetadataLabelSource) Labels(ctx context.Context, issueID string) ([]stri
 	if !ok {
 		return nil, nil
 	}
-	raw := issue.Metadata["labels"]
+	raw, stamped := issue.Metadata["labels"]
+	if !stamped {
+		return issue.Labels, nil
+	}
 	if raw == "" {
 		return nil, nil
 	}
@@ -94,8 +97,8 @@ func (m MetadataLabelSource) Labels(ctx context.Context, issueID string) ([]stri
 // FilteredTracker wraps a tracker and enforces the fixed label-skip rule on
 // every dispatch read: issues labeled for another machine are never
 // dispatched here. Labels are read from the "labels" metadata key already
-// present on each dispatch result; the LabelSource fallback runs only for
-// issues that carry no such key, and its failure is logged with the issue
+// present on each dispatch result or from native tracker labels; the LabelSource
+// fallback runs only when neither representation is available, and its failure is logged with the issue
 // kept — an unreadable affinity never silently drops work.
 type FilteredTracker struct {
 	tracker.Tracker
@@ -117,7 +120,7 @@ func (f *FilteredTracker) Dispatchable(ctx context.Context, q tracker.DispatchQu
 	out := issues[:0]
 	for _, issue := range issues {
 		labels := labelsOf(issue)
-		if _, stamped := issue.Metadata["labels"]; !stamped && f.Labels != nil {
+		if _, stamped := issue.Metadata["labels"]; !stamped && issue.Labels == nil && f.Labels != nil {
 			fallback, lerr := f.Labels.Labels(ctx, issue.ID)
 			if lerr != nil {
 				if f.Log != nil {
@@ -140,10 +143,12 @@ func (f *FilteredTracker) Dispatchable(ctx context.Context, q tracker.DispatchQu
 	return out, nil
 }
 
-// labelsOf splits an issue's comma-separated "labels" metadata value; an
-// absent key yields nil, an empty value yields no labels.
+// labelsOf prefers legacy metadata when stamped, otherwise it uses native labels.
 func labelsOf(issue tracker.Issue) []string {
-	raw := issue.Metadata["labels"]
+	raw, stamped := issue.Metadata["labels"]
+	if !stamped {
+		return issue.Labels
+	}
 	if raw == "" {
 		return nil
 	}
