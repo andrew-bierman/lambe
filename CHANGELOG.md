@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Add an Attention view for retries and failed gates, with the latest rejection visible in the inspector.
+- Make agent output easier to scan with tool-result markers and fewer repeated tool-start lines.
+- Add optional Rex actions for opening the dashboard and demo, including a native picker on supported versions.
+
 - Adapt the terminal dashboard to narrow screens and keep filtered selection and follow mode stable across refreshes and resizes.
 - Expose the current issue ID to shell gates, bound optional Rex detection, and retry timed-out process-binding reads and writes once.
 - Make the release install and first-run walkthrough work from a fresh setup.

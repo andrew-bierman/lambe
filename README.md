@@ -56,6 +56,11 @@ Release binaries report their version, commit and build date. Upgrading a binary
 does not upgrade a running daemon: stop it in its owning terminal, then restart.
 Add `~/.local/bin` to your `PATH` to use the `lambe` command by name.
 
+### Explore the dashboard
+
+Run `lambe tui -demo` to try the dashboard before setting up a tracker or agent.
+Press `h` for history or `:` for commands. The demo runs entirely in memory.
+
 ### Run a disposable task
 
 Install [Beads](https://github.com/gastownhall/beads) (`bd`) and authenticate
@@ -235,6 +240,7 @@ The TUI exits with Ctrl-C or `q`. Keybindings:
 
 - `j`/`k` or `↑`/`↓` — move through the run list
 - `:` or `Ctrl-P` — search commands, inspect a run, or open a shell in its workspace or the Beads tracker
+- `a` — show retries, deferred or interrupted runs, and failed gates
 - `h` — switch between the run queue and recent attempt history
 - `Tab` — switch focus between the run list and the detail pane
 - `/` — filter runs. While filtering, `Esc` clears the filter.
@@ -250,6 +256,14 @@ In Rex the daemon reports an OSC status badge in its own pane. Rex is optional;
 agent execution stays headless and the views work in a normal terminal. A
 stopped daemon's output is labeled historical, using its native process identity
 rather than a reusable PID alone.
+
+For optional Rex command-palette shortcuts, add the actions in
+[contrib/rex/lambe.lua](contrib/rex/lambe.lua) to your Rex `init.lua`. Run
+`rex config check` and `rex config reload`, then search for **Lambe** in the
+palette. **Open Dashboard** uses your default Lambe config. **Open Demo**
+needs no tracker. On Rex servers and clients with custom prompts (control API
+revision 17 or later), **Choose Dashboard…** offers both in a native picker.
+The actions use `lambe` from the Rex terminal's PATH.
 
 The private live snapshot keeps owned work visible and trims completed history
 when it reaches 100 issues,

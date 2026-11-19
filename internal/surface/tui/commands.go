@@ -55,6 +55,7 @@ func (m *Model) openPalette() tea.Cmd {
 	p.input.Placeholder = "Search commands"
 	p.commands = []paletteCommand{
 		{"Show run queue", func() tea.Cmd { m.setHistory(false); m.setFocus(focusList); return nil }},
+		{"Show runs needing attention", func() tea.Cmd { m.setQueueView(false, true); m.setFocus(focusList); return nil }},
 		{"Show attempt history", func() tea.Cmd { m.setHistory(true); m.setFocus(focusList); return nil }},
 		{"Show activity chart", func() tea.Cmd { m.showActivity = true; return nil }},
 	}

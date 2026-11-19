@@ -244,27 +244,27 @@ func TestViewContainsExpectedContent(t *testing.T) {
 func TestNarrowViewSwitchesPanesAndShowsFilter(t *testing.T) {
 	m := withSnapshot(t, newSized(t))
 	m.Update(tea.WindowSizeMsg{Width: 36, Height: 14})
-	if view := m.View(); !strings.Contains(view, "enter details") || strings.Contains(view, "--- output ---") {
+	if view := m.View(); !strings.Contains(view, "enter details") || strings.Contains(view, "Agent output") {
 		t.Fatalf("expected run picker and details shortcut:\n%s", view)
 	}
 
 	m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	if view := m.View(); !strings.Contains(view, "second issue") ||
-		!strings.Contains(view, "--- output ---") || !strings.Contains(view, "esc runs") ||
+		!strings.Contains(view, "Agent output") || !strings.Contains(view, "esc runs") ||
 		strings.Contains(view, "first issue") {
 		t.Fatalf("expected details for selected run:\n%s", view)
 	}
 
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	if view := m.View(); !strings.Contains(view, "Filter: a") || strings.Contains(view, "--- output ---") {
+	if view := m.View(); !strings.Contains(view, "Filter: a") || strings.Contains(view, "Agent output") {
 		t.Fatalf("expected visible filter input:\n%s", view)
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	if view := m.View(); !strings.Contains(view, "│") || !strings.Contains(view, "--- output ---") {
+	if view := m.View(); !strings.Contains(view, "│") || !strings.Contains(view, "Agent output") {
 		t.Fatalf("expected split layout after resizing:\n%s", view)
 	}
 }
@@ -275,11 +275,11 @@ func TestNarrowEnterAndEscapeSwitchPanes(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if view := m.View(); !strings.Contains(view, "esc runs") ||
-		!strings.Contains(view, "second issue") || !strings.Contains(view, "--- output ---") {
+		!strings.Contains(view, "second issue") || !strings.Contains(view, "Agent output") {
 		t.Fatalf("expected selected run details after enter:\n%s", view)
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if view := m.View(); !strings.Contains(view, "enter details") || strings.Contains(view, "--- output ---") {
+	if view := m.View(); !strings.Contains(view, "enter details") || strings.Contains(view, "Agent output") {
 		t.Fatalf("expected run picker after escape:\n%s", view)
 	}
 }
@@ -303,7 +303,7 @@ func TestResizeRevealsFilterWhileDetailHasFocus(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	m.Update(tea.WindowSizeMsg{Width: 36, Height: 14})
 
-	if view := m.View(); !strings.Contains(view, "Filter:") || strings.Contains(view, "--- output ---") {
+	if view := m.View(); !strings.Contains(view, "Filter:") || strings.Contains(view, "Agent output") {
 		t.Fatalf("expected filter to stay visible after resizing:\n%s", view)
 	}
 }
@@ -606,5 +606,39 @@ func TestPhoneWidthKeepsCoreControlsVisible(t *testing.T) {
 		if !strings.Contains(view, "esc runs G end : cmd ?") || !strings.Contains(view, "demo-42") {
 			t.Fatalf("%d columns hid inspector controls or run identity:\n%s", width, view)
 		}
+	}
+}
+
+func TestTranscriptCollapsesOnlyConsecutiveDuplicateStarts(t *testing.T) {
+	input := "tool started: read\ntool started: read\ntool finished: read (error=false)\ntool started: read\ntool finished: read (error=true)\nFinal answer"
+	got := formatTranscript(input)
+	for _, want := range []string{"› read", "✓ read", "✕ read", "Final answer"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("transcript missing %q: %s", want, got)
+		}
+	}
+	if strings.Count(got, "› read") != 2 {
+		t.Fatalf("expected distinct starts to survive: %s", got)
+	}
+}
+
+func TestAttentionFiltersAndReturnsToQueue(t *testing.T) {
+	m := newSized(t)
+	m.Update(snapshotMsg{snapshot: demoSnapshot(time.Now()), alive: true})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if len(m.list.Items()) != 2 || !strings.Contains(m.View(), "Attention") {
+		t.Fatalf("expected retry and failed gate:\n%s", m.View())
+	}
+	if run, ok := m.selectedRun(); !ok || run.Phase != "retry" {
+		t.Fatalf("expected retry selected, got %+v", run)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 32, Height: 14})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !strings.Contains(m.View(), "Last gate rejection") {
+		t.Fatalf("resize hid the retry reason:\n%s", m.View())
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if len(m.list.Items()) != 5 {
+		t.Fatal("return did not restore the queue")
 	}
 }
