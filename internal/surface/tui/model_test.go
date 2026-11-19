@@ -701,3 +701,23 @@ func TestWideLayoutPrioritizesRunList(t *testing.T) {
 		}
 	}
 }
+
+func TestStackedInspectorResizesAndRoutesWheel(t *testing.T) {
+	m := withSnapshot(t, newSized(t))
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 24})
+	if !m.stacked || m.detail.Height >= m.list.Height() {
+		t.Fatalf("expected a smaller inspector below the list, got %d and %d rows", m.detail.Height, m.list.Height())
+	}
+	if w, h := lipgloss.Size(m.View()); w > 60 || h > 24 {
+		t.Fatalf("stacked view measures %dx%d", w, h)
+	}
+	selected := m.list.Index()
+	m.Update(tea.MouseMsg{Y: 2 + m.list.Height() + 3*m.panelInset + 1, Button: tea.MouseButtonWheelDown})
+	if m.list.Index() != selected {
+		t.Fatal("scrolling the lower pane moved the list selection")
+	}
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 12})
+	if m.stacked {
+		t.Fatal("short terminal should show one pane at a time")
+	}
+}

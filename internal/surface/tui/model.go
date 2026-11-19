@@ -97,23 +97,23 @@ type runItem struct {
 }
 
 func (i runItem) Title() string {
-	title := i.run.IssueID
+	icon, _ := phasePresentation(i.run.Phase)
+	phase := strings.SplitN(i.run.Phase, ":", 2)[0]
+	if phase == "stopped" {
+		if i.run.Phase == "stopped: gate green" {
+			phase = "passed"
+		} else {
+			phase = "stopped"
+		}
+	}
+	title := i.run.IssueID + " · " + icon + " " + phase
 	if i.run.Title != "" {
 		title += " · " + i.run.Title
 	}
 	return title
 }
 
-func (i runItem) Description() string {
-	desc := phaseLabel(i.run.Phase)
-	if i.run.Attempt > 0 {
-		desc += fmt.Sprintf(" · attempt %d", i.run.Attempt)
-	}
-	if i.run.Turn > 0 {
-		desc += fmt.Sprintf(" · turn %d", i.run.Turn)
-	}
-	return desc
-}
+func (i runItem) Description() string { return "" }
 
 func (i runItem) FilterValue() string {
 	return strings.Join([]string{i.run.IssueID, i.run.Title, i.run.Phase}, " ")
@@ -240,11 +240,10 @@ type Model struct {
 	queuePending   bool
 	showActivity   bool
 
-	list     list.Model
-	delegate list.DefaultDelegate
-	detail   viewport.Model
-	help     help.Model
-	spinner  spinner.Model
+	list    list.Model
+	detail  viewport.Model
+	help    help.Model
+	spinner spinner.Model
 
 	snapshot        daemon.LiveSnapshot
 	alive           bool
@@ -260,6 +259,7 @@ type Model struct {
 	loading         bool
 	paneHeaders     bool
 	panelInset      int
+	stacked         bool
 }
 
 // snapshotMsg carries a freshly read live snapshot.
@@ -280,13 +280,15 @@ func New(path string) *Model {
 	}
 	m.keys = defaultKeyMap(&m.focus)
 	delegate := list.NewDefaultDelegate()
+	delegate.ShowDescription = false
+	delegate.SetHeight(1)
+	delegate.SetSpacing(0)
 	accent := lipgloss.AdaptiveColor{Light: "#6941A5", Dark: "#C5A7FF"}
 	selection := lipgloss.AdaptiveColor{Light: "#EBE1FF", Dark: "#29203A"}
 	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
 		Bold(true).Foreground(accent).Background(selection).BorderForeground(accent)
 	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.
 		Foreground(accent).Background(selection).BorderForeground(accent)
-	m.delegate = delegate
 	m.list = list.New(nil, delegate, 0, 0)
 	m.list.SetShowHelp(false)
 	m.list.SetShowTitle(false)
@@ -541,11 +543,17 @@ func (m *Model) scrollMouse(msg tea.MouseMsg) {
 	if m.paneHeaders {
 		firstRow++
 	}
-	if msg.Y < firstRow || msg.Y >= firstRow+m.list.Height() {
-		return
-	}
 	pane := m.focus
-	if m.width >= splitWidth {
+	height := m.list.Height()
+	switch {
+	case m.stacked:
+		pane = focusList
+		if msg.Y >= firstRow+m.list.Height() {
+			firstRow += m.list.Height() + 2*m.panelInset + 1
+			pane = focusDetail
+			height = m.detail.Height
+		}
+	case m.width >= splitWidth:
 		switch {
 		case msg.X < m.list.Width()+4*m.panelInset:
 			pane = focusList
@@ -554,6 +562,9 @@ func (m *Model) scrollMouse(msg tea.MouseMsg) {
 		default:
 			return
 		}
+	}
+	if msg.Y < firstRow || msg.Y >= firstRow+height {
+		return
 	}
 	if pane == focusDetail {
 		m.detail, _ = m.detail.Update(msg)
@@ -601,15 +612,16 @@ func (m *Model) layout() {
 		listWidth -= 4
 		detailWidth -= 4
 	}
-	spacing := 1
-	if m.width < splitWidth {
-		spacing = 0
+	m.stacked = m.width >= 44 && m.width < splitWidth && bodyHeight >= 13
+	listHeight, detailHeight := bodyHeight, bodyHeight
+	if m.stacked {
+		availableHeight := bodyHeight - 1 - 2*m.panelInset
+		detailHeight = availableHeight * 2 / 5
+		listHeight = availableHeight - detailHeight
 	}
-	m.delegate.SetSpacing(spacing)
-	m.list.SetDelegate(m.delegate)
-	m.list.SetSize(listWidth, bodyHeight)
+	m.list.SetSize(listWidth, listHeight)
 	m.detail.Width = detailWidth
-	m.detail.Height = bodyHeight
+	m.detail.Height = detailHeight
 }
 
 func (m *Model) setHistory(show bool) {
@@ -834,7 +846,7 @@ func (m *Model) renderQueueTabs() string {
 }
 
 func (m *Model) renderBody() string {
-	if m.width < splitWidth && m.focus == focusDetail {
+	if m.width < splitWidth && !m.stacked && m.focus == focusDetail {
 		return m.renderInspector()
 	}
 	queueContent := m.list.View()
@@ -864,6 +876,9 @@ func (m *Model) renderBody() string {
 		listView = lipgloss.JoinVertical(lipgloss.Left, m.paneHeader(queue, m.list.Width(), focusList), listView)
 	}
 	listView = m.framePanel(listView, focusList)
+	if m.stacked {
+		return lipgloss.JoinVertical(lipgloss.Left, listView, m.renderInspector())
+	}
 	if m.width < splitWidth {
 		return listView
 	}
