@@ -5,3 +5,8 @@
 /lambe
 /tmp/
 /.dev/
+
+# Swift dashboard build artifacts (keep out of tracked source)
+apps/dashboard/DerivedData/
+apps/dashboard/.build/
+apps/dashboard/*.xcodeproj/xcuserdata/
