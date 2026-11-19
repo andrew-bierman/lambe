@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
@@ -34,6 +35,8 @@ import (
 	"github.com/charmbracelet/x/term"
 
 	"github.com/andrew-bierman/lambe/internal/daemon"
+	"github.com/andrew-bierman/lambe/internal/symphony"
+	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
 const (
@@ -239,6 +242,12 @@ type Model struct {
 	queueWorkflows []QueueWorkflow
 	queuePending   bool
 	showActivity   bool
+	readiness      func() ([]tracker.ReadinessRow, error)
+	upcoming       []daemon.LiveRun
+	readinessErr   error
+
+	sessionContext context.Context
+	agentSession   agentSessionMsg
 
 	list    list.Model
 	detail  viewport.Model
@@ -272,6 +281,22 @@ type snapshotMsg struct {
 // tickMsg triggers the next snapshot read.
 type tickMsg time.Time
 
+type readinessMsg struct {
+	rows []tracker.ReadinessRow
+	err  error
+}
+
+func (m *Model) readReadiness(after time.Duration) tea.Cmd {
+	read := m.readiness
+	if read == nil {
+		return nil
+	}
+	return tea.Tick(after, func(time.Time) tea.Msg {
+		rows, err := read()
+		return readinessMsg{rows, err}
+	})
+}
+
 // New creates a dashboard that reads the live snapshot at path.
 func New(path string) *Model {
 	m := &Model{
@@ -299,6 +324,11 @@ func New(path string) *Model {
 
 	m.help = help.New()
 	m.help.ShowAll = false
+	shortcut := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#382553", Dark: "#EADFFF"}).Bold(true)
+	helpText := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#51485E", Dark: "#BEB5CB"})
+	m.help.Styles.ShortKey, m.help.Styles.FullKey = shortcut, shortcut
+	m.help.Styles.ShortDesc, m.help.Styles.FullDesc = helpText, helpText
+	m.help.Styles.ShortSeparator, m.help.Styles.FullSeparator = helpText, helpText
 
 	m.spinner = spinner.New()
 	m.spinner.Spinner = spinner.Dot
@@ -310,7 +340,7 @@ func (m *Model) Init() tea.Cmd {
 	if m.path == "" {
 		return nil
 	}
-	return tea.Batch(readSnapshot(m.path), tick(), m.spinner.Tick)
+	return tea.Batch(readSnapshot(m.path), tick(), m.spinner.Tick, m.readReadiness(0))
 }
 
 // Update implements tea.Model.
@@ -358,6 +388,47 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshDetail(!m.showHistory && !m.showAttention && m.detail.AtBottom())
 		}
 		return m, nil
+
+	case agentSessionMsg:
+		if selected, ok := m.selectedRun(); ok && selected.Thread == msg.thread {
+			m.agentSession = msg
+			m.setFocus(focusDetail)
+			m.refreshDetail(false)
+			m.detail.GotoTop()
+		}
+		return m, nil
+
+	case readinessMsg:
+		m.readinessErr = msg.err
+		if msg.err == nil {
+			upcoming := make([]daemon.LiveRun, 0, len(msg.rows))
+			for _, row := range msg.rows {
+				phase := "ready"
+				reason := row.Reason
+				if row.Blocked {
+					phase = "blocked"
+					var blockers []string
+					for _, blocker := range row.Blockers {
+						blockers = append(blockers, blocker.ID+" · "+blocker.Title)
+					}
+					if len(blockers) > 0 {
+						reason += "\n\nBlocked by\n" + strings.Join(blockers, "\n")
+					}
+				}
+				upcoming = append(upcoming, daemon.LiveRun{
+					Progress: symphony.Progress{IssueID: cleanTaskText(row.ID), Title: strings.Join(strings.Fields(cleanTaskText(row.Title)), " "), Phase: phase},
+					Tail:     reason,
+				})
+			}
+			if !slices.Equal(m.upcoming, upcoming) {
+				m.upcoming = upcoming
+				if !m.showHistory {
+					m.setRuns(m.visibleRuns())
+					m.refreshDetail(false)
+				}
+			}
+		}
+		return m, m.readReadiness(15 * time.Second)
 
 	case list.FilterMatchesMsg:
 		// The current results were applied synchronously; this message may be stale.
@@ -655,18 +726,24 @@ func (m *Model) setQueueView(history, attention bool) {
 }
 
 func (m *Model) visibleRuns() []daemon.LiveRun {
-	if m.showAttention {
-		var runs []daemon.LiveRun
+	if !m.showHistory {
+		if !m.showAttention && len(m.upcoming) == 0 {
+			return m.snapshot.Runs
+		}
+		runs := make([]daemon.LiveRun, 0, len(m.snapshot.Runs)+len(m.upcoming))
+		seen := make(map[string]bool, len(m.snapshot.Runs))
 		for _, run := range m.snapshot.Runs {
-			switch run.Phase {
-			case "retry", "deferred", "interrupted", "stopped: gate escalation", "stopped: gate red":
+			seen[run.IssueID] = true
+			if !m.showAttention || needsAttention(run.Phase) {
+				runs = append(runs, run)
+			}
+		}
+		for _, run := range m.upcoming {
+			if !seen[run.IssueID] && (!m.showAttention || run.Phase == "blocked") {
 				runs = append(runs, run)
 			}
 		}
 		return runs
-	}
-	if !m.showHistory {
-		return m.snapshot.Runs
 	}
 	history := slices.Clone(m.snapshot.History)
 	for _, run := range m.snapshot.Runs {
@@ -678,6 +755,14 @@ func (m *Model) visibleRuns() []daemon.LiveRun {
 		return b.UpdatedAt.Compare(a.UpdatedAt)
 	})
 	return history
+}
+
+func needsAttention(phase string) bool {
+	switch phase {
+	case "retry", "deferred", "interrupted", "stopped: gate escalation", "stopped: gate red":
+		return true
+	}
+	return false
 }
 
 // setRuns replaces the list contents while preserving the selected issue.
@@ -742,7 +827,15 @@ func (m *Model) refreshDetail(follow bool) {
 		m.detail.SetContent(dimStyle.Render("No active run. Output appears here when a run starts."))
 		return
 	}
-	m.detail.SetContent(detailContent(run, m.detail.Width))
+	content := detailContent(run, m.detail.Width)
+	if run.Thread != "" && run.Thread == m.agentSession.thread {
+		info := m.agentSession.details
+		if m.agentSession.err != nil {
+			info = "Agent session · " + cleanTaskText(m.agentSession.err.Error())
+		}
+		content = ansi.Wrap(info, max(1, m.detail.Width), "") + "\n\n" + content
+	}
+	m.detail.SetContent(content)
 	if follow {
 		m.detail.GotoBottom()
 	} else {
@@ -761,7 +854,7 @@ func (m *Model) View() string {
 	if m.palette != nil {
 		return m.renderPalette()
 	}
-	if m.loading && m.snapshot.UpdatedAt.IsZero() {
+	if m.loading && m.snapshot.UpdatedAt.IsZero() && len(m.upcoming) == 0 {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
 			ansi.Truncate(m.spinner.View()+" Waiting for lambe daemon...", m.width, "…"))
 	}
@@ -812,6 +905,9 @@ func (m *Model) renderHeader() string {
 		text = "lambe  ·  " + m.commandStatus
 	} else if m.err != nil {
 		text += " · " + errorStyle.Render("read error: "+truncate(m.err.Error(), 60))
+	}
+	if m.readinessErr != nil && !m.showHistory {
+		text += " · Beads unavailable"
 	}
 	if m.path == "" {
 		text = "Demo" + strings.TrimPrefix(text, "lambe")
@@ -1024,9 +1120,21 @@ func (m *Model) renderFooter() string {
 }
 
 // detailContent formats one run for the detail viewport.
+func cleanTaskText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r != '\n' && (unicode.IsControl(r) || unicode.In(r, unicode.Cf)) {
+			return -1
+		}
+		return r
+	}, ansi.Strip(s))
+}
+
 func detailContent(run daemon.LiveRun, width int) string {
 	if width < 1 {
 		width = 80
+	}
+	if run.Phase == "ready" || run.Phase == "blocked" {
+		return ansi.Wrap(strings.TrimSpace(cleanTaskText(run.Title)+"\n\n"+cleanTaskText(run.Tail)), width, "")
 	}
 	var sections []string
 
@@ -1126,6 +1234,10 @@ func phasePresentation(phase string) (string, lipgloss.Style) {
 	switch {
 	case phase == "running":
 		return "▶", runningStyle
+	case phase == "ready":
+		return "◇", greenStyle
+	case phase == "blocked":
+		return "!", retryStyle
 	case phase == "gating" || phase == "preparing" || phase == "claiming":
 		return "◉", gatingStyle
 	case phase == "stopped: gate green":
@@ -1165,10 +1277,12 @@ func tick() tea.Cmd {
 }
 
 // Run starts the dashboard and blocks until the user quits.
-func Run(ctx context.Context, path, trackerPath string, queue func(string) (string, error), workflows ...QueueWorkflow) error {
+func Run(ctx context.Context, path, trackerPath string, queue func(string) (string, error), readiness func() ([]tracker.ReadinessRow, error), workflows ...QueueWorkflow) error {
 	model := New(path)
 	model.trackerPath = trackerPath
 	model.queueTask = queue
+	model.readiness = readiness
+	model.sessionContext = ctx
 	model.queueWorkflows = workflows
 	return run(ctx, model)
 }

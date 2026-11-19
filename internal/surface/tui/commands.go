@@ -2,6 +2,9 @@ package tui
 
 import (
 	"cmp"
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -76,6 +79,11 @@ func (m *Model) openPalette() tea.Cmd {
 				return nil
 			}},
 		)
+		if m.sessionContext != nil && run.Thread != "" {
+			p.commands = append(p.commands, paletteCommand{"Show agent session details", func() tea.Cmd {
+				return readAgentSession(m.sessionContext, run.Thread)
+			}})
+		}
 		if m.path != "" && run.Workspace != "" {
 			p.commands = append(p.commands, paletteCommand{"Open run workspace shell", func() tea.Cmd {
 				return openDirectoryShell(run.Workspace)
@@ -229,4 +237,44 @@ func openDirectoryShell(path string) tea.Cmd {
 	cmd := exec.Command(shell) // #nosec G204 G702 -- launch the user's configured shell without interpolating arguments.
 	cmd.Dir = path
 	return tea.ExecProcess(cmd, func(err error) tea.Msg { return commandResult{err: err} })
+}
+
+type agentSessionMsg struct {
+	thread  string
+	details string
+	err     error
+}
+
+func readAgentSession(ctx context.Context, thread string) tea.Cmd {
+	return func() tea.Msg {
+		result := agentSessionMsg{thread: thread}
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "showagent", "list", "--json")
+		cmd.WaitDelay = time.Second
+		output, err := cmd.Output()
+		if err != nil {
+			result.err = fmt.Errorf("Show Agent: %w", err)
+			return result
+		}
+		var sessions []struct{ ID, Provider, Workspace, Updated string }
+		if err := json.Unmarshal(output, &sessions); err != nil {
+			result.err = fmt.Errorf("decode Show Agent session list: %w", err)
+			return result
+		}
+		for _, session := range sessions {
+			if session.ID != thread {
+				continue
+			}
+			if result.details != "" {
+				result.err = errors.New("multiple Show Agent sessions match this run")
+				return result
+			}
+			result.details = cleanTaskText(fmt.Sprintf("Agent session\nProvider: %s\nUpdated: %s\nWorkspace: %s", session.Provider, session.Updated, session.Workspace))
+		}
+		if result.details == "" {
+			result.err = errors.New("Show Agent has no local session for this run")
+		}
+		return result
+	}
 }

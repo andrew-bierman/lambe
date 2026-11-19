@@ -15,6 +15,8 @@ implements the OpenAI Symphony specification (§18.1, pinned to commit
 repo, or an in-repo `.beads` directory. lambe is not affiliated with OpenAI;
 the Symphony specification is Apache-2.0 and is attributed in source headers.
 
+![Lambe demo dashboard showing active, ready, and blocked work](docs/assets/dashboard.png)
+
 ## Why
 
 Autonomous agents stop for reasons that are nobody's fault: they finish a task
@@ -284,6 +286,17 @@ session browser such as Show Agent.
 
 Run `lambe tui -demo` to explore the dashboard with sample active, retrying,
 passed, and failed runs. The demo runs in memory and needs no daemon or tracker.
+
+Queue includes ready and blocked Beads tasks for the configured labels.
+Attention surfaces blockers alongside failed or retrying runs. Open a
+blocked task to see the reason and dependency IDs. If Show Agent is
+installed, use `:` → **Show agent session details** on a run with a
+recorded thread to look up that exact session on this machine.
+
+[See the History screenshot](docs/assets/history.png). Refresh both
+screenshots from the repository root with
+`go build -o .dev/bin/lambe-dev ./cmd/lambe` and
+`vhs scripts/dashboard.tape`.
 
 Keep `lambe run` running, then open another terminal:
 

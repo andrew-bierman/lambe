@@ -8,20 +8,28 @@ import (
 
 	"github.com/andrew-bierman/lambe/internal/daemon"
 	"github.com/andrew-bierman/lambe/internal/symphony"
+	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
 // RunDemo opens the dashboard with sample runs held entirely in memory.
 func RunDemo(ctx context.Context) error {
 	model := New("")
 	model.Update(snapshotMsg{snapshot: demoSnapshot(time.Now()), alive: true})
+	model.Update(readinessMsg{rows: []tracker.ReadinessRow{
+		{ID: "demo-47", Title: "Document the recovery workflow", Reason: "Dependencies resolved"},
+		{ID: "demo-48", Title: "Publish migration notes", Reason: "Waiting for demo-45 · Validate the migration", Blocked: true},
+	}})
 	return run(ctx, model)
 }
 
 func demoSnapshot(now time.Time) daemon.LiveSnapshot {
 	var output strings.Builder
 	for step := range 30 {
-		fmt.Fprintf(&output, "Check %02d: macOS CI pending\n", step+1)
+		fmt.Fprintf(&output, "Build event %02d: verifying release artifacts\n", step+1)
 	}
+	output.WriteString("✓ Linux amd64 and arm64 checks passed\n")
+	output.WriteString("✓ Release archives match the manifest\n")
+	output.WriteString("… Waiting for the macOS smoke test\n")
 
 	return daemon.LiveSnapshot{
 		UpdatedAt: now,

@@ -11,6 +11,7 @@ import (
 
 	"github.com/andrew-bierman/lambe/internal/daemon"
 	"github.com/andrew-bierman/lambe/internal/symphony"
+	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
 func testSnapshot() daemon.LiveSnapshot {
@@ -719,5 +720,27 @@ func TestStackedInspectorResizesAndRoutesWheel(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 12})
 	if m.stacked {
 		t.Fatal("short terminal should show one pane at a time")
+	}
+}
+
+func TestReadinessViewsKeepHistorySeparate(t *testing.T) {
+	m := withSnapshot(t, newSized(t))
+	m.Update(readinessMsg{rows: []tracker.ReadinessRow{
+		{ID: "ac-1", Title: "Already running"},
+		{ID: "ac-4", Title: "Queued next"},
+		{ID: "ac-5", Title: "Waiting for input", Blocked: true, Reason: "Dependency open"},
+	}})
+	if runs := m.visibleRuns(); len(runs) != 5 || runs[3].Phase != "ready" || runs[4].Phase != "blocked" {
+		t.Fatalf("queue: %+v", runs)
+	}
+	m.setQueueView(false, true)
+	if runs := m.visibleRuns(); len(runs) != 3 || runs[2].IssueID != "ac-5" {
+		t.Fatalf("attention: %+v", runs)
+	}
+	m.setHistory(true)
+	for _, run := range m.visibleRuns() {
+		if run.IssueID == "ac-4" || run.IssueID == "ac-5" {
+			t.Fatalf("upcoming work leaked into history: %+v", run)
+		}
 	}
 }

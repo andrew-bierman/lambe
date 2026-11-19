@@ -462,3 +462,28 @@ func mkBenchIssue(b *testing.B, l *Local) string {
 	}
 	return issue.ID
 }
+
+func TestLocalReadinessIncludesBlocker(t *testing.T) {
+	l := newLocal(t, "lambe@readiness")
+	parent := mkIssue(t, l, "Prepare input")
+	child := mkIssue(t, l, "Process input")
+	if _, err := l.shell.run(t.Context(), []string{"dep", "add", child, parent}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := l.Readiness(t.Context(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ready, blocked bool
+	for _, row := range rows {
+		switch row.ID {
+		case parent:
+			ready = !row.Blocked
+		case child:
+			blocked = row.Blocked && len(row.Blockers) == 1 && row.Blockers[0].ID == parent
+		}
+	}
+	if !ready || !blocked {
+		t.Fatalf("expected ready parent and blocked child, got %+v", rows)
+	}
+}

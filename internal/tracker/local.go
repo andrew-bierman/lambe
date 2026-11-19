@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -119,4 +120,36 @@ func (l *Local) RecordRun(ctx context.Context, rec RunRecord) (Issue, error) {
 // the issue back to open.
 func (l *Local) ArmWake(ctx context.Context, id string, until time.Time, reason string) error {
 	return l.Defer(ctx, id, until, reason)
+}
+
+// Readiness returns a bounded view of ready tasks and dependency blockers.
+func (l *Local) Readiness(ctx context.Context, labels, anyLabels []string) ([]ReadinessRow, error) {
+	args := []string{"ready", "--explain", "--limit", "50", "--json"}
+	for _, label := range labels {
+		args = append(args, "--label="+label)
+	}
+	for _, label := range anyLabels {
+		args = append(args, "--label-any="+label)
+	}
+	result, err := l.shell.run(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	var reply struct {
+		Ready, Blocked []ReadinessRow
+	}
+	if err := json.Unmarshal(result.Data, &reply); err != nil {
+		return nil, fmt.Errorf("decode Beads readiness: %w", err)
+	}
+	for i := range reply.Blocked {
+		reply.Blocked[i].Blocked = true
+	}
+	return append(reply.Ready, reply.Blocked...), nil
+}
+
+// ReadinessRow contains the task fields needed by the dashboard.
+type ReadinessRow struct {
+	ID, Title, Reason string
+	Blocked           bool                         `json:"-"`
+	Blockers          []struct{ ID, Title string } `json:"blocked_by"`
 }

@@ -83,8 +83,26 @@ func runLive(args []string, useTUI bool, _ io.Reader, out io.Writer) error {
 			trackerPath = cfg.Trackers[0].Path
 		}
 		var queue func(string) (string, error)
+		var readiness func() ([]tracker.ReadinessRow, error)
 		var workflows []tui.QueueWorkflow
 		if trackerPath != "" {
+			readiness = func() ([]tracker.ReadinessRow, error) {
+				local, err := tracker.NewLocal("", trackerPath, "")
+				if err != nil {
+					return nil, err
+				}
+				readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				defer cancel()
+				var routes []string
+				for _, route := range cfg.Workflows {
+					routes = append(routes, route.Label)
+				}
+				labels := cfg.Labels
+				if len(routes) > 0 {
+					labels = nil
+				}
+				return local.Readiness(readCtx, labels, routes)
+			}
 			create := func(title string, labels []string) (string, error) {
 				local, err := tracker.NewLocal("", trackerPath, "lambe@"+daemon.DefaultMachine())
 				if err != nil {
@@ -104,7 +122,7 @@ func runLive(args []string, useTUI bool, _ io.Reader, out io.Writer) error {
 				})
 			}
 		}
-		return tui.Run(ctx, path, trackerPath, queue, workflows...)
+		return tui.Run(ctx, path, trackerPath, queue, readiness, workflows...)
 	}
 
 	return runLogsFollow(path, issue, follow, asJSON, out)
