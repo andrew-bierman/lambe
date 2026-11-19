@@ -35,7 +35,7 @@ available. This command uses `curl`, `tar`, and either `shasum` or `sha256sum`.
 ```sh
 (
 set -eu
-version=0.8.0
+version=0.8.4
 case "$(uname -s)" in
   Darwin) os=darwin ;;
   Linux) os=linux ;;

@@ -254,7 +254,7 @@ func readAgentSession(ctx context.Context, thread string) tea.Cmd {
 		cmd.WaitDelay = time.Second
 		output, err := cmd.Output()
 		if err != nil {
-			result.err = fmt.Errorf("Show Agent: %w", err)
+			result.err = fmt.Errorf("could not list Show Agent sessions: %w", err)
 			return result
 		}
 		var sessions []struct{ ID, Provider, Workspace, Updated string }
@@ -273,7 +273,7 @@ func readAgentSession(ctx context.Context, thread string) tea.Cmd {
 			result.details = cleanTaskText(fmt.Sprintf("Agent session\nProvider: %s\nUpdated: %s\nWorkspace: %s", session.Provider, session.Updated, session.Workspace))
 		}
 		if result.details == "" {
-			result.err = errors.New("Show Agent has no local session for this run")
+			result.err = errors.New("no local Show Agent session matches this run")
 		}
 		return result
 	}
