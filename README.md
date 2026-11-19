@@ -12,10 +12,13 @@
 lambe is an MIT-licensed Go supervisor daemon for autonomous coding agents. It
 implements the OpenAI Symphony specification (§18.1, pinned to commit
 `8001b52`) and is Beads-native: it works against a Beads hub clone, a standalone
-repo, or an in-repo `.beads` directory. lambe is not affiliated with OpenAI;
-the Symphony specification is Apache-2.0 and is attributed in source headers.
+repo, or an in-repo `.beads` directory.
 
 ![Lambe demo dashboard showing active, ready, and blocked work](docs/assets/dashboard.png)
+
+**Use Lambe from the Rex command palette.** Open the live dashboard or demo
+in its own tab, see run history and Beads blockers, and keep the daemon running
+when the tab closes. [Set up Lambe in Rex](contrib/rex/README.md).
 
 ## Why
 
@@ -29,56 +32,30 @@ verified completion, is the product.
 
 ## Quickstart
 
-Install a checksummed release on macOS or Linux. Intel and ARM64 builds are
-available. This command uses `curl`, `tar`, and either `shasum` or `sha256sum`.
+Install a checksummed release on macOS or Linux (Intel and ARM64). The
+installer verifies the archive against the release checksum before extracting
+it and installs `lambe` to `~/.local/bin`. Set `LAMBE_VERSION` to pin a
+release (default `0.8.4`) and `LAMBE_INSTALL_DIR` to change the destination.
+
+Once the repository is public:
 
 ```sh
-(
-set -eu
-version=0.8.4
-case "$(uname -s)" in
-  Darwin) os=darwin ;;
-  Linux) os=linux ;;
-  *) printf 'Unsupported OS: %s\n' "$(uname -s)" >&2; exit 1 ;;
-esac
-case "$(uname -m)" in
-  arm64|aarch64) arch=arm64 ;;
-  x86_64|amd64) arch=amd64 ;;
-  *) printf 'Unsupported architecture: %s\n' "$(uname -m)" >&2; exit 1 ;;
-esac
-archive="lambe_${version}_${os}_${arch}.tar.gz"
-base="https://github.com/andrew-bierman/lambe/releases/download/v$version"
-install_dir=$(mktemp -d)
-trap 'rm -rf "$install_dir"' EXIT
-if [ "${LAMBE_PRIVATE_RELEASE:-0}" = 1 ]; then
-  gh release download "v$version" --repo andrew-bierman/lambe \
-    --dir "$install_dir" --pattern "$archive" --pattern checksums.txt
-else
-  curl -fsSL "$base/$archive" -o "$install_dir/$archive"
-  curl -fsSL "$base/checksums.txt" -o "$install_dir/checksums.txt"
-fi
-(
-  cd "$install_dir"
-  awk -v name="$archive" '$2 == name {print; found=1} END {if (!found) exit 1}' checksums.txt > selected-checksum.txt
-  if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 -c selected-checksum.txt
-  else
-    sha256sum -c selected-checksum.txt
-  fi
-  tar -xzf "$archive"
-)
-mkdir -p "$HOME/.local/bin"
-install -m 755 "$install_dir/lambe" "$HOME/.local/bin/lambe"
-"$HOME/.local/bin/lambe" version
-)
+curl -fsSL https://raw.githubusercontent.com/andrew-bierman/lambe/master/scripts/install.sh | sh
 ```
 
-While the repository is private, sign in with `gh auth login` and export
-`LAMBE_PRIVATE_RELEASE=1` before running the command. You can also download
-an archive and its checksum from the [releases page](https://github.com/andrew-bierman/lambe/releases).
+While the repository is private, authenticated collaborators can run the same
+installer through the GitHub API. Sign in with `gh auth login`, then:
 
-Release binaries report their version, commit and build date. Upgrading a binary
-does not upgrade a running daemon: stop it in its owning terminal, then restart.
+```sh
+gh api -H "Accept: application/vnd.github.raw+json" \
+  'repos/andrew-bierman/lambe/contents/scripts/install.sh?ref=master' \
+  | env LAMBE_PRIVATE_RELEASE=1 sh
+```
+
+You can also download an archive and its checksum from the
+[releases page](https://github.com/andrew-bierman/lambe/releases). Release
+binaries report their version, commit and build date. Upgrading a binary does
+not upgrade a running daemon: stop it in its owning terminal, then restart.
 Add `~/.local/bin` to your `PATH` to use the `lambe` command by name.
 
 ### Explore the dashboard
@@ -88,46 +65,12 @@ Press `h` for history or `:` for commands. The demo runs entirely in memory.
 
 ### Run a disposable task
 
-Install [Beads](https://github.com/gastownhall/beads) (`bd`) and authenticate
-[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) with
-your model provider. Lambe starts Pi when eligible work appears. For Codex or
-another ACP agent, see [Agent harnesses](#agent-harnesses).
-
-Run this in a fresh terminal. It creates a local tracker with one task, a
-separate state directory, and a workspace hook that supplies the task's input.
-
-```sh
-mkdir -p "$HOME/Code"
-demo=$(mktemp -d "$HOME/Code/lambe-demo.XXXXXX")
-cd "$demo" || exit
-git init -q
-bd init --non-interactive --prefix demo --skip-agents --skip-hooks
-lambe init -non-interactive -config "$PWD/lambe.yaml"
-
-cat > WORKFLOW.md <<'EOF'
----
-hooks:
-  after_create: "printf 'hello, lambe!\\n' > input.txt"
----
-
-Complete this task in the current workspace: {{ issue }}
-EOF
-
-cat >> .beads/formulas/keep-tests-green.formula.toml <<'EOF'
-
-[gate]
-type = "shell"
-command = "test \"$(cat greeting.txt)\" = 'HELLO, LAMBE!'"
-EOF
-
-bd create 'Write an uppercase copy of input.txt to greeting.txt' --type task
-export LAMBE_STATE_DIR="$PWD/state" LAMBE_WORKSPACE_ROOT="$PWD/workspaces"
-lambe run -config "$PWD/lambe.yaml"
-```
-
-Lambe runs the gate in the agent's workspace and closes the task when the check
-passes. Watch the daemon output, then press Ctrl-C and confirm the closure with
-`bd list --status closed` in the demo directory.
+The end-to-end walkthrough — a throwaway Beads tracker, one task, and a shell
+gate that verifies completion — is in
+[Run a disposable task](docs/OPERATIONS.md#run-a-disposable-task). It requires
+[Beads](https://github.com/gastownhall/beads) (`bd`) and an authenticated
+[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent); for
+Codex or another ACP agent, see [Agent harnesses](#agent-harnesses).
 
 ### Set up a project
 
@@ -331,18 +274,12 @@ On narrow terminals and Rex splits, the TUI shows one pane at a time and fits mo
 the selected run, `Esc` from its details to return to the run list, or `Tab`
 to switch between panes.
 
-In Rex the daemon reports an OSC status badge in its own pane. Rex is optional;
-agent execution stays headless and the views work in a normal terminal. A
-stopped daemon's output is labeled historical, using its native process identity
-rather than a reusable PID alone.
+### Rex integration
 
-For optional Rex command-palette shortcuts, add the actions in
-[contrib/rex/lambe.lua](contrib/rex/lambe.lua) to your Rex `init.lua`. Run
-`rex config check` and `rex config reload`, then search for **Lambe** in the
-palette. **Open Dashboard** uses your default Lambe config. **Open Demo**
-needs no tracker. On Rex servers and clients with custom prompts (control API
-revision 17 or later), **Choose Dashboard…** offers both in a native picker.
-The actions use `lambe` from the Rex terminal's PATH.
+Open the live dashboard or interactive demo from the Rex command palette.
+Supported Rex clients also offer a native destination picker via `rex.ui`.
+A terminal-hosted daemon can report its state through a Rex program status
+badge. [Install the actions and check compatibility](contrib/rex/README.md).
 
 The private live snapshot keeps owned work visible and trims completed history
 when it reaches 100 issues,

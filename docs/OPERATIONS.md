@@ -1,7 +1,7 @@
 # Operating lambe
 
-How to run the lambe supervisor in production: setup, the sync model, liveness
-invariants, and what to do when lambe asks for a human.
+How to run the lambe supervisor in production: setup, a disposable first task,
+the sync model, liveness invariants, and what to do when lambe asks for a human.
 
 ## Setup
 
@@ -18,6 +18,50 @@ invariants, and what to do when lambe asks for a human.
 
 The binary enforces single-instance per machine with flock, so a stray second
 `lambe run` exits instead of double-driving work.
+
+## Run a disposable task
+
+Try the full loop before pointing lambe at a tracker you care about. Install
+[Beads](https://github.com/gastownhall/beads) (`bd`) and authenticate
+[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) with
+your model provider. Lambe starts Pi when eligible work appears. For Codex or
+another ACP agent, see [Agent harnesses](../README.md#agent-harnesses).
+
+Run this in a fresh terminal. It creates a local tracker with one task, a
+separate state directory, and a workspace hook that supplies the task's input.
+
+```sh
+mkdir -p "$HOME/Code"
+demo=$(mktemp -d "$HOME/Code/lambe-demo.XXXXXX")
+cd "$demo" || exit
+git init -q
+bd init --non-interactive --prefix demo --skip-agents --skip-hooks
+lambe init -non-interactive -config "$PWD/lambe.yaml"
+
+cat > WORKFLOW.md <<'EOF'
+---
+hooks:
+  after_create: "printf 'hello, lambe!\\n' > input.txt"
+---
+
+Complete this task in the current workspace: {{ issue }}
+EOF
+
+cat >> .beads/formulas/keep-tests-green.formula.toml <<'EOF'
+
+[gate]
+type = "shell"
+command = "test \"$(cat greeting.txt)\" = 'HELLO, LAMBE!'"
+EOF
+
+bd create 'Write an uppercase copy of input.txt to greeting.txt' --type task
+export LAMBE_STATE_DIR="$PWD/state" LAMBE_WORKSPACE_ROOT="$PWD/workspaces"
+lambe run -config "$PWD/lambe.yaml"
+```
+
+Lambe runs the gate in the agent's workspace and closes the task when the check
+passes. Watch the daemon output, then press Ctrl-C and confirm the closure with
+`bd list --status closed` in the demo directory.
 
 ## The sync model
 
