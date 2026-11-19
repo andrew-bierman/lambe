@@ -94,3 +94,29 @@ func TestLiveViewCanWaitForDaemonStartupAndQuit(t *testing.T) {
 		t.Fatal("startup wait was invisible")
 	}
 }
+
+func TestLiveCommandHelpAndFlagIsolation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tui  bool
+		args []string
+		err  string
+	}{
+		{name: "dashboard help", tui: true, args: []string{"-help"}},
+		{name: "logs help", args: []string{"-help"}},
+		{name: "demo rejects config", tui: true, args: []string{"-demo", "-config", "unused.yaml"}, err: "-demo requires"},
+		{name: "dashboard rejects logs flags", tui: true, args: []string{"-json"}, err: "flag provided but not defined"},
+		{name: "logs rejects demo flag", args: []string{"-demo"}, err: "flag provided but not defined"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			err := runLive(tc.args, tc.tui, strings.NewReader(""), &out)
+			if tc.err == "" && err != nil {
+				t.Fatal(err)
+			}
+			if tc.err != "" && (err == nil || !strings.Contains(err.Error(), tc.err)) {
+				t.Fatalf("error = %v, want %q", err, tc.err)
+			}
+		})
+	}
+}

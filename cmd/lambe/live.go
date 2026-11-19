@@ -36,21 +36,26 @@ func runLive(args []string, useTUI bool, _ io.Reader, out io.Writer) error {
 	}
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	configFile := fs.String("config", "", "config file")
-	demo := fs.Bool("demo", false, "open the dashboard with sample runs")
-	issue := fs.String("issue", "", "show one issue")
-	follow := fs.Bool("follow", false, "follow live output")
-	asJSON := fs.Bool("json", false, "print the shared live snapshot as JSON")
+	var issue string
+	var demo, follow, asJSON bool
+	if useTUI {
+		fs.BoolVar(&demo, "demo", false, "open the dashboard with sample runs")
+	} else {
+		fs.StringVar(&issue, "issue", "", "show one issue")
+		fs.BoolVar(&follow, "follow", false, "follow live output")
+		fs.BoolVar(&asJSON, "json", false, "print the shared live snapshot as JSON")
+	}
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %v", fs.Args())
 	}
-	if useTUI && (*issue != "" || *follow || *asJSON) {
-		return fmt.Errorf("tui does not support -issue, -follow, or -json")
-	}
-	if *demo {
-		if !useTUI || *configFile != "" {
+	if demo {
+		if *configFile != "" {
 			return errors.New("-demo requires lambe tui without -config")
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -91,7 +96,7 @@ func runLive(args []string, useTUI bool, _ io.Reader, out io.Writer) error {
 		return tui.Run(ctx, path, trackerPath, queue)
 	}
 
-	return runLogsFollow(path, *issue, *follow, *asJSON, out)
+	return runLogsFollow(path, issue, follow, asJSON, out)
 }
 
 func runLogsFollow(path, issue string, follow, asJSON bool, out io.Writer) error {

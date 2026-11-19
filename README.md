@@ -27,31 +27,54 @@ verified completion, is the product.
 
 ## Quickstart
 
-Production installs use a tagged GitHub release archive, never a local build or
-an untagged `master` commit. For macOS on Apple Silicon:
+Install a checksummed release on macOS or Linux. Intel and ARM64 builds are
+available. This command uses `curl`, `tar`, and either `shasum` or `sha256sum`.
 
 ```sh
 (
 set -eu
+version=0.8.0
+case "$(uname -s)" in
+  Darwin) os=darwin ;;
+  Linux) os=linux ;;
+  *) printf 'Unsupported OS: %s\n' "$(uname -s)" >&2; exit 1 ;;
+esac
+case "$(uname -m)" in
+  arm64|aarch64) arch=arm64 ;;
+  x86_64|amd64) arch=amd64 ;;
+  *) printf 'Unsupported architecture: %s\n' "$(uname -m)" >&2; exit 1 ;;
+esac
+archive="lambe_${version}_${os}_${arch}.tar.gz"
+base="https://github.com/andrew-bierman/lambe/releases/download/v$version"
 install_dir=$(mktemp -d)
 trap 'rm -rf "$install_dir"' EXIT
-gh release download --repo andrew-bierman/lambe --dir "$install_dir" \
-  --pattern 'lambe_*_darwin_arm64.tar.gz' --pattern checksums.txt
-set -- "$install_dir"/lambe_*_darwin_arm64.tar.gz
-[ "$#" -eq 1 ]
-[ -f "$1" ]
-archive=$(basename "$1")
-(cd "$install_dir" && awk -v name="$archive" '$2 == name {print; found=1} END {if (!found) exit 1}' checksums.txt | shasum -a 256 -c -)
-tar -xzf "$1" -C "$install_dir"
+if [ "${LAMBE_PRIVATE_RELEASE:-0}" = 1 ]; then
+  gh release download "v$version" --repo andrew-bierman/lambe \
+    --dir "$install_dir" --pattern "$archive" --pattern checksums.txt
+else
+  curl -fsSL "$base/$archive" -o "$install_dir/$archive"
+  curl -fsSL "$base/checksums.txt" -o "$install_dir/checksums.txt"
+fi
+(
+  cd "$install_dir"
+  awk -v name="$archive" '$2 == name {print; found=1} END {if (!found) exit 1}' checksums.txt > selected-checksum.txt
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 -c selected-checksum.txt
+  else
+    sha256sum -c selected-checksum.txt
+  fi
+  tar -xzf "$archive"
+)
 mkdir -p "$HOME/.local/bin"
 install -m 755 "$install_dir/lambe" "$HOME/.local/bin/lambe"
 "$HOME/.local/bin/lambe" version
 )
 ```
 
-The `gh` CLI requires authentication (`gh auth login`), even for public
-repositories. To download without it, use the [releases page](https://github.com/andrew-bierman/lambe/releases),
-which also lists archives for other platforms.
+While the repository is private, sign in with `gh auth login` and export
+`LAMBE_PRIVATE_RELEASE=1` before running the command. You can also download
+an archive and its checksum from the [releases page](https://github.com/andrew-bierman/lambe/releases).
+
 Release binaries report their version, commit and build date. Upgrading a binary
 does not upgrade a running daemon: stop it in its owning terminal, then restart.
 Add `~/.local/bin` to your `PATH` to use the `lambe` command by name.
