@@ -43,7 +43,7 @@ func demoSnapshot(now time.Time) daemon.LiveSnapshot {
 				Tail:     "Build finished. Verifying the release manifest.",
 			},
 			{
-				Progress: symphony.Progress{IssueID: "demo-44", Title: "Retry the install smoke test", Phase: "retry", Attempt: 2, WakeAt: now.Add(time.Minute)},
+				Progress: symphony.Progress{IssueID: "demo-44", Title: "Retry the install smoke test", Phase: "retry", Attempt: 2, WakeAt: now.Add(time.Minute), LastGate: "The registry timed out during the install smoke test."},
 				Tail:     "Registry timed out. Waiting for the next retry.",
 			},
 			{

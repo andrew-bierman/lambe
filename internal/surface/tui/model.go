@@ -132,22 +132,23 @@ const (
 type keyMap struct {
 	focus *focusArea
 
-	Quit     key.Binding
-	Focus    key.Binding
-	OpenRun  key.Binding
-	Back     key.Binding
-	Help     key.Binding
-	Filter   key.Binding
-	History  key.Binding
-	Commands key.Binding
-	ScrollUp key.Binding
-	ScrollDn key.Binding
-	PageUp   key.Binding
-	PageDown key.Binding
-	GoTop    key.Binding
-	GoBottom key.Binding
-	ListUp   key.Binding
-	ListDown key.Binding
+	Quit      key.Binding
+	Focus     key.Binding
+	OpenRun   key.Binding
+	Back      key.Binding
+	Help      key.Binding
+	Filter    key.Binding
+	History   key.Binding
+	Attention key.Binding
+	Commands  key.Binding
+	ScrollUp  key.Binding
+	ScrollDn  key.Binding
+	PageUp    key.Binding
+	PageDown  key.Binding
+	GoTop     key.Binding
+	GoBottom  key.Binding
+	ListUp    key.Binding
+	ListDown  key.Binding
 }
 
 func defaultKeyMap(focus *focusArea) keyMap {
@@ -167,8 +168,9 @@ func defaultKeyMap(focus *focusArea) keyMap {
 			key.WithKeys("?"),
 			key.WithHelp("?", "help"),
 		),
-		Commands: key.NewBinding(key.WithKeys(":", "ctrl+p"), key.WithHelp(":", "commands")),
-		History:  key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "history")),
+		Commands:  key.NewBinding(key.WithKeys(":", "ctrl+p"), key.WithHelp(":", "commands")),
+		Attention: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "attention")),
+		History:   key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "history")),
 		Filter: key.NewBinding(
 			key.WithKeys("/"),
 			key.WithHelp("/", "filter"),
@@ -213,13 +215,13 @@ func (k keyMap) ShortHelp() []key.Binding {
 	if k.focus != nil && *k.focus == focusDetail {
 		return []key.Binding{k.Back, k.Commands, k.History, k.ScrollUp, k.GoBottom, k.Focus, k.Help, k.Quit}
 	}
-	return []key.Binding{k.OpenRun, k.Commands, k.History, k.Filter, k.ListDown, k.Help, k.Quit}
+	return []key.Binding{k.OpenRun, k.Commands, k.Attention, k.History, k.Filter, k.ListDown, k.Help, k.Quit}
 }
 
 // FullHelp implements help.KeyMap.
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.ListUp, k.ListDown, k.Focus, k.Filter, k.History},
+		{k.ListUp, k.ListDown, k.Focus, k.Filter, k.History, k.Attention},
 		{k.ScrollUp, k.ScrollDn, k.PageUp, k.PageDown},
 		{k.GoTop, k.GoBottom, k.Help, k.Quit},
 	}
@@ -253,6 +255,7 @@ type Model struct {
 	selectedAt      time.Time
 	selectedAttempt int
 	showHistory     bool
+	showAttention   bool
 	loading         bool
 	paneHeaders     bool
 	panelInset      int
@@ -313,7 +316,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		follow := m.detail.AtBottom()
+		follow := !m.showHistory && !m.showAttention && m.detail.AtBottom()
 		m.width = msg.Width
 		m.height = msg.Height
 		if m.width < splitWidth && m.list.FilterState() == list.Filtering {
@@ -349,7 +352,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.alive = msg.alive
 		if runsChanged || (m.showHistory && (historyChanged || aliveChanged)) {
 			m.setRuns(m.visibleRuns())
-			m.refreshDetail(m.detail.AtBottom())
+			m.refreshDetail(!m.showHistory && !m.showAttention && m.detail.AtBottom())
 		}
 		return m, nil
 
@@ -441,11 +444,14 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case key.Matches(msg, m.keys.Commands):
 		return m, m.openPalette()
+	case key.Matches(msg, m.keys.Attention):
+		m.setQueueView(false, !m.showAttention)
+		return m, nil
 	case key.Matches(msg, m.keys.History):
 		m.setHistory(!m.showHistory)
 		return m, nil
 	case key.Matches(msg, m.keys.Help):
-		follow := m.detail.AtBottom()
+		follow := !m.showHistory && !m.showAttention && m.detail.AtBottom()
 		m.help.ShowAll = !m.help.ShowAll
 		m.layout()
 		if follow {
@@ -596,11 +602,20 @@ func (m *Model) layout() {
 }
 
 func (m *Model) setHistory(show bool) {
-	if m.showHistory == show {
+	m.setQueueView(show, false)
+}
+
+func (m *Model) setQueueView(history, attention bool) {
+	if m.showHistory == history && m.showAttention == attention {
 		return
 	}
-	m.showHistory = show
-	if show {
+	m.showHistory, m.showAttention = history, attention
+	if attention {
+		m.keys.Attention.SetHelp("a", "queue")
+	} else {
+		m.keys.Attention.SetHelp("a", "attention")
+	}
+	if history {
 		m.keys.History.SetHelp("h", "queue")
 	} else {
 		m.keys.History.SetHelp("h", "history")
@@ -610,13 +625,23 @@ func (m *Model) setHistory(show bool) {
 	m.list.ResetSelected()
 	m.selectedID = ""
 	m.setRuns(m.visibleRuns())
-	m.refreshDetail(!show)
-	if show {
+	m.refreshDetail(!history && !attention)
+	if history || attention {
 		m.detail.GotoTop()
 	}
 }
 
 func (m *Model) visibleRuns() []daemon.LiveRun {
+	if m.showAttention {
+		var runs []daemon.LiveRun
+		for _, run := range m.snapshot.Runs {
+			switch run.Phase {
+			case "retry", "deferred", "interrupted", "stopped: gate escalation", "stopped: gate red":
+				runs = append(runs, run)
+			}
+		}
+		return runs
+	}
 	if !m.showHistory {
 		return m.snapshot.Runs
 	}
@@ -673,8 +698,8 @@ func (m *Model) syncSelection() {
 		m.selectedID = ""
 	}
 	if m.selectedID != previousID || (m.showHistory && (!m.selectedAt.Equal(previousAt) || m.selectedAttempt != previousAttempt)) {
-		m.refreshDetail(!m.showHistory && m.detail.AtBottom())
-		if m.showHistory {
+		m.refreshDetail(!m.showHistory && !m.showAttention && m.detail.AtBottom())
+		if m.showHistory || m.showAttention {
 			m.detail.GotoTop()
 		}
 	}
@@ -782,6 +807,8 @@ func (m *Model) renderBody() string {
 		empty := "No runs yet."
 		if m.showHistory {
 			empty = "No past attempts yet."
+		} else if m.showAttention {
+			empty = "Nothing needs attention."
 		}
 		queueContent = labelStyle.Padding(1, 1).Render(empty)
 	}
@@ -795,6 +822,8 @@ func (m *Model) renderBody() string {
 		name := "Run queue"
 		if m.showHistory {
 			name = "History"
+		} else if m.showAttention {
+			name = "Attention"
 		}
 		queue := fmt.Sprintf("%s  ·  %d", name, len(m.list.VisibleItems()))
 		listView = lipgloss.JoinVertical(lipgloss.Left, m.paneHeader(queue, m.list.Width(), focusList), listView)
@@ -873,7 +902,7 @@ func (m *Model) renderFooter() string {
 		compactHelp := m.help
 		compactHelp.Width = max(1, m.width-2)
 		compactHelp.ShortSeparator = " "
-		shortcuts := []key.Binding{switchPane, m.keys.Commands, m.keys.History, m.keys.Filter, m.keys.Help, m.keys.Quit}
+		shortcuts := []key.Binding{switchPane, m.keys.Commands, m.keys.Attention, m.keys.History, m.keys.Filter, m.keys.Help, m.keys.Quit}
 		if m.focus == focusDetail {
 			shortcuts = []key.Binding{switchPane, m.keys.GoBottom, m.keys.Commands, m.keys.History, m.keys.Help, m.keys.Quit}
 		}
@@ -913,6 +942,8 @@ func (m *Model) renderFooter() string {
 	status := "Run queue"
 	if m.showHistory {
 		status = "History"
+	} else if m.showAttention {
+		status = "Attention"
 	}
 	if m.focus == focusDetail {
 		status = "Following output"
@@ -956,6 +987,10 @@ func detailContent(run daemon.LiveRun, width int) string {
 	sections = append(sections, lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#21182B", Dark: "#FAFAFA"}).
 		Render(ansi.Truncate(title, width, "…")))
 
+	if gate := strings.TrimSpace(ansi.Strip(run.LastGate)); gate != "" {
+		sections = append(sections, retryStyle.Bold(true).Render("Last gate rejection")+"\n"+gate)
+	}
+
 	row := func(k, v string) string {
 		return lipgloss.JoinHorizontal(lipgloss.Left,
 			labelStyle.Width(12).Render(k),
@@ -991,12 +1026,38 @@ func detailContent(run daemon.LiveRun, width int) string {
 	}
 	sections = append(sections, meta)
 
-	text := strings.TrimSpace(run.Tail)
-	if text == "" {
-		text = "(no output yet)"
-	}
-	sections = append(sections, dimStyle.Render("--- output ---")+"\n"+text)
+	sections = append(sections, valueStyle.Bold(true).Render("Agent output")+"\n"+formatTranscript(run.Tail))
 	return ansi.Wrap(strings.Join(sections, "\n\n"), width, "")
+}
+
+func formatTranscript(tail string) string {
+	text := strings.TrimSpace(ansi.Strip(tail))
+	if text == "" {
+		return dimStyle.Render("Waiting for agent output.")
+	}
+	var lines []string
+	previousStart := ""
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "tool started: ") {
+			if line == previousStart {
+				continue
+			}
+			previousStart = line
+			line = gatingStyle.Render("›") + " " + strings.TrimPrefix(line, "tool started: ")
+		} else {
+			previousStart = ""
+			if tool, ok := strings.CutPrefix(line, "tool finished: "); ok {
+				switch {
+				case strings.HasSuffix(tool, " (error=true)"):
+					line = redStyle.Render("✕") + " " + strings.TrimSuffix(tool, " (error=true)")
+				case strings.HasSuffix(tool, " (error=false)"):
+					line = dimStyle.Render("✓ " + strings.TrimSuffix(tool, " (error=false)"))
+				}
+			}
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // phaseLabel renders a phase with an icon and color.
