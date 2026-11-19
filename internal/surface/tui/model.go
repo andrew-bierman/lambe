@@ -445,6 +445,15 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case key.Matches(msg, m.keys.Commands):
 		return m, m.openPalette()
+	case msg.String() == "1":
+		m.setQueueView(false, false)
+		return m, nil
+	case msg.String() == "2":
+		m.setQueueView(false, true)
+		return m, nil
+	case msg.String() == "3":
+		m.setHistory(true)
+		return m, nil
 	case key.Matches(msg, m.keys.Attention):
 		m.setQueueView(false, !m.showAttention)
 		return m, nil
@@ -796,7 +805,31 @@ func (m *Model) renderHeader() string {
 	} else if m.width >= splitWidth {
 		text += "  ·  Updated " + updated
 	}
-	return headerStyle.Width(m.width).MaxWidth(m.width).Render(ansi.Truncate(text, max(1, m.width-2), "…"))
+	width := max(1, m.width-2)
+	if m.width >= 88 && m.commandErr == nil && m.commandStatus == "" && m.err == nil {
+		tabs := m.renderQueueTabs()
+		left := ansi.Truncate(text, width-lipgloss.Width(tabs)-2, "…")
+		text = left + strings.Repeat(" ", width-lipgloss.Width(left)-lipgloss.Width(tabs)) + tabs
+	}
+	return headerStyle.Width(m.width).MaxWidth(m.width).Render(ansi.Truncate(text, width, "…"))
+}
+
+func (m *Model) renderQueueTabs() string {
+	tabs := []string{"1 Queue", "2 Attention", "3 History"}
+	active := 0
+	if m.showAttention {
+		active = 1
+	} else if m.showHistory {
+		active = 2
+	}
+	for i, title := range tabs {
+		style := labelStyle
+		if i == active {
+			style = valueStyle.Bold(true).Underline(true)
+		}
+		tabs[i] = style.Render(title)
+	}
+	return strings.Join(tabs, "   ")
 }
 
 func (m *Model) renderBody() string {

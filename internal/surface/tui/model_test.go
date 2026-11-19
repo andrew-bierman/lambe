@@ -668,3 +668,26 @@ func TestQueuePaletteUsesOnlySelectedWorkflow(t *testing.T) {
 		t.Fatalf("selected %q", selected)
 	}
 }
+
+func TestDashboardTabShortcuts(t *testing.T) {
+	m := withSnapshot(t, newSized(t))
+	for _, want := range []string{"1 Queue", "2 Attention", "3 History"} {
+		if !strings.Contains(m.View(), want) {
+			t.Fatalf("missing tab %q", want)
+		}
+	}
+	for _, tc := range []struct {
+		key       rune
+		attention bool
+		history   bool
+	}{
+		{'2', true, false},
+		{'3', false, true},
+		{'1', false, false},
+	} {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tc.key}})
+		if m.showAttention != tc.attention || m.showHistory != tc.history {
+			t.Fatalf("shortcut %q chose the wrong view", tc.key)
+		}
+	}
+}

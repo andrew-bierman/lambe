@@ -305,6 +305,7 @@ The TUI exits with Ctrl-C or `q`. Keybindings:
 
 - `j`/`k` or `↑`/`↓` — move through the run list
 - `:` or `Ctrl-P` — search commands, inspect a run, or open a shell in its workspace or the Beads tracker
+- `1` / `2` / `3` — open Queue, Attention, or History directly
 - `a` — show retries, deferred or interrupted runs, and failed gates
 - `h` — switch between the run queue and recent attempt history
 - `Tab` — switch focus between the run list and the detail pane
