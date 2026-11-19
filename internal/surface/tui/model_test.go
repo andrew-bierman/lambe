@@ -691,3 +691,13 @@ func TestDashboardTabShortcuts(t *testing.T) {
 		}
 	}
 }
+
+func TestWideLayoutPrioritizesRunList(t *testing.T) {
+	m := newSized(t)
+	for _, width := range []int{80, 110, 160} {
+		m.Update(tea.WindowSizeMsg{Width: width, Height: 24})
+		if m.list.Width() <= m.detail.Width || m.detail.Width < 32 {
+			t.Fatalf("%d columns: queue width %d, inspector width %d", width, m.list.Width(), m.detail.Width)
+		}
+	}
+}

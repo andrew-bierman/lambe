@@ -585,8 +585,9 @@ func (m *Model) layout() {
 	bodyHeight := max(1, m.height-1-lipgloss.Height(m.renderFooter()))
 	listWidth, detailWidth := m.width, m.width
 	if m.width >= splitWidth {
-		listWidth = min(48, m.width/3)
-		detailWidth = m.width - listWidth - 3
+		availableWidth := m.width - 3
+		detailWidth = max(36, availableWidth*2/5)
+		listWidth = availableWidth - detailWidth
 	}
 
 	m.paneHeaders = bodyHeight > 1
