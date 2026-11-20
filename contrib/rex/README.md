@@ -17,11 +17,33 @@ the command palette.
 - **Lambe: Choose Dashboard…** uses a native Rex picker to offer those two
   destinations. It requires custom UI support on the connected server and
   client. The direct actions are available on older Rex versions.
+- **Lambe: Open Run…** lists current and archived runs with a native Rex
+  picker and opens `lambe logs -issue ID -follow` for the chosen one in a new
+  tab. Run titles, phase, attempt, and turn appear in each row; archived runs
+  are marked. Cancel the picker to open nothing. On Rex versions without
+  custom UI, the action opens the terminal dashboard. For scripting, `rex do lambe_open_run issue=ac-123` skips the
+  picker entirely.
 
 The Rex host needs `lambe` on its PATH. The live dashboard uses that host's
 configuration, Beads tracker, and daemon state. See the
 [Rex custom UI docs](https://www.superlogical.com/rex/docs/customize/custom-ui)
 for the picker requirements.
+
+## One configuration for every live path
+
+Each Lambe configuration has its own daemon state, so every live action must
+read the same one or the picker shows a different daemon than the dashboard
+opens. By default the actions use Lambe's default config. To pin all of them
+(dashboard, run list, and run follow) to one explicit file, set
+`LAMBE_REX_CONFIG` to that config's path in the Rex server's environment, or
+set the `override` variable at the top of `lambe.lua`:
+
+```lua
+local override = "/absolute/path/to/lambe.yaml"
+```
+
+`lambe tui -demo` never takes `-config`, so the demo always uses the host's
+default configuration.
 
 ## Daemon status
 
