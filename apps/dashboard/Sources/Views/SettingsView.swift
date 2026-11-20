@@ -96,7 +96,7 @@ struct InstanceRow: View {
     }
 
     private var healthText: String {
-        if let filter = record.instanceName, !filter.isEmpty {
+        if let filter = record.exactInstanceFilter {
             return "\(health) — instance filter: \(filter)"
         }
         return health
@@ -107,12 +107,7 @@ struct InstanceRow: View {
 /// same way the connection does. Facts only — no token, ever.
 nonisolated enum InstanceHealth {
     static func describe(_ record: InstanceRecord) -> String {
-        let liveDir = URL(fileURLWithPath: record.stateDirectory, isDirectory: true)
-            .appending(path: "live")
-        var endpoints = DescriptorStore(liveDirectory: liveDir).resolvedEndpoints()
-        if let filter = record.instanceName, !filter.isEmpty {
-            endpoints = endpoints.filter { $0.instance == filter }
-        }
+        let endpoints = record.resolvedEndpoints()
         switch endpoints.count {
         case 0:
             return "no live descriptor"

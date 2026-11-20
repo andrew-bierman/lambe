@@ -197,7 +197,11 @@ final class ConnectionModel {
     /// loop exits immediately.
     func pollLoop() async {
         while !Task.isCancelled {
-            await tick()
+            // Demo data lands at mode entry; a beat here would only rewrite
+            // unchanged observable state.
+            if mode == .live {
+                await tick()
+            }
             do {
                 try await Task.sleep(for: .seconds(backoff.current))
             } catch {
@@ -235,15 +239,14 @@ final class ConnectionModel {
         }
         if client == nil {
             resolveClient()
-            guard client != nil else {
-                backoff.escalate()
-                return
-            }
         }
         // Unwrap once into a local so the fetches below read one snapshot
         // of the seam; assignments to the property later in this tick
         // (failure re-resolution) still hit the property, not this local.
-        guard let active = client else { return }
+        guard let active = client else {
+            backoff.escalate()
+            return
+        }
 
         let snapshotResult = await result { try await active.state() }
         let queueResult = await result { try await active.queue() }
@@ -431,12 +434,7 @@ final class ConnectionModel {
             state = .neverConnected(reason: .noInstance)
             return
         }
-        let liveDir = URL(fileURLWithPath: record.stateDirectory, isDirectory: true)
-            .appending(path: "live")
-        var endpoints = DescriptorStore(liveDirectory: liveDir).resolvedEndpoints()
-        if let filter = record.instanceName, !filter.isEmpty {
-            endpoints = endpoints.filter { $0.instance == filter }
-        }
+        let endpoints = record.resolvedEndpoints()
         switch endpoints.count {
         case 0:
             state = hasEverAttached
@@ -481,17 +479,17 @@ final class ConnectionModel {
         if let asOf = RFC3339.date(snapshot?.needsHumanAsOf),
            now.timeIntervalSince(asOf) > Self.staleAfter
         {
-            stale.append("Attention")
+            stale.append(SidebarSection.attention.title)
         }
         if let asOf = RFC3339.date(queue?.asOf),
            now.timeIntervalSince(asOf) > Self.staleAfter
         {
-            stale.append("Queue")
+            stale.append(SidebarSection.queue.title)
         }
         if let asOf = RFC3339.date(history?.asOf),
            now.timeIntervalSince(asOf) > Self.staleAfter
         {
-            stale.append("History")
+            stale.append(SidebarSection.history.title)
         }
         return stale.isEmpty ? .attached : .degraded(staleSections: stale)
     }
@@ -574,12 +572,10 @@ final class DetailModel {
             guard !Task.isCancelled, loadedID == id, revision == startRevision else { return }
             issue = detail
             phase = .loaded
-        } catch let error as APIError {
-            guard !Task.isCancelled, loadedID == id, revision == startRevision else { return }
-            phase = .failed(error.displayText)
         } catch {
             guard !Task.isCancelled, loadedID == id, revision == startRevision else { return }
-            phase = .failed(APIError.unexpectedResponse.displayText)
+            let apiError = (error as? APIError) ?? .unexpectedResponse
+            phase = .failed(apiError.displayText)
         }
     }
 

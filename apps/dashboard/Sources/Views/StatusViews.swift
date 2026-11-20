@@ -315,10 +315,7 @@ struct StatusFooter: View {
         if let machine = daemon.machine, !machine.isEmpty {
             parts.append(machine)
         }
-        if let version = daemon.version, !version.isEmpty {
-            parts.append("v\(version)")
-        }
-        parts.append("pid \(daemon.pid)")
+        parts.append(daemon.versionPidText)
         return parts.joined(separator: " · ")
     }
 

@@ -26,10 +26,6 @@
 //  The `configuration:` parameter exists so tests can install a stub URL
 //  protocol; the hardening above is applied to it either way.
 //
-//  The typed Queue/Attention/History calls of the U7 data layer wrap
-//  `get(_:as:)` above the U2 wire shapes; this subset stays generic so it
-//  lands without them.
-//
 
 import Foundation
 

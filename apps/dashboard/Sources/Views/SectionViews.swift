@@ -391,7 +391,6 @@ struct HistoryRow: View {
                 .foregroundStyle(.secondary)
             if RFC3339.date(run.updatedAt) != nil {
                 RelativeTimeText(label: "", iso: run.updatedAt)
-                    .font(.caption)
             } else {
                 Text("time unknown")
                     .font(.caption)

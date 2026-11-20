@@ -82,8 +82,9 @@ struct ShellView: View {
                 get: { connection.mode },
                 set: { connection.setMode($0) }
             )) {
-                Text("Live").tag(ConnectionModel.Mode.live)
-                Text("Demo").tag(ConnectionModel.Mode.demo)
+                ForEach(ConnectionModel.Mode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
             }
             .pickerStyle(.segmented)
             .accessibilityLabel("Data source: live daemon or demo sample data")
@@ -110,10 +111,7 @@ struct ShellView: View {
             parts.append(name)
         }
         if let daemon = connection.daemon {
-            if let version = daemon.version, !version.isEmpty {
-                parts.append("v\(version)")
-            }
-            parts.append("pid \(daemon.pid)")
+            parts.append(daemon.versionPidText)
         }
         return parts.joined(separator: " · ")
     }

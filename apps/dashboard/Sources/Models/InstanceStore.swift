@@ -38,6 +38,28 @@ nonisolated struct InstanceRecord: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+/// Resolution of a configured record against the descriptors on disk.
+nonisolated extension InstanceRecord {
+    /// The effective exact instance-name filter, nil when unset or empty.
+    var exactInstanceFilter: String? {
+        guard let filter = instanceName, !filter.isEmpty else { return nil }
+        return filter
+    }
+
+    /// The admitted live endpoints this record resolves to: its state
+    /// directory's descriptors, narrowed by the optional exact filter.
+    /// Shared by connection resolution and Settings' health facts.
+    func resolvedEndpoints() -> [ResolvedEndpoint] {
+        let liveDir = URL(fileURLWithPath: stateDirectory, isDirectory: true)
+            .appending(path: "live")
+        var endpoints = DescriptorStore(liveDirectory: liveDir).resolvedEndpoints()
+        if let filter = exactInstanceFilter {
+            endpoints = endpoints.filter { $0.instance == filter }
+        }
+        return endpoints
+    }
+}
+
 /// The daemon's default state directory — the same path Go resolves
 /// (`DefaultStateDir`): `LAMBE_STATE_DIR` when set, else
 /// `~/.local/state/lambe`. Read once per launch; a running daemon's env is

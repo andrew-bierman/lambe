@@ -141,21 +141,19 @@ final class FeedModel<Payload: Equatable> {
     /// - Returns: whether anything changed.
     @discardableResult
     func apply(_ newPayload: Payload, isEmpty: (Payload) -> Bool) -> Bool {
-        lastError = nil
-        if payload == newPayload {
-            phase = isEmpty(newPayload) ? .empty : .loaded
-            return false
-        }
-        payload = newPayload
-        phase = isEmpty(newPayload) ? .empty : .loaded
-        return true
+        if lastError != nil { lastError = nil }
+        let nextPhase: FeedPhase = isEmpty(newPayload) ? .empty : .loaded
+        let changed = payload != newPayload
+        if changed { payload = newPayload }
+        if phase != nextPhase { phase = nextPhase }
+        return changed
     }
 
     /// Records a failed fetch. The last good payload is kept, not dropped
     /// (R11), and the failure is recorded — never swallowed.
     func fail(_ reason: String) {
-        lastError = reason
-        phase = .failed
+        if lastError != reason { lastError = reason }
+        if phase != .failed { phase = .failed }
     }
 
     /// Marks a fetch in flight when nothing has loaded yet.

@@ -207,8 +207,6 @@ nonisolated struct WireQueue: Decodable, Equatable, Sendable {
         asOf = try c.decodeIfPresent(String.self, forKey: .asOf)
         rows = try c.decodeIfPresent([WireQueueRow].self, forKey: .rows) ?? []
     }
-
-    var isNewerThanSupported: Bool { schemaVersion > WireContract.schemaVersion }
 }
 
 /// `QueueRowDTO` — one readiness row: dispatchable, or blocked with the
@@ -262,8 +260,6 @@ nonisolated struct WireHistory: Decodable, Equatable, Sendable {
         asOf = try c.decodeIfPresent(String.self, forKey: .asOf)
         runs = try c.decodeIfPresent([WireHistoryRun].self, forKey: .runs) ?? []
     }
-
-    var isNewerThanSupported: Bool { schemaVersion > WireContract.schemaVersion }
 }
 
 /// `HistoryRunDTO` — one archived or terminal run.
@@ -354,8 +350,6 @@ nonisolated struct WireIssue: Decodable, Equatable, Sendable {
         tail = try c.decodeIfPresent(String.self, forKey: .tail)
         tailTruncated = try c.decodeIfPresent(Bool.self, forKey: .tailTruncated) ?? false
     }
-
-    var isNewerThanSupported: Bool { schemaVersion > WireContract.schemaVersion }
 }
 
 /// `ErrorResponse` — every non-2xx body on the daemon side. The transport
@@ -387,6 +381,17 @@ nonisolated enum RFC3339 {
 }
 
 // MARK: - View identity
+
+extension WireDaemonIdentity {
+    /// Token-free version and pid facts shared by the window subtitle and
+    /// the connection footer.
+    var versionPidText: String {
+        var parts: [String] = []
+        if let version, !version.isEmpty { parts.append("v\(version)") }
+        parts.append("pid \(pid)")
+        return parts.joined(separator: " · ")
+    }
+}
 
 // Stable ForEach identity, derived from the contract's uniqueness rules:
 // snapshot runs, queue rows, and needs-human items carry at most one row

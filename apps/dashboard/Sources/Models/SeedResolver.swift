@@ -19,11 +19,6 @@ nonisolated struct RunSeed: Equatable, Sendable {
     let title: String?
     /// Operator-facing phase, when the row carried one.
     let phase: String?
-    /// Coarse state name, when the row carried one.
-    let state: String?
-    let attempt: Int
-    /// History rows: when the attempt was last observed (RFC 3339).
-    let updatedAt: String?
     /// Queue rows: whether the row is blocked from dispatch.
     let blocked: Bool
 }
@@ -43,9 +38,6 @@ nonisolated enum SeedResolver {
                 issue: run.issue,
                 title: nil,
                 phase: run.phase,
-                state: run.state,
-                attempt: run.attempt,
-                updatedAt: run.lastEventAt,
                 blocked: false
             )
         }
@@ -54,9 +46,6 @@ nonisolated enum SeedResolver {
                 issue: row.id,
                 title: row.title,
                 phase: nil,
-                state: nil,
-                attempt: 0,
-                updatedAt: nil,
                 blocked: row.blocked
             )
         }
@@ -65,18 +54,12 @@ nonisolated enum SeedResolver {
                 issue: run.issue,
                 title: run.title,
                 phase: run.phase,
-                state: run.state,
-                attempt: run.attempt,
-                updatedAt: run.updatedAt,
                 blocked: false
             )
         }
         // The ID the operator selected is still honored even when no
         // current payload mentions it — the detail fetch decides whether
         // the daemon knows it.
-        return RunSeed(
-            issue: issue, title: nil, phase: nil, state: nil,
-            attempt: 0, updatedAt: nil, blocked: false
-        )
+        return RunSeed(issue: issue, title: nil, phase: nil, blocked: false)
     }
 }
