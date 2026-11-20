@@ -29,7 +29,11 @@ Symphony specification, with Beads as its entire state substrate.
               then status/output/cancel tools; heavy output to artifacts
               (portable de-facto pattern; Claude truncates at 25k tokens,
               Codex caps calls ~300s)
-   http     — Symphony's optional /api/v1/state shape for dashboards
+   http     — the opt-in, bearer-guarded local state API (Symphony §13.7
+              shape, versioned contract in docs/api/state-api.md) for the
+              SwiftUI dashboard and future clients
+   ui       — the read-only SwiftUI operator dashboard (apps/dashboard),
+              the fifth surface: renders over the state API, owns nothing
 
  SUPERVISOR DAEMON (Go, one static binary per machine — the only net-new code)
    Symphony-compatible core (SPEC @ 8001b52, pinned; quarterly re-diff):
@@ -108,7 +112,10 @@ Every layer boundary is a Go interface; ours are first-party defaults:
 - No own state plane (Gas City sledgehammer); Beads is the substrate.
 - No session-content interop across harnesses (config-migration only exists;
   live interop does not).
-- No UI beyond the HTTP state surface; Rex is the window when present.
+- No UI beyond the named surfaces: terminal logs/TUI, the loopback HTTP state
+  API, and the read-only SwiftUI operator dashboard (`apps/dashboard`) as the
+  fifth surface; Rex is the window when present. The dashboard renders only —
+  it owns no state and mutates nothing.
 - Config discipline: batteries-included defaults, zero-config single machine;
   adapter seams discoverable only on demand (the documented anti-example is
   Gas Town's Red-Queen config sprawl).

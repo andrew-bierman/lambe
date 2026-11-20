@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "daemon": {
+    "pid": 4242,
+    "identity": "darwin:boot:1:2",
+    "machine": "operators-mac",
+    "version": "v0.9.0",
+    "config_path": "/Users/operator/lambe/lambe.yaml"
+  },
+  "as_of": "2026-11-19T12:00:00Z",
+  "rows": [
+    {
+      "id": "Q-1",
+      "title": "ready task",
+      "reason": "all blockers closed",
+      "blocked": false
+    },
+    {
+      "id": "Q-2",
+      "title": "blocked task",
+      "reason": "waiting on api-9",
+      "blocked": true,
+      "blockers": [
+        {
+          "id": "api-9",
+          "title": "api migration"
+        }
+      ]
+    }
+  ]
+}
