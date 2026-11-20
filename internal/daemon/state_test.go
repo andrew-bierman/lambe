@@ -1,10 +1,15 @@
 package daemon
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/andrew-bierman/lambe/internal/config"
 	"github.com/andrew-bierman/lambe/internal/mcp"
 )
 
@@ -148,5 +153,98 @@ func TestRunRegistryTransitions(t *testing.T) {
 	reg.AppendTail("missing", "x")
 	if _, ok := reg.Lookup("missing"); ok {
 		t.Error("missing run must not exist")
+	}
+}
+
+// TestWriteStateAPIDescriptor pins the discovery document: the write is
+// atomic (temp + rename), lands at 0600, round-trips every field, and the
+// per-instance path derives from the instance lock name so two
+// configurations never share one file.
+func TestWriteStateAPIDescriptor(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{Trackers: []config.Tracker{{Name: "local", Type: "repo", Path: t.TempDir()}}}
+	path := StateAPIPath(t.TempDir(), cfg)
+	instance := strings.TrimSuffix(InstanceLockName(cfg), ".lock")
+	if filepath.Base(path) != "stateapi-"+instance+".json" {
+		t.Fatalf("descriptor path = %q, want per-instance stateapi-%s.json", path, instance)
+	}
+
+	desc := StateAPIDescriptor{
+		SchemaVersion: StateAPIDescriptorSchemaVersion,
+		Instance:      instance,
+		Addr:          "127.0.0.1:53412",
+		BearerToken:   "tok",
+		PID:           4242,
+		Identity:      "darwin:boot:1:2",
+		Version:       "test",
+		ConfigPath:    "/cfg/lambe.yaml",
+		StartedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := WriteStateAPIDescriptor(path, desc); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("descriptor mode = %o, want 600 (the file carries the token)", got)
+	}
+	data, err := os.ReadFile(path) // #nosec G304 -- test-owned temporary path
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got StateAPIDescriptor
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got != desc {
+		t.Errorf("round trip mismatch: %+v vs %+v", got, desc)
+	}
+	// A republish replaces the file in place, never appends.
+	desc.Addr = "127.0.0.1:53413"
+	if err := WriteStateAPIDescriptor(path, desc); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	data, err = os.ReadFile(path) // #nosec G304 -- test-owned temporary path
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got2 StateAPIDescriptor
+	if err := json.Unmarshal(data, &got2); err != nil || got2.Addr != desc.Addr {
+		t.Fatalf("republished descriptor = %s, %v", data, err)
+	}
+	// No temp-file litter survives.
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".stateapi-") {
+			t.Errorf("temp descriptor %q left behind", e.Name())
+		}
+	}
+}
+
+// TestNewStateAPIToken pins the per-start credential: 32 random bytes,
+// base64url without padding, and two draws never collide.
+func TestNewStateAPIToken(t *testing.T) {
+	t.Parallel()
+	a, err := newStateAPIToken()
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	b, err := newStateAPIToken()
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	if a == "" || b == "" || a == b {
+		t.Fatalf("tokens = %q, %q; want distinct non-empty secrets", a, b)
+	}
+	if strings.ContainsAny(a, "+/=") {
+		t.Errorf("token %q is not URL-safe base64", a)
+	}
+	if len(a) < 32 {
+		t.Errorf("token %q shorter than its 32-byte source", a)
 	}
 }

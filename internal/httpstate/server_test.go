@@ -297,6 +297,38 @@ func TestGracefulShutdown(t *testing.T) {
 	}
 }
 
+// TestListenBindsConfiguredAddr pins the explicit-address binding the
+// daemon uses: a host:port string binds exactly that address, an ephemeral
+// port included, and a malformed address fails loudly.
+func TestListenBindsConfiguredAddr(t *testing.T) {
+	ln, err := Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen ephemeral: %v", err)
+	}
+	ta, ok := ln.Addr().(*net.TCPAddr)
+	if !ok || !ta.IP.IsLoopback() || ta.Port == 0 {
+		_ = ln.Close()
+		t.Fatalf("bound addr = %v, want loopback with an ephemeral port", ln.Addr())
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	fixed, err := Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fixed.Close() })
+	port := fixed.Addr().(*net.TCPAddr).Port
+	ln2, err := Listen(fmt.Sprintf("127.0.0.1:%d", port))
+	if err == nil {
+		_ = ln2.Close()
+		t.Fatalf("Listen rebind of an occupied port succeeded")
+	}
+	if _, err := Listen("bogus"); err == nil {
+		t.Fatal("Listen accepted an address without a port")
+	}
+}
+
 func TestFormatAge(t *testing.T) {
 	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
 	tests := []struct {

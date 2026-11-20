@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -20,6 +21,7 @@ import (
 	"github.com/andrew-bierman/lambe/internal/gate"
 	"github.com/andrew-bierman/lambe/internal/httpstate"
 	"github.com/andrew-bierman/lambe/internal/mcp"
+	"github.com/andrew-bierman/lambe/internal/proc"
 	"github.com/andrew-bierman/lambe/internal/surface/rex"
 	"github.com/andrew-bierman/lambe/internal/symphony"
 	"github.com/andrew-bierman/lambe/internal/tracker"
@@ -51,6 +53,9 @@ type Options struct {
 	// ConfigPath is the file configuration was loaded from; a SIGHUP
 	// re-reads it and an invalid reload is logged without effect.
 	ConfigPath string
+	// Version is the daemon build version reported by the state-surface
+	// descriptor; empty resolves to "dev".
+	Version string
 	// Log receives lifecycle events; nil uses the default logger.
 	Log *slog.Logger
 	// Wire is the single assembly point for units not owned by this
@@ -132,6 +137,9 @@ type Daemon struct {
 	// tickCount counts completed non-immediate cycles and drives the
 	// report-cache refresh cadence.
 	tickCount atomic.Int64
+	// stateapi is the bound HTTP state surface for this daemon life; nil
+	// when the surface is disabled or failed to start.
+	stateapi *stateAPISurface
 }
 
 // Registry returns the daemon's live run registry. Wired runners record
@@ -187,6 +195,9 @@ func New(opts Options) (*Daemon, error) {
 	}
 	if opts.Actor == "" {
 		opts.Actor = "lambe@" + opts.Machine
+	}
+	if opts.Version == "" {
+		opts.Version = "dev"
 	}
 	log := opts.Log
 	if log == nil {
@@ -305,6 +316,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 	view.registry = d.asm.Registry
 	view.start()
 	defer view.close()
+
+	// The state surface binds after the instance lock is held and the
+	// trackers are open: its descriptor advertises a listener only this
+	// instance owns. A failure here is logged and the daemon continues —
+	// a viewer surface never kills the daemon.
+	d.stateapi = d.startStateAPI()
 
 	adopted, err := Recover(runCtx, TrackerOrphans{Tracker: primary}, primary, d.opts.Actor,
 		ShutdownBound, d.log)
@@ -432,10 +449,17 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go HeartbeatLoop(runCtx, primary, d.opts.Actor,
 		func() time.Duration { return d.opts.Config.Supervisor.HeartbeatInterval }, d.log)
 
-	d.log.Info("lambe daemon running",
+	runningAttrs := []any{
 		"machine", d.opts.Machine, "actor", d.opts.Actor,
 		"tick_seconds", d.opts.Config.Supervisor.TickSeconds,
-		"trackers", len(trackers))
+		"trackers", len(trackers),
+	}
+	if d.stateapi != nil && d.stateapi.server != nil {
+		// The bound addr, never the token: the Summary must not leak the
+		// credential that guards the surface.
+		runningAttrs = append(runningAttrs, "stateapi_addr", d.stateapi.server.Addr().String())
+	}
+	d.log.Info("lambe daemon running", runningAttrs...)
 
 	ticksDone := make(chan struct{})
 	go func() {
@@ -460,6 +484,81 @@ func (d *Daemon) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// startStateAPI binds and serves the bearer-guarded HTTP state surface
+// when the configuration enables it, publishing its descriptor for
+// per-instance discovery. Any failure — token generation, bind, descriptor
+// write — is logged and the daemon continues without the surface, or
+// serving it unadvertised if only the descriptor failed. The bearer token
+// lives only in memory and the 0600 descriptor file: it never reaches
+// logs, the startup summary, or error strings. The surface binds once per
+// daemon life; a SIGHUP that changes stateapi settings takes effect on the
+// next daemon start.
+func (d *Daemon) startStateAPI() *stateAPISurface {
+	cfg := d.opts.Config
+	if !cfg.StateAPI.Enable {
+		return nil
+	}
+	token, err := newStateAPIToken()
+	if err != nil {
+		d.log.Warn("stateapi token generation failed; continuing without the state surface", "error", err)
+		return nil
+	}
+	ln, err := httpstate.Listen(cfg.StateAPI.Addr)
+	if err != nil {
+		d.log.Warn("stateapi bind failed; continuing without the state surface",
+			"addr", cfg.StateAPI.Addr, "error", err)
+		return nil
+	}
+	srv := httpstate.New(d.StateSource(), ln)
+	srv.SetLogger(func(format string, args ...any) {
+		d.log.Warn("stateapi server error", "detail", fmt.Sprintf(format, args...))
+	})
+	// One middleware in front of every route; the §13.7 handlers and DTOs
+	// stay untouched behind it.
+	srv.Wrap(httpstate.BearerAuth(token, loopbackHost(ln.Addr())))
+
+	descriptorPath := StateAPIPath(d.opts.StateDir, cfg)
+	desc := StateAPIDescriptor{
+		SchemaVersion: StateAPIDescriptorSchemaVersion,
+		Instance:      strings.TrimSuffix(InstanceLockName(cfg), ".lock"),
+		Addr:          ln.Addr().String(),
+		BearerToken:   token,
+		PID:           os.Getpid(),
+		Version:       d.opts.Version,
+		ConfigPath:    d.opts.ConfigPath,
+		StartedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+	if id, err := proc.ProcessIdentity(os.Getpid()); err == nil {
+		desc.Identity = id
+	}
+	surface := &stateAPISurface{server: srv}
+	if err := WriteStateAPIDescriptor(descriptorPath, desc); err != nil {
+		d.log.Warn("stateapi descriptor write failed; serving unadvertised", "path", descriptorPath, "error", err)
+	} else {
+		surface.descriptor = descriptorPath
+		d.log.Info("stateapi listening", "addr", desc.Addr, "descriptor", descriptorPath)
+	}
+	go func() {
+		if err := srv.Start(); err != nil {
+			d.log.Warn("stateapi server stopped", "error", err)
+		}
+	}()
+	return surface
+}
+
+// loopbackHost returns the host part of a bound TCP address for the
+// middleware's strict Host check.
+func loopbackHost(addr net.Addr) string {
+	if ta, ok := addr.(*net.TCPAddr); ok {
+		return ta.IP.String()
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return addr.String()
+	}
+	return host
 }
 
 // reload applies a SIGHUP: the configuration file is re-read and, when
@@ -490,6 +589,11 @@ func (d *Daemon) shutdown(ticksDone <-chan struct{}) error {
 	d.log.Info("shutdown: forwarding kill ladder to children", "bound", ShutdownBound.String())
 	ctx, cancel := context.WithTimeout(context.Background(), ShutdownBound)
 	defer cancel()
+	// The descriptor must stop advertising before the instance lock is
+	// released: Run releases the lock only after shutdown returns, so
+	// removing it here — ahead of every other teardown step — keeps that
+	// ordering.
+	d.stateapi.shutdown(ctx, d.log)
 	if d.cancel != nil {
 		d.cancel()
 	}

@@ -127,11 +127,18 @@ func New(source StateSource, ln net.Listener) *Server {
 	return s
 }
 
+// Listen binds the given TCP host:port address for the state surface. It
+// is ListenLoopback with an explicit address; port 0 selects an ephemeral
+// port. The daemon's configuration validation is responsible for
+// restricting the address to loopback before this is called.
+func Listen(addr string) (net.Listener, error) {
+	return net.Listen("tcp", addr)
+}
+
 // ListenLoopback binds a loopback listener on an ephemeral port and returns
-// it. It is the recommended default binding for the state surface, which is
-// read-only but not authenticated.
+// it. It is the recommended default binding for the state surface.
 func ListenLoopback() (net.Listener, error) {
-	return net.Listen("tcp", "127.0.0.1:0")
+	return Listen("127.0.0.1:0")
 }
 
 // Addr returns the bound address of the server's listener.
@@ -140,6 +147,14 @@ func (s *Server) Addr() net.Addr { return s.ln.Addr() }
 // SetLogger sets an optional printf-style error logger for the underlying
 // http.Server. It must be called before Start.
 func (s *Server) SetLogger(log func(format string, args ...any)) { s.log = log }
+
+// Wrap wraps the server's route handler with middleware. It must be called
+// before Start. The daemon installs the bearer-auth middleware here, so
+// every route — including the refresh POST — is guarded while the route
+// handlers and DTOs stay untouched behind the middleware.
+func (s *Server) Wrap(mw func(http.Handler) http.Handler) {
+	s.http.Handler = mw(s.http.Handler)
+}
 
 // Start serves requests on the bound listener, blocking until the server is
 // shut down or the listener fails. Start always returns a non-nil error.

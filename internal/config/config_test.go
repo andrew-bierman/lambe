@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -345,5 +346,128 @@ func TestNamedWorkflowConfig(t *testing.T) {
 				t.Fatalf("unexpected workflow config: %+v, %v", cfg, err)
 			}
 		})
+	}
+}
+
+func TestStateAPIDisabledByDefault(t *testing.T) {
+	cfg, err := Load(Options{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.StateAPI.Enable {
+		t.Error("stateapi must be an explicit opt-in: default is disabled")
+	}
+	if cfg.StateAPI.Addr != "127.0.0.1:0" {
+		t.Errorf("stateapi.addr default: got %q, want ephemeral loopback", cfg.StateAPI.Addr)
+	}
+	if s := cfg.Summary(); !strings.Contains(s, "stateapi=off") {
+		t.Errorf("Summary should report the disabled surface: %q", s)
+	}
+}
+
+func TestStateAPIPrecedenceFileEnvFlag(t *testing.T) {
+	file := writeTemp(t, `
+stateapi:
+  enable: false
+  addr: 127.0.0.1:9999
+`)
+	env := []string{
+		"LAMBE_STATEAPI_ENABLE=true",
+		"LAMBE_STATEAPI_ADDR=127.0.0.1:0",
+	}
+	// Env beats file on both keys.
+	cfg, err := Load(Options{File: file, Env: env})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.StateAPI.Enable {
+		t.Error("env should enable the surface over the file's opt-out")
+	}
+	if cfg.StateAPI.Addr != "127.0.0.1:0" {
+		t.Errorf("env should override the file addr: got %q", cfg.StateAPI.Addr)
+	}
+	// Flags beat env.
+	cfg, err = Load(Options{File: file, Env: env, Flags: map[string]string{"stateapi.addr": "127.0.0.1:1"}})
+	if err != nil {
+		t.Fatalf("Load with flag: %v", err)
+	}
+	if cfg.StateAPI.Addr != "127.0.0.1:1" {
+		t.Errorf("flag should win: addr got %q, want 127.0.0.1:1", cfg.StateAPI.Addr)
+	}
+	// File alone beats defaults.
+	cfg, err = Load(Options{File: file, Env: []string{}})
+	if err != nil || cfg.StateAPI.Enable || cfg.StateAPI.Addr != "127.0.0.1:9999" {
+		t.Errorf("file overrides lost: %+v, %v", cfg.StateAPI, err)
+	}
+	// Summary surfaces the configured addr when enabled, never a token.
+	enabled := writeTemp(t, "stateapi:\n  enable: true\n  addr: 127.0.0.1:8137\n")
+	cfg, err = Load(Options{File: enabled, Env: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := cfg.Summary(); !strings.Contains(s, "stateapi=on addr=127.0.0.1:8137") {
+		t.Errorf("Summary should surface the configured addr: %q", s)
+	}
+}
+
+func TestStateAPIRejectsNonLoopbackWithAllErrorsCollected(t *testing.T) {
+	file := writeTemp(t, `
+supervisor:
+  tick_seconds: 0
+stateapi:
+  enable: true
+  addr: 0.0.0.0:8080
+`)
+	_, err := Load(Options{File: file, Env: []string{}})
+	if err == nil {
+		t.Fatal("non-loopback bind must be rejected")
+	}
+	for _, want := range []string{"tick_seconds", "stateapi.addr", "loopback", "; "} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should mention %q: %v", want, err)
+		}
+	}
+}
+
+func TestStateAPIAddrValidationTable(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		addr  string
+		valid bool
+	}{
+		{"ephemeral loopback", "127.0.0.1:0", true},
+		{"fixed loopback port", "127.0.0.1:8137", true},
+		{"loopback /8 range", "127.5.5.5:1", true},
+		{"ipv6 loopback", "[::1]:0", true},
+		{"localhost name", "localhost:8080", false},
+		{"wildcard host", ":8080", false},
+		{"routable address", "10.0.0.1:8080", false},
+		{"all interfaces", "0.0.0.0:8080", false},
+		{"missing port", "127.0.0.1", false},
+		{"hostname", "dashboard.internal:8080", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			file := writeTemp(t, "stateapi:\n  enable: true\n  addr: "+strconv.Quote(tt.addr)+"\n")
+			cfg, err := Load(Options{File: file, Env: []string{}})
+			if tt.valid {
+				if err != nil || cfg.StateAPI.Addr != tt.addr {
+					t.Fatalf("valid addr rejected: %q, %v", tt.addr, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "stateapi.addr") {
+				t.Fatalf("addr %q accepted: %v", tt.addr, err)
+			}
+		})
+	}
+}
+
+func TestStateAPIAddrIgnoredWhenDisabled(t *testing.T) {
+	// Opt-in doctrine: with the surface disabled, a suspicious addr is
+	// inert configuration, not an error to fail startup on.
+	file := writeTemp(t, "stateapi:\n  enable: false\n  addr: 10.9.9.9:1\n")
+	cfg, err := Load(Options{File: file, Env: []string{}})
+	if err != nil || cfg.StateAPI.Enable {
+		t.Fatalf("disabled surface must not fail validation: %+v, %v", cfg, err)
 	}
 }

@@ -184,6 +184,7 @@ func daemonOptions(cfg *config.Config, configPath string) daemon.Options {
 		Actor:        actor,
 		WorkflowPath: cfg.WorkflowPath,
 		LockName:     daemon.InstanceLockName(cfg),
+		Version:      version,
 		Log:          logging.Default(),
 		Wire:         daemon.DefaultWire(cfg, "", actor),
 	}
