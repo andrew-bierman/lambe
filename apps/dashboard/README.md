@@ -84,8 +84,10 @@ The dashboard ships as a local Xcode build; there is no packaged download.
 
 ## Smoke test
 
-The Go assembled smoke (`cmd/lambe/stateapi_test.go`, run with
-`LAMBE_TEST_BD=1 go test ./cmd/lambe`) builds the compiled `lambe` binary,
+The Go assembled smoke (`test/dashsmoke`, run with
+`LAMBE_TEST_BD=1 mise exec go -- go test ./test/dashsmoke`; the test lives
+in the sibling `../lambe-shared-client` worktree until it is integrated
+here) builds the compiled `lambe` binary,
 boots it against a disposable tracker with `stateapi.enable: true`, and
 exercises the daemon's Go API client: descriptor discovery, an authenticated
 state read, uniform 401s without the token, a 202 refresh, and descriptor

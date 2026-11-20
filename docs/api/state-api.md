@@ -17,9 +17,10 @@ any DTO drift fails CI, and the Swift tests decode the same files.
   serves nothing — no listener, no discovery file. Enabling it is an operator
   decision (see [Configuration](#configuration)).
 - The listener binds a **loopback address only**. `stateapi.addr` defaults to
-  `127.0.0.1:0` (ephemeral port); configuration validation rejects any
-  non-loopback bind. There is no TLS: the surface is for same-machine,
-  same-user clients.
+  `127.0.0.1:0` (ephemeral port); configuration validation accepts only the
+  exact literal `127.0.0.1` in `host:port` form — `localhost`, `[::1]`, other
+  `127.x.x.x` addresses, and a missing port are all rejected. There is no
+  TLS: the surface is for same-machine, same-user clients.
 - Every response — success and error — is a single JSON document with
   `Content-Type: application/json`, UTF-8, HTML characters unescaped, and a
   trailing newline. The wire encoding is not indented; the committed fixtures
@@ -38,7 +39,7 @@ any DTO drift fails CI, and the Swift tests decode the same files.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `stateapi.enable` | `false` | Serve the API on loopback. Off means nothing listens. |
-| `stateapi.addr` | `127.0.0.1:0` | Loopback host:port to bind; port `0` selects an ephemeral port. Loopback IP literals only. |
+| `stateapi.addr` | `127.0.0.1:0` | Host:port to bind; port `0` selects an ephemeral port. The host must be the exact literal `127.0.0.1` — `localhost`, `[::1]`, and other 127.x.x.x addresses are rejected. |
 
 Environment overrides follow the documented flattening rule:
 `LAMBE_STATEAPI_ENABLE` and `LAMBE_STATEAPI_ADDR`.
