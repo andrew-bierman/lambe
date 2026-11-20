@@ -86,6 +86,10 @@ func runLive(args []string, useTUI bool, _ io.Reader, out io.Writer) error {
 		var readiness func() ([]tracker.ReadinessRow, error)
 		var workflows []tui.QueueWorkflow
 		if trackerPath != "" {
+			var routes []string
+			for _, route := range cfg.Workflows {
+				routes = append(routes, route.Label)
+			}
 			readiness = func() ([]tracker.ReadinessRow, error) {
 				local, err := tracker.NewLocal("", trackerPath, "")
 				if err != nil {
@@ -93,15 +97,15 @@ func runLive(args []string, useTUI bool, _ io.Reader, out io.Writer) error {
 				}
 				readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 				defer cancel()
-				var routes []string
-				for _, route := range cfg.Workflows {
-					routes = append(routes, route.Label)
-				}
-				labels := cfg.Labels
-				if len(routes) > 0 {
-					labels = nil
-				}
-				return local.Readiness(readCtx, labels, routes)
+				// The shared lane selection and post-filter, not a
+				// private read: QueueLanes is the one code source for
+				// the label-lane choice, and QueueReadiness verifies
+				// every row against the tracker's own records — bd has
+				// been observed to ignore label filters — so the TUI
+				// never shows a wrong-lane row and agrees with the
+				// daemon's queue projection.
+				every, anyLabels := tracker.QueueLanes(cfg.Labels, routes)
+				return tracker.QueueReadiness(readCtx, local, every, anyLabels)
 			}
 			create := func(title string, labels []string) (string, error) {
 				local, err := tracker.NewLocal("", trackerPath, "lambe@"+daemon.DefaultMachine())

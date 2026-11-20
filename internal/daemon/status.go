@@ -68,9 +68,6 @@ type Report struct {
 	Queue []tracker.ReadinessRow
 }
 
-// gateOutputMeta is an optional tracker field for a summary of the last gate output.
-const gateOutputMeta = "lambe_last_gate_output"
-
 // BuildReport reads the morning report from the local tracker: active runs
 // from the in-progress front joined with each session's newest attempt,
 // deferred runs from armed wake timers, issues parked as needs-human or
@@ -138,7 +135,7 @@ func BuildReport(ctx context.Context, tr tracker.Tracker, labels, routeLabels []
 		if issue.Metadata[tracker.MetaKind] != "" {
 			continue
 		}
-		output := issue.Metadata[gateOutputMeta]
+		output := issue.Metadata[gate.MetaLastGateOutput]
 		rep.NeedsHuman = append(rep.NeedsHuman, NeedsHumanItem{
 			Issue:          issue.ID,
 			Reason:         needsHumanReason(issue, output),

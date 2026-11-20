@@ -71,6 +71,13 @@ func TestNeedsHumanWritesReasonMetadataOnThePrimaryPath(t *testing.T) {
 	if reason != "completion check failed" {
 		t.Errorf("metadata reason = %q, want the escalation's recorded reason", reason)
 	}
+	output, err := hub.Get(ctx, issue.ID, MetaLastGateOutput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != "gate output" {
+		t.Errorf("metadata gate output = %q, want the escalation's recorded output", output)
+	}
 }
 
 // TestNeedsHumanWritesReasonMetadataOnTheBlockedFallback pins the fallback:
@@ -116,5 +123,12 @@ func TestNeedsHumanWritesReasonMetadataOnTheBlockedFallback(t *testing.T) {
 	}
 	if reason != "completion check failed" {
 		t.Errorf("metadata reason = %q, want the escalation's recorded reason", reason)
+	}
+	output, err := hub.Get(ctx, issue.ID, MetaLastGateOutput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != "gate output" {
+		t.Errorf("metadata gate output = %q, want the escalation's recorded output", output)
 	}
 }
