@@ -437,8 +437,9 @@ func TestStateAPIAddrValidationTable(t *testing.T) {
 	}{
 		{"ephemeral loopback", "127.0.0.1:0", true},
 		{"fixed loopback port", "127.0.0.1:8137", true},
-		{"loopback /8 range", "127.5.5.5:1", true},
-		{"ipv6 loopback", "[::1]:0", true},
+		{"loopback /8 range", "127.5.5.5:1", false},
+		{"alternate loopback", "127.0.0.2:1", false},
+		{"ipv6 loopback", "[::1]:0", false},
 		{"localhost name", "localhost:8080", false},
 		{"wildcard host", ":8080", false},
 		{"routable address", "10.0.0.1:8080", false},

@@ -454,18 +454,18 @@ func validate(cfg *Config) []error {
 	return errs
 }
 
-// validateLoopbackAddr accepts only loopback IP literals in host:port
-// form. The state surface must never bind a routable or wildcard
-// interface, and a literal keeps the bound host deterministic for the
-// middleware's strict Host check.
+// validateLoopbackAddr accepts only the exact loopback literal 127.0.0.1
+// in host:port form. The state surface must never bind a routable,
+// wildcard, or alternate loopback address: the Swift discovery contract
+// and the middleware's strict Host check both pin the bound host to this
+// one literal.
 func validateLoopbackAddr(addr string) error {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return fmt.Errorf("must be host:port, got %q", addr)
 	}
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("must be a loopback IP address (127.0.0.0/8 or ::1), got %q", host)
+	if host != "127.0.0.1" {
+		return fmt.Errorf("must be the loopback IP address 127.0.0.1, got %q", host)
 	}
 	return nil
 }
