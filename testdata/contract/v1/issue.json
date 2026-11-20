@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "daemon": {
+    "pid": 4242,
+    "identity": "darwin:boot:1:2",
+    "machine": "operators-mac",
+    "version": "v0.9.0",
+    "config_path": "/Users/operator/lambe/lambe.yaml"
+  },
+  "issue": "T-1",
+  "state": "running",
+  "attempt": 2,
+  "session": "ses-t1",
+  "last_event_age": "30s",
+  "last_event_at": "2026-11-19T11:59:30Z",
+  "summary": "attempt 2 in progress",
+  "phase": "gating",
+  "turn": 4,
+  "thread": "thread-t1",
+  "workspace": "/workspaces/T-1",
+  "workflow": "general",
+  "wake_at": "2026-11-19T13:00:00Z",
+  "last_gate": "pr checks pending",
+  "tail": "10:59:30 assistant: running the completion gate"
+}

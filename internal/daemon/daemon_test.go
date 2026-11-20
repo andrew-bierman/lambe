@@ -810,7 +810,7 @@ func TestBuildAndRenderReport(t *testing.T) {
 		Metadata: map[string]string{"lambe_last_gate_output": "tests failed\nfull log follows"},
 	}
 
-	rep, err := BuildReport(context.Background(), tr, nil)
+	rep, err := BuildReport(context.Background(), tr, nil, nil)
 	if err != nil {
 		t.Fatalf("build report: %v", err)
 	}
@@ -820,8 +820,13 @@ func TestBuildAndRenderReport(t *testing.T) {
 	if len(rep.Deferred) != 1 || !rep.Deferred[0].WakeAt.Equal(wake) {
 		t.Errorf("deferred = %+v, want one item waking at %s", rep.Deferred, wake)
 	}
-	if len(rep.NeedsHuman) != 1 || rep.NeedsHuman[0].LastGateOutput != "tests failed" {
-		t.Errorf("needs human = %+v, want gate summary 'tests failed'", rep.NeedsHuman)
+	if len(rep.NeedsHuman) != 1 {
+		t.Fatalf("needs human = %+v, want one item", rep.NeedsHuman)
+	}
+	// No reason metadata exists on stuck-1, so the reason degrades to the
+	// gate-output summary — never a hardcoded constant.
+	if rep.NeedsHuman[0].LastGateOutput != "tests failed" || rep.NeedsHuman[0].Reason != "tests failed" {
+		t.Errorf("needs human = %+v, want reason and gate summary 'tests failed'", rep.NeedsHuman)
 	}
 
 	var b strings.Builder

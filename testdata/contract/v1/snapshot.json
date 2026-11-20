@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "daemon": {
+    "pid": 4242,
+    "identity": "darwin:boot:1:2",
+    "machine": "operators-mac",
+    "version": "v0.9.0",
+    "config_path": "/Users/operator/lambe/lambe.yaml"
+  },
+  "runs": [
+    {
+      "issue": "T-1",
+      "session": "ses-t1",
+      "attempt": 2,
+      "state": "running",
+      "last_event_age": "30s",
+      "last_event_at": "2026-11-19T11:59:30Z",
+      "phase": "gating"
+    },
+    {
+      "issue": "T-2",
+      "attempt": 1,
+      "state": "deferred",
+      "last_event_age": "n/a",
+      "phase": "deferred"
+    }
+  ],
+  "deferred_until": "2026-11-19T12:10:00Z",
+  "wake_at": "2026-11-19T12:05:00Z",
+  "needs_human": [
+    {
+      "issue": "T-2",
+      "reason": "gate_failed",
+      "detail": "gh:pr rejected: merge conflict",
+      "since": "2026-11-19T11:00:00Z"
+    }
+  ],
+  "gate_rejections": [
+    {
+      "issue": "T-2",
+      "reason": "gh:pr rejected: merge conflict",
+      "at": "2026-11-19T11:00:00Z"
+    }
+  ],
+  "runs_as_of": "2026-11-19T12:00:00Z",
+  "needs_human_as_of": "2026-11-19T12:00:00Z",
+  "gate_rejections_as_of": "2026-11-19T12:00:00Z"
+}

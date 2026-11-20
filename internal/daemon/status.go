@@ -34,11 +34,18 @@ type DeferredRun struct {
 	Reason string
 }
 
-// NeedsHumanItem is one item blocked on a person, with the summary of its
-// last gate output when one exists.
+// NeedsHumanItem is one item blocked on a person: with the reason the
+// escalation wrote into tracker metadata when present, the summary of its
+// last gate output when one exists, and when the tracker last updated the
+// issue.
 type NeedsHumanItem struct {
 	Issue          string
+	Reason         string
 	LastGateOutput string
+	// Since is the issue's last update time — the closest thing the parked
+	// record carries to when it entered needs-human. Zero when the tracker
+	// did not report one.
+	Since time.Time
 }
 
 // GateRejection is one run the completion gate rejected overnight.
@@ -55,23 +62,26 @@ type Report struct {
 	Deferred       []DeferredRun
 	NeedsHuman     []NeedsHumanItem
 	GateRejections []GateRejection
+	// Queue is the dispatch-front readiness projection for the configured
+	// label lanes, read in the same grouped pass as every other section so
+	// the report, the queue route, and the TUI share one canonical result.
+	Queue []tracker.ReadinessRow
 }
-
-// gateOutputMeta is an optional tracker field for a summary of the last gate output.
-const gateOutputMeta = "lambe_last_gate_output"
 
 // BuildReport reads the morning report from the local tracker: active runs
 // from the in-progress front joined with each session's newest attempt,
-// deferred runs from armed wake timers, and issues parked as needs-human or
-// blocked. When labels is non-empty, only
-// issues carrying every listed label are included (opt-in work lane on a
-// shared tracker).
+// deferred runs from armed wake timers, issues parked as needs-human or
+// blocked, and the queue readiness projection. When labels is non-empty,
+// only issues carrying every listed label are included (opt-in work lane on
+// a shared tracker); routeLabels, when non-empty, are the named-workflow
+// routing labels and supersede it, matching the dispatcher's per-route
+// reads.
 //
 // Attempt state arrives as one grouped read. On a shell transport every
 // per-issue query costs an engine start, so joining the attempt records that
 // way made a production-sized hub report take minutes; every section here
 // joins the same grouped set instead.
-func BuildReport(ctx context.Context, tr tracker.Tracker, labels []string) (Report, error) {
+func BuildReport(ctx context.Context, tr tracker.Tracker, labels, routeLabels []string) (Report, error) {
 	rep := Report{}
 
 	// A failed attempt read degrades to "no attempts known": the sections
@@ -125,13 +135,33 @@ func BuildReport(ctx context.Context, tr tracker.Tracker, labels []string) (Repo
 		if issue.Metadata[tracker.MetaKind] != "" {
 			continue
 		}
+		output := issue.Metadata[gate.MetaLastGateOutput]
 		rep.NeedsHuman = append(rep.NeedsHuman, NeedsHumanItem{
 			Issue:          issue.ID,
-			LastGateOutput: summarizeGateOutput(issue.Metadata[gateOutputMeta]),
+			Reason:         needsHumanReason(issue, output),
+			LastGateOutput: summarizeGateOutput(output),
+			Since:          issue.UpdatedAt,
 		})
 	}
 
+	// Queue readiness rides the same grouped read set; a failed readiness
+	// read degrades to no rows rather than discarding the sections above —
+	// the queue is a viewer projection and the next refresh retries it.
+	if rows, err := tracker.QueueReadiness(ctx, tr, labels, routeLabels); err == nil {
+		rep.Queue = rows
+	}
+
 	return rep, nil
+}
+
+// needsHumanReason resolves a parked issue's real reason: the authoritative
+// metadata the escalation path stamps first, degrading to the gate-output
+// summary when it is absent. It is never a hardcoded constant.
+func needsHumanReason(issue tracker.Issue, gateOutput string) string {
+	if reason := strings.TrimSpace(issue.Metadata[gate.MetaNeedsHumanReason]); reason != "" {
+		return reason
+	}
+	return summarizeGateOutput(gateOutput)
 }
 
 // readAttempts reads lambe's whole attempt set in one query and groups it by
@@ -266,11 +296,26 @@ func Status(w io.Writer, cfg *config.Config, machine string) error {
 	if err != nil {
 		return fmt.Errorf("open tracker %s: %w", t.Name, err)
 	}
-	rep, err := BuildReport(context.Background(), local, cfg.Labels)
+	labels, routeLabels := queueLanes(cfg)
+	rep, err := BuildReport(context.Background(), local, labels, routeLabels)
 	if err != nil {
 		return err
 	}
 	return RenderReport(w, rep)
+}
+
+// queueLanes resolves a configuration's readiness lanes: the configured
+// required labels and the named-workflow routing labels, joined through the
+// tracker package's one code source for that selection. A nil configuration
+// has no lanes.
+func queueLanes(cfg *config.Config) (labels, routeLabels []string) {
+	if cfg == nil {
+		return nil, nil
+	}
+	for _, route := range cfg.Workflows {
+		routeLabels = append(routeLabels, route.Label)
+	}
+	return cfg.Labels, routeLabels
 }
 
 func orDash(s string) string {

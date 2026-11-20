@@ -270,7 +270,7 @@ func TestStatusAgainstBdTracker(t *testing.T) {
 		t.Fatalf("put deferred attempt: %v", err)
 	}
 
-	rep, err := BuildReport(ctx, local, nil)
+	rep, err := BuildReport(ctx, local, nil, nil)
 	if err != nil {
 		t.Fatalf("build report: %v", err)
 	}

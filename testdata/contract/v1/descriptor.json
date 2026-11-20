@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "instance": "lambe-1a2b3c4d5e6f",
+  "addr": "127.0.0.1:53412",
+  "bearer_token": "descriptor-fixture-token-not-a-secret",
+  "pid": 4242,
+  "identity": "darwin:boot:1:2",
+  "version": "v0.9.0",
+  "config_path": "/Users/operator/lambe/lambe.yaml",
+  "started_at": "2026-11-19T11:30:00Z"
+}

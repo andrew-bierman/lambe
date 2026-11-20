@@ -63,6 +63,28 @@ Add `~/.local/bin` to your `PATH` to use the `lambe` command by name.
 Run `lambe tui -demo` to try the dashboard before setting up a tracker or agent.
 Press `h` for history or `:` for commands. The demo runs entirely in memory.
 
+### Native dashboard (macOS)
+
+`apps/dashboard/` holds a native macOS SwiftUI app that attaches to a running
+daemon over the daemon's authenticated local HTTP state API and renders the
+same views the TUI shows — Queue, Attention, History, and run detail. The app
+is read-only: needs-human items are resolved in Beads or your tracker, not in
+the app.
+
+Open [apps/dashboard/LambeDash.xcodeproj](apps/dashboard/LambeDash.xcodeproj)
+and press Cmd+R, or run `mise dashboard:build` and `mise dashboard:test`.
+The toolbar's Live/Demo picker shows the four views with sample data before
+any daemon is set up.
+
+The app reads the daemon's optional local state API, which is off by default:
+set `stateapi.enable: true` (or `LAMBE_STATEAPI_ENABLE=true`) to turn it on.
+Discovery, instance selection, and demo mode are covered in
+[apps/dashboard/README.md](apps/dashboard/README.md), and the wire contract
+is specified in [docs/api/state-api.md](docs/api/state-api.md). Attaching
+never restarts a daemon — production start, stop, and restart stay with
+`lambe run` and the service units in
+[OS-level restart](#os-level-restart-production).
+
 ### Run a disposable task
 
 The end-to-end walkthrough — a throwaway Beads tracker, one task, and a shell
@@ -274,6 +296,35 @@ On narrow terminals and Rex splits, the TUI shows one pane at a time and fits mo
 the selected run, `Esc` from its details to return to the run list, or `Tab`
 to switch between panes.
 
+### Local state API (opt-in)
+
+A daemon can serve its supervised state as JSON on loopback for apps that
+render it — the bundled SwiftUI dashboard (`apps/dashboard`) is the first
+client. The surface is off until you ask for it, and binding is loopback-only:
+
+```yaml
+# lambe.yaml
+stateapi:
+  enable: true       # off by default
+  addr: 127.0.0.1:0  # ephemeral loopback port; loopback IP literals only
+```
+
+When enabled, every route — the refresh POST included — requires a per-start
+bearer token, and the daemon publishes a per-instance descriptor file
+(`<state-dir>/live/stateapi-<instance>.json`, mode 0600) carrying the bound
+address, the token, and the daemon identity. Clients enumerate those
+descriptors; nothing needs to be parsed from configuration or logs.
+
+- Routes: `GET /api/v1/state`, `GET /api/v1/queue`, `GET /api/v1/history`,
+  `GET /api/v1/{issue}`, `POST /api/v1/refresh`.
+- `POST /api/v1/refresh` is an operator action, not an advisory refresh: it
+  triggers a full supervision cycle and can write to the hub. Dashboards and
+  other read-only clients must stay GET-only.
+- The versioned wire contract — routes, field semantics, freshness,
+  evolution policy, error envelopes, discovery — is documented in
+  [docs/api/state-api.md](docs/api/state-api.md) and pinned by the committed
+  fixtures in [testdata/contract/v1/](testdata/contract/v1/).
+
 ### Rex integration
 
 Open the live dashboard or interactive demo from the Rex command palette.
@@ -298,7 +349,7 @@ lambe is built around a small set of seams. What exists today:
 | Harness | Pi | Codex through ACP, configurable ACP agents |
 | Store | Embedded Beads local store | — |
 | Gates | `shell`, `gh:run`, `gh:pr` | — |
-| Surfaces | terminal logs/TUI and JSON progress | MCP, optional Rex badges |
+| Surfaces | terminal logs/TUI and JSON progress | MCP, optional Rex badges, opt-in local state API with the SwiftUI dashboard |
 
 ## Configuration
 
@@ -399,7 +450,7 @@ In flight:
 - [x] MCP server surface
 - [x] ACP harness driver
 - [x] Rex surface
-- [x] HTTP state API
+- [x] HTTP state API — opt-in, bearer-guarded, contract documented and pinned with fixtures (`docs/api/state-api.md`)
 
 Next:
 

@@ -25,6 +25,19 @@ const (
 // a purged id is not re-dispatched.
 const MetaTombstone = "lambe_gate_tombstone"
 
+// MetaNeedsHumanReason is the metadata key carrying why an issue was
+// parked for human attention. Every needs-human write stamps it — the
+// primary path and the blocked fallback alike — so the served attention
+// view always has an authoritative reason to read.
+const MetaNeedsHumanReason = "lambe_needs_human_reason"
+
+// MetaLastGateOutput is the metadata key carrying the escalation's last
+// gate output. Every needs-human write stamps it alongside
+// MetaNeedsHumanReason — the primary path and the blocked fallback
+// alike — so the served attention view always has the gate-output
+// record to read.
+const MetaLastGateOutput = "lambe_last_gate_output"
+
 // ErrCloseRace reports a CAS-guarded close whose assignee guard no longer
 // held: another actor won, nothing was written.
 var ErrCloseRace = errors.New("gate close lost race")
@@ -138,19 +151,26 @@ func (h *BdHub) Defer(ctx context.Context, issue string, until time.Time, reason
 	return nil
 }
 
-// NeedsHuman implements Hub: the status move plus a comment carrying the
-// reason and the last gate output, so the escalation is readable through
-// bd alone.
+// NeedsHuman implements Hub: the status move — stamped with the reason
+// and last-gate-output metadata, mirroring the blocked fallback — plus a
+// comment carrying the reason and the last gate output, so the
+// escalation is readable through bd alone.
 func (h *BdHub) NeedsHuman(ctx context.Context, issue, reason, lastGateOutput string) error {
-	if _, err := h.tr.Update(ctx, tracker.UpdateRequest{ID: issue, Status: StatusNeedsHuman}); err != nil {
+	meta := map[string]string{MetaNeedsHumanReason: reason, MetaLastGateOutput: lastGateOutput}
+	if _, err := h.tr.Update(ctx, tracker.UpdateRequest{
+		ID:       issue,
+		Status:   StatusNeedsHuman,
+		Metadata: meta,
+	}); err != nil {
 		// bd rejects needs-human unless the custom status is configured
 		// (EnsureNeedsHumanStatus). Escalation must still park the issue:
-		// fall back to blocked, which hides it from dispatch, and keep the
-		// reason in metadata so the parking is auditable.
+		// fall back to blocked, which hides it from dispatch, and keep
+		// the reason and gate output in metadata so the parking is
+		// auditable.
 		if _, berr := h.tr.Update(ctx, tracker.UpdateRequest{
 			ID:       issue,
 			Status:   tracker.StatusBlocked,
-			Metadata: map[string]string{"lambe_needs_human_reason": reason},
+			Metadata: meta,
 		}); berr != nil {
 			return fmt.Errorf("needs-human %s: %w (blocked fallback: %v)", issue, err, berr)
 		}

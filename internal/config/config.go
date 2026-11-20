@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,7 +19,8 @@ import (
 const EnvPrefix = "LAMBE_"
 
 // Defaults for every tunable the supervisor reads. The heartbeat default is
-// one third of the assumed 450s heartbeat TTL.
+// one third of the assumed 450s heartbeat TTL. The state surface binds an
+// ephemeral loopback port and stays disabled until the operator opts in.
 const (
 	defaultTickSeconds        = 10
 	defaultAttemptCap         = 8
@@ -26,6 +28,7 @@ const (
 	defaultTurnTimeout        = 1 * time.Hour
 	defaultHeartbeatInterval  = 150 * time.Second
 	defaultHeartbeatTTLSecond = 450
+	defaultStateAPIAddr       = "127.0.0.1:0"
 )
 
 // Supervisor holds the watchdog tuning knobs.
@@ -43,6 +46,19 @@ type Tracker struct {
 	Name string
 	Type string // "hub" or "repo"
 	Path string
+}
+
+// StateAPI configures the optional local HTTP state surface (Symphony
+// §13.7). The surface is an explicit opt-in: until Enable is true the
+// daemon serves nothing, exactly as before.
+type StateAPI struct {
+	// Enable serves the bearer-guarded API on loopback. The default is
+	// false: no listener exists until the operator asks for one.
+	Enable bool
+	// Addr is the loopback host:port to bind; port 0 selects an ephemeral
+	// port. Only loopback IP literals are accepted; validation rejects
+	// anything wider or routable.
+	Addr string
 }
 
 // ACP selects a known ACP agent or an explicit argv (command takes precedence).
@@ -74,6 +90,9 @@ type Config struct {
 	// from DefaultWorkflowPath's search order.
 	WorkflowPath string
 	Workflows    []NamedWorkflow
+	// StateAPI configures the local HTTP state surface; disabled by
+	// default.
+	StateAPI StateAPI
 	// Labels is the opt-in work lane: when non-empty, the daemon claims
 	// only issues that carry every listed label. An empty slice (the
 	// default) dispatches every ready issue, preserving the pre-filter
@@ -152,6 +171,10 @@ func Load(opts Options) (*Config, error) {
 		},
 		WorkflowPath:  strings.TrimSpace(k.String("workflow_path")),
 		WorkspaceRoot: strings.TrimSpace(k.String("workspace.root")),
+		StateAPI: StateAPI{
+			Enable: k.Bool("stateapi.enable"),
+			Addr:   strings.TrimSpace(k.String("stateapi.addr")),
+		},
 	}
 
 	if cfg.ACP.Agent == "" {
@@ -271,6 +294,10 @@ func defaultsProvider() *confmap.Confmap {
 	return confmap.Provider(map[string]any{
 		"workspace": map[string]any{"root": ""},
 		"trackers":  []any{map[string]any{"name": "local", "type": "repo", "path": "."}},
+		"stateapi": map[string]any{
+			"enable": false,
+			"addr":   defaultStateAPIAddr,
+		},
 		"supervisor": map[string]any{
 			"tick_seconds":         defaultTickSeconds,
 			"attempt_cap":          defaultAttemptCap,
@@ -401,6 +428,12 @@ func validate(cfg *Config) []error {
 		errs = append(errs, fmt.Errorf("supervisor.heartbeat_interval must be positive, got %s", s.HeartbeatInterval))
 	}
 
+	if cfg.StateAPI.Enable {
+		if err := validateLoopbackAddr(cfg.StateAPI.Addr); err != nil {
+			errs = append(errs, fmt.Errorf("stateapi.addr: %w", err))
+		}
+	}
+
 	names := make(map[string]bool, len(cfg.Trackers))
 	for i, tr := range cfg.Trackers {
 		if tr.Name == "" {
@@ -421,6 +454,22 @@ func validate(cfg *Config) []error {
 	return errs
 }
 
+// validateLoopbackAddr accepts only the exact loopback literal 127.0.0.1
+// in host:port form. The state surface must never bind a routable,
+// wildcard, or alternate loopback address: the Swift discovery contract
+// and the middleware's strict Host check both pin the bound host to this
+// one literal.
+func validateLoopbackAddr(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("must be host:port, got %q", addr)
+	}
+	if host != "127.0.0.1" {
+		return fmt.Errorf("must be the loopback IP address 127.0.0.1, got %q", host)
+	}
+	return nil
+}
+
 // Summary renders the resolved config for startup logs.
 func (c *Config) Summary() string {
 	var b strings.Builder
@@ -430,5 +479,10 @@ func (c *Config) Summary() string {
 	b.WriteString(" turn_timeout=" + c.Supervisor.TurnTimeout.String())
 	b.WriteString(" heartbeat_interval=" + c.Supervisor.HeartbeatInterval.String())
 	b.WriteString(" trackers=" + strconv.Itoa(len(c.Trackers)))
+	if c.StateAPI.Enable {
+		b.WriteString(" stateapi=on addr=" + c.StateAPI.Addr)
+	} else {
+		b.WriteString(" stateapi=off")
+	}
 	return b.String()
 }
