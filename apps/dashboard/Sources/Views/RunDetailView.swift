@@ -5,11 +5,14 @@
 //  The detail column (U8): the selected run's facts at parity with the
 //  TUI inspector (R5) — phase, state, attempt, turn, thread, workspace,
 //  workflow, wake-at, session, last gate preview, and the bounded output
-//  tail. Seed facts render immediately from the selected row; the fetched
-//  `GET /api/v1/{issue}` body upgrades the column when it arrives.
-//  Truthful about absence: a history row the daemon no longer knows shows
-//  the archive facts and says so; a failed fetch shows the seed facts and
-//  the failure — nothing silently swallowed (R11).
+//  tail. Seed facts render immediately from the selected row — the
+//  recorded attention reason, the newest gate rejection, and the queue
+//  block included, so a selection before its first run is already
+//  useful; the fetched `GET /api/v1/{issue}` body upgrades the column
+//  when it arrives. Truthful about absence: an issue with no live record
+//  (a 404, an archived history row) shows the seed facts and says so; a
+//  failed fetch shows the seed facts and the failure — nothing silently
+//  swallowed (R11).
 //
 
 import SwiftUI
@@ -40,6 +43,7 @@ struct RunDetailView: View {
             VStack(alignment: .leading, spacing: 16) {
                 header(seed)
                 statusBlock(seed)
+                seedFacts(seed)
                 if let issue = connection.detail.issue {
                     factsGrid(issue)
                     if let lastGate = issue.lastGate, !lastGate.isEmpty {
@@ -124,6 +128,71 @@ struct RunDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
             .accessibilityElement(children: .combine)
+    }
+
+    /// The facts the section row already carries (R3): the recorded
+    /// needs-human reason, the newest gate rejection, and the queue
+    /// block. Rendered from the seed alone, so the column is useful
+    /// before a run exists — the fetched live body never carries these.
+    @ViewBuilder
+    private func seedFacts(_ seed: RunSeed) -> some View {
+        if seed.attentionReason != nil || seed.gateReason != nil || seed.blocked {
+            VStack(alignment: .leading, spacing: 10) {
+                if let reason = seed.attentionReason {
+                    seedBlock(title: "Needs human") {
+                        Text(reason)
+                            .font(.footnote)
+                        if let detail = seed.attentionDetail, !detail.isEmpty {
+                            Text(detail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        RelativeTimeText(label: "waiting", iso: seed.attentionSince)
+                    }
+                }
+                if let gateReason = seed.gateReason {
+                    seedBlock(title: "Latest gate rejection") {
+                        Text(gateReason)
+                            .font(.footnote)
+                        Text(gateLine(seed))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if seed.blocked {
+                    seedBlock(title: "Blocked from dispatch") {
+                        Text(seed.queueReason ?? "blocked")
+                            .font(.footnote)
+                    }
+                }
+            }
+        }
+    }
+
+    /// One seed-fact block, styled like the status note.
+    private func seedBlock<V: View>(
+        title: String, @ViewBuilder content: () -> V
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            content()
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+        .accessibilityElement(children: .combine)
+    }
+
+    /// The gate kind and time, truthful about absence (R10) — the same
+    /// posture the Attention section's rejection rows render.
+    private func gateLine(_ seed: RunSeed) -> String {
+        let gate = seed.gate ?? "gate kind unknown"
+        if RFC3339.date(seed.gateAt) != nil {
+            return gate
+        }
+        return "\(gate), time unknown"
     }
 
     private func factsGrid(_ issue: WireIssue) -> some View {

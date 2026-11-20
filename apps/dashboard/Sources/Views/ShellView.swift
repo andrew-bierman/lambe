@@ -141,13 +141,17 @@ struct SidebarView: View {
         .navigationTitle("Views")
     }
 
-    /// Row count per section, from the current payloads.
+    /// Row count per section — exactly the rows each section renders.
+    /// The queue badge shares `QueueComposition` with the list, so a
+    /// settled row in History is never counted as a queued run and an
+    /// issue with both payloads is never counted twice.
     private func count(for item: SidebarSection) -> Int? {
         switch item {
         case .queue:
-            let rows = connection.queueFeed.payload?.rows.count ?? 0
-            let runs = connection.snapshotFeed.payload?.runs.count ?? 0
-            let total = rows + runs
+            let total = QueueComposition.renderedRowCount(
+                snapshot: connection.snapshotFeed.payload,
+                queue: connection.queueFeed.payload
+            )
             return total > 0 ? total : nil
         case .attention:
             let items = connection.snapshotFeed.payload?.needsHuman.count ?? 0

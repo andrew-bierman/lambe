@@ -575,7 +575,8 @@ final class DetailModel {
         } catch {
             guard !Task.isCancelled, loadedID == id, revision == startRevision else { return }
             let apiError = (error as? APIError) ?? .unexpectedResponse
-            phase = .failed(apiError.displayText)
+            // Queued and parked tasks can have useful tracker facts without a run.
+            phase = apiError == .status(code: 404) ? .seedOnly : .failed(apiError.displayText)
         }
     }
 

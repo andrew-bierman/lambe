@@ -490,6 +490,116 @@ struct SeedResolverTests {
         #expect(seed?.issue == "lambe-zz")
         #expect(seed?.title == nil)
     }
+
+    @Test("Attention reason and newest gate rejection attach to the seed (R3)")
+    func attentionAndGateFacts() throws {
+        let snapshot = try decode(ContractBodies.snapshot, as: WireSnapshot.self)
+        // lambe-kd8 appears only in the snapshot's needs-human and gate
+        // rejection sections — no live run record — so the seed is the
+        // ID plus the attached facts, and the detail column can render
+        // them before any run exists.
+        let seed = SeedResolver.resolve(
+            issue: "lambe-kd8", snapshot: snapshot, queue: nil, history: nil
+        )
+        #expect(seed?.attentionReason == "gate rejected: checks red")
+        #expect(seed?.attentionDetail == "gate failed twice")
+        #expect(seed?.attentionSince == "2026-11-19T09:02:00Z")
+        #expect(seed?.gate == "gh:pr")
+        #expect(seed?.gateReason == "2 checks failing")
+        #expect(seed?.gateAt == "2026-11-19T09:02:00Z")
+    }
+
+    @Test("A queue row's seed carries its blocked reason")
+    func queueRowReason() throws {
+        let queue = try decode(ContractBodies.queue, as: WireQueue.self)
+        let seed = SeedResolver.resolve(
+            issue: "lambe-jq9", snapshot: nil, queue: queue, history: nil
+        )
+        #expect(seed?.blocked == true)
+        #expect(seed?.queueReason == "blocked by 2 issues")
+        #expect(seed?.attentionReason == nil)
+    }
+}
+
+// MARK: - Queue composition
+
+/// The live-smoke regressions for what the Queue renders and what the
+/// sidebar badge counts: both read `QueueComposition`, so the assertions
+/// here pin the exact rows the section list shows.
+@Suite("Queue composition")
+struct QueueCompositionTests {
+    /// The daemon's actual state vocabulary (`internal/mcp` RunState
+    /// names): pending, running, deferred stay; settled, failed, canceled
+    /// are terminal; one unknown state for additive evolution.
+    private static let snapshotFixture = """
+    {"schema_version":1,"daemon":{"pid":4242},"runs":[
+      {"issue":"lambe-run","attempt":1,"state":"running","last_event_age":"2s"},
+      {"issue":"lambe-pend","attempt":1,"state":"pending","last_event_age":"n/a"},
+      {"issue":"lambe-wait","attempt":1,"state":"deferred","last_event_age":"4m"},
+      {"issue":"lambe-done","attempt":1,"state":"settled","last_event_age":"9s"},
+      {"issue":"lambe-fail","attempt":3,"state":"failed","last_event_age":"1m"},
+      {"issue":"lambe-cancel","attempt":1,"state":"canceled","last_event_age":"2m"},
+      {"issue":"lambe-add","attempt":1,"state":"brand-new-state","last_event_age":"1s"}
+    ],"needs_human":[],"gate_rejections":[]}
+    """
+
+    /// Queue rows for: the running issue (would duplicate the active
+    /// run), the settled issue (re-queued after archiving), the unknown
+    /// state's issue, and one never-dispatched issue.
+    private static let queueFixture = """
+    {"schema_version":1,"daemon":{"pid":4242},"as_of":"2026-11-19T09:30:10Z","rows":[
+      {"id":"lambe-run","title":"Running now","reason":"ready: no open blockers"},
+      {"id":"lambe-done","title":"Re-queued after settling","reason":"ready: no open blockers"},
+      {"id":"lambe-add","title":"Fresh issue","reason":"ready: no open blockers"},
+      {"id":"lambe-only","title":"Never dispatched","reason":"blocked by 1 issue","blocked":true}
+    ]}
+    """
+
+    @Test("Terminal snapshot rows stay out of Active runs; the server's states decide")
+    func terminalRowsExcluded() throws {
+        let snapshot = try decode(Self.snapshotFixture, as: WireSnapshot.self)
+        let active = QueueComposition.activeRuns(in: snapshot).map(\.issue)
+        #expect(active == ["lambe-run", "lambe-pend", "lambe-wait", "lambe-add"])
+    }
+
+    @Test("Readiness dedupes against active runs only — a settled run's re-queued issue still renders")
+    func readinessDedupesActiveOnly() throws {
+        let snapshot = try decode(Self.snapshotFixture, as: WireSnapshot.self)
+        let queue = try decode(Self.queueFixture, as: WireQueue.self)
+        let rows = QueueComposition.readinessRows(queue: queue, snapshot: snapshot)
+            .map(\.id)
+        // lambe-run and lambe-add are suppressed (active runs render
+        // them — the unknown state stays active); lambe-done renders —
+        // its only snapshot row is settled, History's.
+        #expect(rows == ["lambe-done", "lambe-only"])
+    }
+
+    @Test("Sidebar count equals the rendered rows: deduped, terminal-free")
+    func renderedCount() throws {
+        let snapshot = try decode(Self.snapshotFixture, as: WireSnapshot.self)
+        let queue = try decode(Self.queueFixture, as: WireQueue.self)
+        let count = QueueComposition.renderedRowCount(snapshot: snapshot, queue: queue)
+        // 4 active runs + 2 readiness rows — not the raw payload sum of 11.
+        #expect(count == 6)
+        #expect(count == QueueComposition.activeRuns(in: snapshot).count
+            + QueueComposition.readinessRows(queue: queue, snapshot: snapshot).count)
+    }
+
+    @Test("Demo payloads: issues in both payloads count once, badge matches the list")
+    func demoBadge() {
+        // Sample snapshot runs demo-hk4 + demo-pm7; the queue also lists
+        // both plus demo-fs2 and demo-jq9. Rendered: 2 runs + 2 readiness.
+        let count = QueueComposition.renderedRowCount(
+            snapshot: SampleData.snapshot, queue: SampleData.queue
+        )
+        #expect(count == 4)
+        #expect(count != SampleData.queue.rows.count + SampleData.snapshot.runs.count)
+    }
+
+    @Test("No payloads render zero rows")
+    func emptyCount() {
+        #expect(QueueComposition.renderedRowCount(snapshot: nil, queue: nil) == 0)
+    }
 }
 
 // MARK: - Detail
@@ -505,13 +615,29 @@ struct DetailModelTests {
         #expect(detail.issue == nil)
     }
 
-    @Test("A failed fetch records a token-free reason and keeps seed state")
-    func failedFetch() async {
+    @Test("A 404 detail fetch renders seed facts as normal — no failure posture")
+    func notFoundIsSeedOnly() async {
         let detail = DetailModel()
-        await detail.load(id: "lambe-xq2") {
+        await detail.load(id: "lambe-kd8") {
             throw APIError.status(code: 404)
         }
-        #expect(detail.phase == .failed("Not found"))
+        // An attention item before (or without) a run record: the seed
+        // facts carry the column, the same as an archived history row.
+        #expect(detail.phase == .seedOnly)
+        #expect(detail.issue == nil)
+    }
+
+    @Test("Every other error keeps the failure posture")
+    func otherErrorsStayFailed() async {
+        let detail = DetailModel()
+        await detail.load(id: "lambe-xq2") {
+            throw APIError.status(code: 503)
+        }
+        #expect(detail.phase == .failed("Daemon error (HTTP 503)"))
+        await detail.load(id: "lambe-xq2") {
+            throw APIError.transport(.timedOut)
+        }
+        #expect(detail.phase == .failed("Timed out"))
         #expect(detail.issue == nil)
     }
 

@@ -111,7 +111,9 @@ struct SectionContainer<Content: View>: View {
 // MARK: - Queue
 
 /// Active supervised runs on top, readiness rows for every configured
-/// label below (R2).
+/// label below (R2). What renders — and therefore what the sidebar badge
+/// counts — is `QueueComposition`'s decision: terminal snapshot rows
+/// belong to History (R4) and never duplicate a readiness row.
 struct QueueView: View {
     @Environment(ConnectionModel.self) private var connection
     @Binding var selectedIssue: String?
@@ -119,28 +121,24 @@ struct QueueView: View {
     var body: some View {
         SectionContainer(section: .queue) { _ in
             List(selection: $selectedIssue) {
-                if let snapshot = connection.snapshotFeed.payload, !snapshot.runs.isEmpty {
+                let active = QueueComposition.activeRuns(in: connection.snapshotFeed.payload)
+                if !active.isEmpty {
                     Section("Active runs") {
-                        ForEach(snapshot.runs) { run in
+                        ForEach(active) { run in
                             ActiveRunRow(run: run)
                                 .tag(run.issue)
                         }
                     }
                 }
-                if let queue = connection.queueFeed.payload {
-                    // Readiness rows for issues already rendered as active
-                    // runs would duplicate those rows; the active-run
-                    // section is authoritative for them.
-                    let activeIDs = Set(
-                        connection.snapshotFeed.payload?.runs.map(\.issue) ?? []
-                    )
-                    let readiness = queue.rows.filter { !activeIDs.contains($0.id) }
-                    if !readiness.isEmpty {
-                        Section("Readiness") {
-                            ForEach(readiness) { row in
-                                QueueRowView(row: row)
-                                    .tag(row.id)
-                            }
+                let readiness = QueueComposition.readinessRows(
+                    queue: connection.queueFeed.payload,
+                    snapshot: connection.snapshotFeed.payload
+                )
+                if !readiness.isEmpty {
+                    Section("Readiness") {
+                        ForEach(readiness) { row in
+                            QueueRowView(row: row)
+                                .tag(row.id)
                         }
                     }
                 }
