@@ -159,8 +159,8 @@ func TestDescriptorDecodesDaemonDocument(t *testing.T) {
 	// The identity is liveness-checked on read, so a non-empty value must
 	// be this process's real identity; without a platform identity the
 	// check is skipped and the document still resolves.
-	if real, err := proc.ProcessIdentity(os.Getpid()); err == nil {
-		doc.Identity = real
+	if identity, err := proc.ProcessIdentity(os.Getpid()); err == nil {
+		doc.Identity = identity
 	} else {
 		doc.Identity = ""
 	}

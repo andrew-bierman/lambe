@@ -195,7 +195,7 @@ func seedTracker(t *testing.T, bin string) *seededTracker {
 	// The parked status must be accepted by bd before the daemon's own
 	// idempotent EnsureNeedsHumanStatus runs; the escalation path writes
 	// this same configuration.
-	cfg := exec.Command(bin, "config", "set", "status.custom", gate.StatusNeedsHuman)
+	cfg := exec.Command(bin, "config", "set", "status.custom", gate.StatusNeedsHuman) //nolint:gosec // G204: fixed seeded bd command
 	cfg.Dir = project
 	if out, err := cfg.CombinedOutput(); err != nil {
 		t.Fatalf("configure needs-human status: %v: %s", err, out)
@@ -307,12 +307,14 @@ func (d *daemonProcess) kill() {
 		return // stopTerm already waited; done is drained, waiting would hang
 	}
 	select {
-	case <-d.done:
-		return // already exited
+	case err := <-d.done:
+		_ = err // already exited; cleanup discards the exit status
+		return
 	default:
 	}
 	_ = d.cmd.Process.Signal(syscall.SIGKILL)
-	<-d.done
+	exitErr := <-d.done
+	_ = exitErr // reap after SIGKILL; exit status is irrelevant in cleanup
 }
 
 // stopTerm drives the graceful shutdown ladder with SIGTERM and fails if
