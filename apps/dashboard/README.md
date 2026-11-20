@@ -80,7 +80,66 @@ fixtures the Swift tests decode live in `testdata/contract/v1/`.
 
 ## Distribution
 
-The dashboard ships as a local Xcode build; there is no packaged download.
+Download the [private macOS preview](https://github.com/andrew-bierman/lambe/releases/tag/dashboard-v1.0)
+with repository access. The preview requires a running Lambe v0.9.0 or later
+daemon with the local state API enabled for live data.
+
+`mise dashboard:package` builds the ZIP locally. The script builds the app natively with Xcode
+(`-configuration Release`, universal arm64 + x86_64), signs it with the
+project's own ad-hoc identity, verifies the signature with `codesign --verify`,
+and packs `LambeDash.app` into `apps/dashboard/.build/package/`:
+
+- `LambeDash.zip` — the app, packed with `ditto` so the signature and
+  metadata survive.
+- `LambeDash.zip.sha256` — checksum of the ZIP; verify a copy with
+  `shasum -a 256 -c LambeDash.zip.sha256` from that directory.
+
+The packaging build has its own DerivedData path under
+`apps/dashboard/.build/package/` and does not disturb `dashboard:build` or
+`dashboard:test`. The same machine and Xcode rebuild the same app; ZIP
+timestamps differ per run, so the checksum identifies each build.
+
+### Requirements on the receiving Mac
+
+- macOS 26.0 or newer — the deployment target is macOS 26.0; older systems
+  refuse to launch the app.
+- No Xcode, command-line tools, or third-party dependencies: the ZIP contains
+  one self-contained `.app` bundle.
+
+### Ad-hoc signing vs Developer ID
+
+The app is ad-hoc signed ("Sign to Run Locally"), matching the project's
+committed signing settings: it builds and runs with no developer certificate
+and no Apple Developer account. An ad-hoc signature proves the bundle was not
+modified after signing, but it carries no verified developer identity, so the
+app is not notarized and Gatekeeper treats it as coming from an unknown
+developer:
+
+- On the machine that built it, the app just opens.
+- Copied to another Mac, macOS quarantines the ZIP and asks for confirmation
+  on first launch (System Settings → Privacy & Security → "Open Anyway").
+  That prompt is expected for ad-hoc builds, not a malfunction. Do not
+  disable Gatekeeper or strip quarantine attributes; the confirmation dialog
+  is the supported flow.
+
+For distribution beyond trusted colleagues — verified identity, no
+confirmation prompt — sign with a Developer ID certificate and notarize the
+ZIP (`notarytool`). That is out of scope here on purpose: it requires a paid
+Apple Developer account and adds signing infrastructure this repo does not
+want. Nothing in the project prevents adding it later.
+
+### Connecting to a daemon
+
+The packaged app attaches to daemons exactly like the dev build; nothing is
+baked in at package time. The daemon must opt in to the state API first —
+`stateapi.enable` is off by default, `stateapi.addr` defaults to loopback
+(`127.0.0.1:0`), and every route requires the per-start bearer token published
+in the daemon's 0600 descriptor file under the state directory's `live/`.
+Pick the instance in Settings; the app is read-only and never starts, stops,
+or restarts a daemon — production lifecycle stays with the terminal running
+`lambe run` or the launchd/systemd units. Full details: [Attaching to a
+daemon](#attaching-to-a-daemon) and
+[docs/api/state-api.md](../../docs/api/state-api.md).
 
 ## Smoke test
 

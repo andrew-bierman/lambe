@@ -6,7 +6,7 @@
 #
 # Environment:
 #   LAMBE_VERSION          release version, with or without the leading "v"
-#                          (default: 0.8.4)
+#                          (default: 0.9.1)
 #   LAMBE_INSTALL_DIR      directory to install the binary into
 #                          (default: ~/.local/bin)
 #   LAMBE_PRIVATE_RELEASE  set to 1 to download through `gh` instead of curl;
@@ -15,7 +15,7 @@
 set -eu
 
 (
-version=${LAMBE_VERSION:-0.8.4}
+version=${LAMBE_VERSION:-0.9.1}
 install_dir=${LAMBE_INSTALL_DIR:-$HOME/.local/bin}
 
 version=${version#v}

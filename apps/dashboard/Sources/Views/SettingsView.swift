@@ -20,7 +20,7 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             list
             Divider()
-            HStack {
+            HStack(spacing: 8) {
                 Text("Instances resolve to exactly one running daemon via its live descriptor. The token is never shown.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -69,13 +69,16 @@ struct InstanceRow: View {
     @State private var health: String = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
                 Text(record.name)
                     .font(.body.weight(.medium))
                 if isSelected {
                     Text("selected")
-                        .font(.caption2)
+                        .font(.caption2.weight(.medium))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.tint.opacity(0.15), in: Capsule())
                         .foregroundStyle(.tint)
                 }
             }

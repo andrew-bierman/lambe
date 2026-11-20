@@ -54,7 +54,7 @@ struct RunDetailView: View {
                     }
                 }
             }
-            .padding(18)
+            .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .task(id: seed.issue) {
@@ -70,7 +70,7 @@ struct RunDetailView: View {
     // MARK: - Blocks
 
     private func header(_ seed: RunSeed) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(seed.issue)
                 .font(.title3.weight(.semibold).monospaced())
             if let title = seed.title, !title.isEmpty {
@@ -126,7 +126,7 @@ struct RunDetailView: View {
             .foregroundStyle(.secondary)
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
             .accessibilityElement(children: .combine)
     }
 
@@ -181,7 +181,7 @@ struct RunDetailView: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
         .accessibilityElement(children: .combine)
     }
 
@@ -215,18 +215,18 @@ struct RunDetailView: View {
                     Text(name)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .frame(width: 86, alignment: .leading)
+                        .frame(width: 92, alignment: .leading)
                     Text(value ?? "")
                         .font(.footnote.monospaced())
                         .textSelection(.enabled)
                     Spacer(minLength: 0)
                 }
-                .padding(.vertical, 3)
+                .padding(.vertical, 4)
                 Divider()
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: 8)
                 .fill(.quaternary.opacity(0.3))
         )
         .padding(.vertical, 2)
@@ -256,8 +256,8 @@ struct RunDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxHeight: 220)
-            .padding(8)
-            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+            .padding(10)
+            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(title): \(body)")
         }

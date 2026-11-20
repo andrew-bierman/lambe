@@ -57,8 +57,9 @@ struct SectionContainer<Content: View>: View {
                 let copy = PresentationResolver.emptyCopy(for: section)
                 ContentUnavailableView(copy.title, systemImage: section.systemImage, description: Text(copy.detail))
             case .loading:
-                VStack(spacing: 12) {
+                VStack(spacing: 14) {
                     ProgressView()
+                        .controlSize(.large)
                     Text("Reading daemon state…")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -154,7 +155,7 @@ struct ActiveRunRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(run.issue)
                     .font(.body.weight(.medium))
                     .monospacedDigit()
@@ -173,7 +174,7 @@ struct ActiveRunRow: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 1)
+        .padding(.vertical, 2)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
             "Run \(run.issue), \(run.phase ?? run.state), attempt \(run.attempt), last event \(run.lastEventAge)"
@@ -190,7 +191,7 @@ struct QueueRowView: View {
             Image(systemName: row.blocked ? "lock.fill" : "checkmark.circle")
                 .foregroundStyle(row.blocked ? Color.orange : Color.green)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(row.title ?? row.id)
                     .font(.body.weight(.medium))
                 Text(reason)
@@ -207,7 +208,7 @@ struct QueueRowView: View {
                 .font(.caption.monospaced())
                 .foregroundStyle(.tertiary)
         }
-        .padding(.vertical, 1)
+        .padding(.vertical, 2)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityText)
     }
@@ -273,7 +274,7 @@ struct NeedsHumanRow: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(item.issue)
                     .font(.body.weight(.medium))
                     .monospacedDigit()
@@ -286,7 +287,7 @@ struct NeedsHumanRow: View {
                 }
             }
             Spacer()
-            VStack(alignment: .trailing, spacing: 2) {
+            VStack(alignment: .trailing, spacing: 3) {
                 if RFC3339.date(item.since) != nil {
                     RelativeTimeText(label: "waiting", iso: item.since)
                 } else {
@@ -299,7 +300,7 @@ struct NeedsHumanRow: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .padding(.vertical, 1)
+        .padding(.vertical, 2)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityText)
     }
@@ -319,7 +320,7 @@ struct GateRejectionRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(rejection.reason)
                     .font(.footnote)
                 Text(gateLine)
@@ -331,7 +332,7 @@ struct GateRejectionRow: View {
                 .font(.caption.monospaced())
                 .foregroundStyle(.tertiary)
         }
-        .padding(.vertical, 1)
+        .padding(.vertical, 2)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
             "Gate rejection on \(rejection.issue): \(rejection.reason). \(gateLine)"
@@ -375,7 +376,7 @@ struct HistoryRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(run.title ?? run.issue)
                     .font(.body.weight(.medium))
                 Text(run.phase ?? run.state ?? "")
@@ -395,7 +396,7 @@ struct HistoryRow: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.vertical, 1)
+        .padding(.vertical, 2)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityText)
     }

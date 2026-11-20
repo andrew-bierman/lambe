@@ -9,3 +9,7 @@ run = "xcodebuild -project apps/dashboard/LambeDash.xcodeproj -scheme LambeDash 
 [tasks."dashboard:test"]
 description = "Run the LambeDash Swift Testing suite"
 run = "xcodebuild -project apps/dashboard/LambeDash.xcodeproj -scheme LambeDash -destination 'platform=macOS' -derivedDataPath apps/dashboard/DerivedData test"
+
+[tasks."dashboard:package"]
+description = "Package a Release universal LambeDash.app ZIP with SHA256 checksum"
+run = "scripts/package-dashboard.sh"
