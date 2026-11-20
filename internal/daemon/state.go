@@ -457,24 +457,32 @@ func newStateAPIToken() (string, error) {
 type stateAPISurface struct {
 	server     *httpstate.Server
 	descriptor string
+	// once makes shutdown idempotent: Run registers a deferred teardown
+	// for its startup-failure returns and the graceful path calls this
+	// again; the Once collapses them into one execution.
+	once sync.Once
 }
 
 // shutdown stops advertising and then stops serving: the descriptor is
 // removed first, so a client never resolves a listener that is already
-// gone. Run releases the instance lock only after shutdown returns, which
-// keeps the descriptor removal ahead of the lock release.
+// gone. It is safe to call more than once. Run releases the instance lock
+// only after every caller has returned, which keeps the descriptor removal
+// ahead of the lock release on both the graceful and the startup-failure
+// path.
 func (s *stateAPISurface) shutdown(ctx context.Context, log *slog.Logger) {
 	if s == nil {
 		return
 	}
-	if s.descriptor != "" {
-		if err := os.Remove(s.descriptor); err != nil && !errors.Is(err, os.ErrNotExist) {
-			log.Warn("stateapi descriptor removal failed", "path", s.descriptor, "error", err)
+	s.once.Do(func() {
+		if s.descriptor != "" {
+			if err := os.Remove(s.descriptor); err != nil && !errors.Is(err, os.ErrNotExist) {
+				log.Warn("stateapi descriptor removal failed", "path", s.descriptor, "error", err)
+			}
 		}
-	}
-	if s.server != nil {
-		if err := s.server.Shutdown(ctx); err != nil {
-			log.Warn("stateapi shutdown incomplete", "error", err)
+		if s.server != nil {
+			if err := s.server.Shutdown(ctx); err != nil {
+				log.Warn("stateapi shutdown incomplete", "error", err)
+			}
 		}
-	}
+	})
 }

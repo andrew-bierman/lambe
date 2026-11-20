@@ -424,6 +424,85 @@ func TestStateAPIBindFailureLogsAndContinues(t *testing.T) {
 	}
 }
 
+// stateAPIListenAddr returns the addr the "stateapi listening" startup
+// record advertised, recovered from the daemon's captured JSON logs.
+func stateAPIListenAddr(t *testing.T, logs *syncBuffer) string {
+	t.Helper()
+	for _, line := range strings.Split(logs.String(), "\n") {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			continue
+		}
+		if rec["msg"] == "stateapi listening" {
+			addr, _ := rec["addr"].(string)
+			return addr
+		}
+	}
+	return ""
+}
+
+// TestStateAPIStartupFailureLeavesNoDescriptorOrListener pins the
+// startup-failure teardown: the surface binds and publishes before the
+// workflow loads, and a workflow-load failure returns from Run before the
+// loop ever starts. The teardown must still run — Run returns with the
+// descriptor removed, the advertised addr refusing connections, and the
+// lock released, leaving nothing advertised or bound behind. Run finishes
+// in milliseconds, so the proof reads the captured logs after the fact
+// rather than racing the live surface mid-flight.
+func TestStateAPIStartupFailureLeavesNoDescriptorOrListener(t *testing.T) {
+	t.Parallel()
+	stateDir := t.TempDir()
+	cfg := stateAPIConfig(t.TempDir(), true)
+	logs := &syncBuffer{}
+	opts := testDaemonOptions(stateDir, cfg, logs)
+	// An isolated, missing workflow file: the loader fails after the
+	// surface is already up.
+	opts.WorkflowPath = filepath.Join(t.TempDir(), "missing-WORKFLOW.md")
+
+	d, err := New(opts)
+	if err != nil {
+		t.Fatalf("new daemon: %v", err)
+	}
+	runDone := make(chan error, 1)
+	go func() { runDone <- d.Run(context.Background()) }()
+
+	select {
+	case err := <-runDone:
+		if err == nil || !strings.Contains(err.Error(), "load workflow") {
+			t.Fatalf("run error = %v, want the workflow load failure", err)
+		}
+	case <-time.After(ShutdownBound + 5*time.Second):
+		t.Fatal("daemon did not return from the startup failure")
+	}
+
+	// The surface bound and published before the failure struck.
+	addr := stateAPIListenAddr(t, logs)
+	if addr == "" {
+		t.Fatalf("state surface never logged listening; logs:\n%s", logs.String())
+	}
+
+	// No abandoned descriptor: nothing advertises the dead surface.
+	descPath := StateAPIPath(stateDir, cfg)
+	if _, err := os.Stat(descPath); !os.IsNotExist(err) {
+		t.Errorf("descriptor survived the startup failure: %v", err)
+	}
+	// No abandoned listener: the advertised addr refuses connections.
+	conn, dialErr := net.DialTimeout("tcp", addr, time.Second)
+	if dialErr == nil {
+		_ = conn.Close()
+		t.Errorf("listener still accepting on %s after the startup failure", addr)
+	}
+	// The lock is released: a fresh acquirer wins immediately.
+	lockPath := filepath.Join(stateDir, InstanceLockName(cfg))
+	probe, probeErr := AcquireStateLock(lockPath)
+	if probe != nil {
+		_ = probe.Release()
+	}
+	if probeErr != nil {
+		t.Errorf("lock not released after the startup failure: %v", probeErr)
+	}
+}
+
 // TestStateAPIDescriptorsAreDistinctPerInstance pins enumeration over a
 // shared state dir: two daemons with disjoint tracker paths publish two
 // distinct descriptor files with distinct addrs and tokens — never a

@@ -328,6 +328,20 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// instance owns. A failure here is logged and the daemon continues —
 	// a viewer surface never kills the daemon.
 	d.stateapi = d.startStateAPI()
+	if d.stateapi != nil {
+		// The teardown must cover every later startup failure: the
+		// workflow block below can return before the loop ever starts.
+		// Registered after the lock-release defer, LIFO order runs this
+		// teardown before the lock returns, so no abandoned descriptor
+		// or listener survives a failed startup. The Once in shutdown
+		// collapses the graceful path's own call into the same
+		// execution — never a double shutdown.
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), ShutdownBound)
+			defer cancel()
+			d.stateapi.shutdown(ctx, d.log)
+		}()
+	}
 
 	adopted, err := Recover(runCtx, TrackerOrphans{Tracker: primary}, primary, d.opts.Actor,
 		ShutdownBound, d.log)
