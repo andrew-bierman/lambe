@@ -19,6 +19,9 @@ import (
 type fakeSource struct {
 	mu        sync.Mutex
 	snapshot  Snapshot
+	queue     Queue
+	history   History
+	identity  Daemon
 	issueID   string
 	issue     IssueState
 	issueOK   bool
@@ -35,6 +38,24 @@ func (f *fakeSource) Issue(id string) (IssueState, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.issue, f.issueOK && id == f.issueID
+}
+
+func (f *fakeSource) Queue() Queue {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.queue
+}
+
+func (f *fakeSource) History() History {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.history
+}
+
+func (f *fakeSource) Identity() Daemon {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.identity
 }
 
 func (f *fakeSource) Refresh() { f.refreshes.Add(1) }
@@ -243,6 +264,277 @@ func TestSnapshotFieldNames(t *testing.T) {
 	}
 }
 
+// TestSnapshotFieldNamesExtendAdditively pins the additive keys: the daemon
+// identity block, the per-section as_of stamps, the machine timestamps
+// beside every human age, and the operator phase.
+func TestSnapshotFieldNamesExtendAdditively(t *testing.T) {
+	snap := testSnapshot()
+	snap.Runs[0].Phase = "gating"
+	snap.RunsAsOf = time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	snap.NeedsHumanAsOf = snap.RunsAsOf
+	snap.GateRejectionsAsOf = snap.RunsAsOf
+	src := &fakeSource{
+		snapshot: snap,
+		identity: Daemon{PID: 4242, Identity: "darwin:boot:1", Machine: "testbox", Version: "test", ConfigPath: "/cfg/lambe.yaml"},
+	}
+	ts := httptest.NewServer(handlerFor(src))
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/v1/state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"daemon", "runs_as_of", "needs_human_as_of", "gate_rejections_as_of"} {
+		if _, ok := raw[key]; !ok {
+			t.Errorf("snapshot JSON missing additive key %q", key)
+		}
+	}
+	var daemon map[string]json.RawMessage
+	if err := json.Unmarshal(raw["daemon"], &daemon); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"pid", "identity", "machine", "version", "config_path"} {
+		if _, ok := daemon[key]; !ok {
+			t.Errorf("daemon JSON missing key %q", key)
+		}
+	}
+	var first map[string]json.RawMessage
+	var runsRaw []map[string]json.RawMessage
+	if err := json.Unmarshal(raw["runs"], &runsRaw); err != nil {
+		t.Fatal(err)
+	}
+	first = runsRaw[0]
+	for _, key := range []string{"phase", "last_event_at"} {
+		if _, ok := first[key]; !ok {
+			t.Errorf("run JSON missing additive key %q", key)
+		}
+	}
+	var got SnapshotResponse
+	rawBytes, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(rawBytes, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Daemon.PID != 4242 || got.Daemon.Machine != "testbox" {
+		t.Errorf("daemon block = %+v", got.Daemon)
+	}
+	if got.Runs[0].Phase != "gating" {
+		t.Errorf("phase = %q", got.Runs[0].Phase)
+	}
+	if _, err := time.Parse(time.RFC3339, got.Runs[0].LastEventAt); err != nil {
+		t.Errorf("last_event_at = %q, want RFC3339", got.Runs[0].LastEventAt)
+	}
+}
+
+// TestQueueRoute pins the queue read: rows carry id, title, reason,
+// blocked, and blockers; the as_of is the source's read stamp; the daemon
+// block rides along; an empty source yields an empty list, not an error;
+// and POST is refused with the typed envelope.
+func TestQueueRoute(t *testing.T) {
+	src := &fakeSource{queue: Queue{
+		AsOf: time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC),
+		Rows: []QueueRow{
+			{ID: "Q-1", Title: "ready task", Reason: "no blockers"},
+			{
+				ID: "Q-2", Title: "blocked task", Reason: "waiting on api", Blocked: true,
+				Blockers: []QueueBlocker{{ID: "api-9", Title: "api migration"}},
+			},
+		},
+	}}
+	srv := New(src, mustListen(t))
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	go func() { _ = srv.Start() }()
+	base := "http://" + srv.Addr().String()
+
+	var got QueueResponse
+	if err := getJSON(t, base+"/api/v1/queue", &got); err != nil {
+		t.Fatalf("GET queue: %v", err)
+	}
+	if got.SchemaVersion != 1 || got.AsOf != "2026-11-15T12:00:00Z" {
+		t.Errorf("queue envelope = %+v", got)
+	}
+	if len(got.Rows) != 2 {
+		t.Fatalf("rows = %+v", got.Rows)
+	}
+	if got.Rows[0].ID != "Q-1" || got.Rows[0].Title != "ready task" || got.Rows[0].Blocked {
+		t.Errorf("ready row = %+v", got.Rows[0])
+	}
+	blocked := got.Rows[1]
+	if !blocked.Blocked || blocked.Reason != "waiting on api" || len(blocked.Blockers) != 1 || blocked.Blockers[0].ID != "api-9" || blocked.Blockers[0].Title != "api migration" {
+		t.Errorf("blocked row = %+v", blocked)
+	}
+
+	resp, err := http.Post(base+"/api/v1/queue", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("POST queue status = %d, want 405", resp.StatusCode)
+	}
+	var env ErrorResponse
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatal(err)
+	}
+	if env.Error != "method_not_allowed" {
+		t.Errorf("POST queue envelope = %+v", env)
+	}
+
+	empty := New(&fakeSource{}, mustListen(t))
+	t.Cleanup(func() { _ = empty.Shutdown(context.Background()) })
+	go func() { _ = empty.Start() }()
+	var emptyResp QueueResponse
+	if err := getJSON(t, "http://"+empty.Addr().String()+"/api/v1/queue", &emptyResp); err != nil {
+		t.Fatalf("GET empty queue: %v", err)
+	}
+	if emptyResp.Rows == nil || len(emptyResp.Rows) != 0 {
+		t.Errorf("empty queue rows = %+v, want an empty list", emptyResp.Rows)
+	}
+}
+
+// TestHistoryRoute pins the history read: newest-first entries carrying the
+// operator phase, attempt, and updated_at; the as_of stamp and daemon
+// block; and POST refused with the typed envelope.
+func TestHistoryRoute(t *testing.T) {
+	newest := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	src := &fakeSource{history: History{
+		AsOf: newest,
+		Runs: []HistoryRun{
+			{Issue: "H-2", Phase: "stopped: gate red", Attempt: 3, UpdatedAt: newest},
+			{Issue: "H-1", Phase: "interrupted", Attempt: 1, UpdatedAt: newest.Add(-time.Hour)},
+		},
+	}}
+	srv := New(src, mustListen(t))
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	go func() { _ = srv.Start() }()
+
+	var got HistoryResponse
+	if err := getJSON(t, "http://"+srv.Addr().String()+"/api/v1/history", &got); err != nil {
+		t.Fatalf("GET history: %v", err)
+	}
+	if got.SchemaVersion != 1 || got.AsOf != "2026-11-15T12:00:00Z" {
+		t.Errorf("history envelope = %+v", got)
+	}
+	if len(got.Runs) != 2 || got.Runs[0].Issue != "H-2" || got.Runs[1].Issue != "H-1" {
+		t.Fatalf("runs = %+v, want newest first", got.Runs)
+	}
+	if got.Runs[1].Phase != "interrupted" || got.Runs[1].UpdatedAt != "2026-11-15T11:00:00Z" {
+		t.Errorf("archived row = %+v", got.Runs[1])
+	}
+	resp, err := http.Post("http://"+srv.Addr().String()+"/api/v1/history", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("POST history status = %d, want 405", resp.StatusCode)
+	}
+}
+
+// TestIssueDetailFields pins the enriched run detail: phase, turn, thread,
+// workspace, workflow, wake-at, gate preview, and the bounded tail decode
+// additively beside the §13.7 core.
+func TestIssueDetailFields(t *testing.T) {
+	wake := time.Date(2026, 11, 15, 13, 0, 0, 0, time.UTC)
+	src := &fakeSource{
+		snapshot: testSnapshot(),
+		issueID:  "T-1",
+		issueOK:  true,
+		issue: IssueState{
+			State: "running", Attempt: 2, Session: "ses-abc",
+			LastEvent: time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC),
+			Phase:     "gating", Turn: 4, Thread: "thread-7",
+			Workspace: "/workspaces/T-1", Workflow: "general",
+			WakeAt: wake, LastGate: "pr checks pending",
+			Tail: "recent output",
+		},
+	}
+	ts := httptest.NewServer(handlerFor(src))
+	defer ts.Close()
+
+	var got IssueResponse
+	if err := getJSON(t, ts.URL+"/api/v1/T-1", &got); err != nil {
+		t.Fatalf("GET issue: %v", err)
+	}
+	if got.Phase != "gating" || got.Turn != 4 || got.Thread != "thread-7" {
+		t.Errorf("projection fields = %+v", got)
+	}
+	if got.Workspace != "/workspaces/T-1" || got.Workflow != "general" || got.WakeAt != "2026-11-15T13:00:00Z" {
+		t.Errorf("workspace/workflow/wake = %+v", got)
+	}
+	if got.LastGate != "pr checks pending" || got.Tail != "recent output" || got.TailTruncated {
+		t.Errorf("gate/tail = %+v", got)
+	}
+	if _, err := time.Parse(time.RFC3339, got.LastEventAt); err != nil {
+		t.Errorf("last_event_at = %q, want RFC3339", got.LastEventAt)
+	}
+
+	// The bounded tail: more than 4KB is cut to the bound, on a rune
+	// boundary, with the flag set.
+	src.issue.Tail = strings.Repeat("出", 3000)
+	resp, err := http.Get(ts.URL + "/api/v1/T-1") // #nosec G107 -- test-local server URL
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var bounded IssueResponse
+	if err := json.NewDecoder(resp.Body).Decode(&bounded); err != nil {
+		t.Fatal(err)
+	}
+	if len(bounded.Tail) > maxTailBytes {
+		t.Errorf("tail = %d bytes, want at most %d", len(bounded.Tail), maxTailBytes)
+	}
+	if !bounded.TailTruncated {
+		t.Errorf("tail_truncated not set for an over-bound tail")
+	}
+	if !strings.HasPrefix(bounded.Tail, "出") {
+		t.Errorf("tail cut mid-rune: %q", bounded.Tail[:8])
+	}
+}
+
+// TestResponsesCarryDaemonIdentity pins R9: every data response names the
+// daemon serving it.
+func TestResponsesCarryDaemonIdentity(t *testing.T) {
+	ident := Daemon{PID: 7, Machine: "testbox", Version: "v1"}
+	src := &fakeSource{
+		snapshot: testSnapshot(), identity: ident,
+		issue: IssueState{State: "running", Attempt: 1}, issueID: "T-1", issueOK: true,
+	}
+	srv := New(src, mustListen(t))
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	go func() { _ = srv.Start() }()
+	base := "http://" + srv.Addr().String()
+
+	var snap SnapshotResponse
+	if err := getJSON(t, base+"/api/v1/state", &snap); err != nil {
+		t.Fatalf("GET state: %v", err)
+	}
+	if snap.Daemon.PID != 7 || snap.Daemon.Machine != "testbox" || snap.Daemon.Version != "v1" {
+		t.Errorf("state daemon block = %+v", snap.Daemon)
+	}
+	var issue IssueResponse
+	if err := getJSON(t, base+"/api/v1/T-1", &issue); err != nil {
+		t.Fatalf("GET issue: %v", err)
+	}
+	if issue.Daemon != snap.Daemon {
+		t.Errorf("issue daemon block = %+v", issue.Daemon)
+	}
+	var refresh RefreshResponse
+	if err := postJSON(t, base+"/api/v1/refresh", &refresh); err != nil {
+		t.Fatalf("POST refresh: %v", err)
+	}
+	if !refresh.Accepted || refresh.Daemon != snap.Daemon {
+		t.Errorf("refresh daemon block = %+v", refresh.Daemon)
+	}
+}
+
 func TestConcurrentReads(t *testing.T) {
 	src := &fakeSource{snapshot: testSnapshot(), issue: IssueState{State: "running", Attempt: 1}, issueID: "T-1", issueOK: true}
 	srv := New(src, mustListen(t))
@@ -391,4 +683,18 @@ func getJSON(t *testing.T, url string, into any) error {
 		return err
 	}
 	return json.Unmarshal(buf.Bytes(), into)
+}
+
+// postJSON issues a POST expecting 202 and decodes the body.
+func postJSON(t *testing.T, url string, into any) error {
+	t.Helper()
+	resp, err := http.Post(url, "application/json", nil) // #nosec G107 -- test-local server URL
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+	return json.NewDecoder(resp.Body).Decode(into)
 }

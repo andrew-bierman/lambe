@@ -176,8 +176,14 @@ func OpenControl(ctx context.Context, opts Options) (mcp.Control, func(), error)
 
 // StateSource returns the httpstate.StateSource adapter over the daemon's
 // live run state and cached report, for the read-only HTTP state surface.
+// The adapter also serves the daemon identity block and reads the live
+// projection file for the operator phases, gate rejections, and restart
+// history the registry alone does not carry.
 func (d *Daemon) StateSource() httpstate.StateSource {
-	return NewStateSource(d.asm.Registry, d.asm.Reports, d.poke)
+	src := NewStateSource(d.asm.Registry, d.asm.Reports, d.poke)
+	src.Identify(d.opts.Machine, d.opts.Version, d.opts.ConfigPath)
+	src.WatchLive(LivePath(d.opts.StateDir, d.opts.Config))
+	return src
 }
 
 // New assembles the daemon: it runs the Wire hook, applies defaults to
@@ -720,16 +726,14 @@ func controlTimeout(cfg *config.Config) time.Duration {
 
 // refreshReport rebuilds the morning report from the primary tracker into
 // the report cache so the HTTP state surface serves tracker-derived
-// sections without per-request tracker reads.
+// sections — needs-human, queue readiness — without per-request tracker
+// reads.
 func (d *Daemon) refreshReport(ctx context.Context) {
 	if d.primary == nil {
 		return
 	}
-	var labels []string
-	if d.opts.Config != nil {
-		labels = d.opts.Config.Labels
-	}
-	rep, err := BuildReport(ctx, d.primary, labels)
+	labels, routeLabels := queueLanes(d.opts.Config)
+	rep, err := BuildReport(ctx, d.primary, labels, routeLabels)
 	if err != nil {
 		d.log.Warn("report refresh failed", "category", ErrorCategory(err), "error", err)
 		return

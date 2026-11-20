@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/andrew-bierman/lambe/internal/config"
 	"github.com/andrew-bierman/lambe/internal/httpstate"
+	"github.com/andrew-bierman/lambe/internal/proc"
 )
 
 // ReportCache holds the morning report as of the daemon's last tick, so the
@@ -47,13 +49,22 @@ func (c *ReportCache) Load() (Report, time.Time) {
 
 // StateSourceAdapter implements httpstate.StateSource over daemon state:
 // live runs come from the run registry, tracker-derived sections from the
-// report cache, and Refresh pokes the daemon for a prompt re-evaluation.
-// It is safe for concurrent use.
+// report cache, operator phases and gate rejections from the live
+// projection file, and Refresh pokes the daemon for a prompt
+// re-evaluation. It is safe for concurrent use.
 type StateSourceAdapter struct {
 	registry *RunRegistry
 	reports  *ReportCache
 	poke     func()
 	inflight atomic.Bool
+
+	// info is the daemon identity block served with every response; zero
+	// until Identify wires it.
+	info httpstate.Daemon
+	// livePath is the live projection file backing the phase overlays, the
+	// gate-rejection derivation, and the history merge; empty disables
+	// those reads.
+	livePath string
 }
 
 // Compile-time check that StateSourceAdapter satisfies the HTTP state seam.
@@ -65,20 +76,92 @@ func NewStateSource(registry *RunRegistry, reports *ReportCache, poke func()) *S
 	return &StateSourceAdapter{registry: registry, reports: reports, poke: poke}
 }
 
+// Identify stamps the daemon identity facts served with every response.
+// PID and process identity are taken from the serving process; machine,
+// version, and config path come from the daemon's configuration.
+func (a *StateSourceAdapter) Identify(machine, version, configPath string) {
+	a.info = httpstate.Daemon{
+		PID:        os.Getpid(),
+		Machine:    machine,
+		Version:    version,
+		ConfigPath: configPath,
+	}
+	if id, err := proc.ProcessIdentity(os.Getpid()); err == nil {
+		a.info.Identity = id
+	}
+}
+
+// WatchLive points the adapter at the daemon's live projection file, the
+// source of the operator phases, gate rejections, and restart history. The
+// file is written by the projection's own flusher; reads degrade to
+// "unknown" when it is missing or unreadable.
+func (a *StateSourceAdapter) WatchLive(path string) {
+	a.livePath = path
+}
+
+// Identity implements StateSource, returning the daemon identity block
+// stamped by Identify.
+func (a *StateSourceAdapter) Identity() httpstate.Daemon { return a.info }
+
+// readProjection reads the live projection file; a missing or unreadable
+// projection yields the zero value, degrading everything it feeds to
+// "unknown" rather than an error a viewer surface would have to handle.
+func (a *StateSourceAdapter) readProjection() LiveSnapshot {
+	if a.livePath == "" {
+		return LiveSnapshot{}
+	}
+	snap, _, err := ReadLive(a.livePath)
+	if err != nil {
+		return LiveSnapshot{}
+	}
+	return snap
+}
+
+// projectionIndex maps the projection's runs by issue for phase overlays.
+func projectionIndex(snap LiveSnapshot) map[string]LiveRun {
+	if len(snap.Runs) == 0 {
+		return nil
+	}
+	byIssue := make(map[string]LiveRun, len(snap.Runs))
+	for _, run := range snap.Runs {
+		byIssue[run.IssueID] = run
+	}
+	return byIssue
+}
+
+// gateRejectionPhase reports whether an operator phase marks a run the
+// completion gate rejected outright.
+func gateRejectionPhase(phase string) bool {
+	return phase == "stopped: gate red" || phase == "stopped: gate escalation"
+}
+
+// maxHistoryEntries bounds the history merge; it matches the projection's
+// own retained-history bound.
+const maxHistoryEntries = 100
+
 // Snapshot returns the full supervised state: live runs in registration
 // order, the earliest armed wake as the supervisor wake time, and the
-// cached needs-human and gate-rejection sections.
+// cached needs-human section. Gate rejections come from the live
+// projection's own records — the last gate output and the moment the
+// projection recorded the stop — and carry a gate kind or timestamp only
+// when those records actually have one.
 func (a *StateSourceAdapter) Snapshot() httpstate.Snapshot {
-	snap := httpstate.Snapshot{}
+	snap := httpstate.Snapshot{RunsAsOf: time.Now()}
 	var wake time.Time
+	live := a.readProjection()
+	byIssue := projectionIndex(live)
 	for _, run := range a.registry.List() {
-		snap.Runs = append(snap.Runs, httpstate.Run{
+		entry := httpstate.Run{
 			Issue:     run.IssueID,
 			Session:   run.Session,
 			Attempt:   run.Attempt,
 			State:     stateName(run.State),
 			LastEvent: run.LastEventAt,
-		})
+		}
+		if projected, ok := byIssue[run.IssueID]; ok {
+			entry.Phase = projected.Phase
+		}
+		snap.Runs = append(snap.Runs, entry)
 		if run.WakeAt.IsZero() {
 			continue
 		}
@@ -89,37 +172,159 @@ func (a *StateSourceAdapter) Snapshot() httpstate.Snapshot {
 	snap.WakeAt = wake
 
 	if a.reports != nil {
-		rep, _ := a.reports.Load()
+		rep, at := a.reports.Load()
+		snap.NeedsHumanAsOf = at
 		for _, nh := range rep.NeedsHuman {
 			snap.NeedsHuman = append(snap.NeedsHuman, httpstate.NeedsHuman{
 				Issue:  nh.Issue,
-				Reason: "gate_rejected",
+				Reason: nh.Reason,
 				Detail: nh.LastGateOutput,
-			})
-		}
-		for _, gr := range rep.GateRejections {
-			snap.GateRejections = append(snap.GateRejections, httpstate.GateRejection{
-				Issue:  gr.Issue,
-				Gate:   "formula",
-				Reason: gr.Output,
+				Since:  nh.Since,
 			})
 		}
 	}
+	// Recent gate rejections derive from the projection's own records:
+	// gate-stopped rows carry the last gate output and the row's last
+	// update — the moment the rejection was observed. No gate kind exists
+	// in those records, so none is served; times come only from records.
+	// Their as_of is the projection read, never the tracker cache stamp.
+	snap.GateRejectionsAsOf = snap.RunsAsOf
+	for _, section := range [][]LiveRun{live.Runs, live.History} {
+		for _, run := range section {
+			if !gateRejectionPhase(run.Phase) {
+				continue
+			}
+			snap.GateRejections = append(snap.GateRejections, httpstate.GateRejection{
+				Issue:  run.IssueID,
+				Reason: run.LastGate,
+				At:     run.UpdatedAt,
+			})
+		}
+	}
+	sort.SliceStable(snap.GateRejections, func(i, j int) bool {
+		return snap.GateRejections[i].At.Before(snap.GateRejections[j].At)
+	})
 	return snap
 }
 
-// Issue returns one issue's state from the live registry; issues only known
-// to the cached report report their tracker status. The second return is
-// false when the issue is unknown to both.
+// Queue returns the cached readiness projection: the daemon's canonical
+// tracker read of the configured label lanes, taken outside the request
+// path and shared with the status projection.
+func (a *StateSourceAdapter) Queue() httpstate.Queue {
+	queue := httpstate.Queue{}
+	if a.reports == nil {
+		return queue
+	}
+	rep, at := a.reports.Load()
+	queue.AsOf = at
+	for _, row := range rep.Queue {
+		qr := httpstate.QueueRow{
+			ID:      row.ID,
+			Title:   row.Title,
+			Reason:  row.Reason,
+			Blocked: row.Blocked,
+		}
+		for _, b := range row.Blockers {
+			qr.Blockers = append(qr.Blockers, httpstate.QueueBlocker{ID: b.ID, Title: b.Title})
+		}
+		queue.Rows = append(queue.Rows, qr)
+	}
+	return queue
+}
+
+// History merges the live projection's terminal rows and restart-archived
+// attempts with the registry's terminal rows, newest first, bounded at
+// maxHistoryEntries. Restart-archived rows arrive with the operator phase
+// "interrupted"; terminal live rows keep their stop phase.
+func (a *StateSourceAdapter) History() httpstate.History {
+	history := httpstate.History{AsOf: time.Now()}
+	live := a.readProjection()
+	seen := make(map[string]bool)
+	add := func(issue, title, phase, state string, attempt int, outcome string, at time.Time) {
+		key := fmt.Sprintf("%s/%d", issue, attempt)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		history.Runs = append(history.Runs, httpstate.HistoryRun{
+			Issue:     issue,
+			Title:     title,
+			Phase:     phase,
+			State:     state,
+			Attempt:   attempt,
+			Outcome:   outcome,
+			UpdatedAt: at,
+		})
+	}
+	// The projection's archived attempts: past attempts and everything the
+	// previous daemon life left behind, restart-interrupted runs included.
+	for _, run := range live.History {
+		add(run.IssueID, run.Title, run.Phase, "", run.Attempt, "", run.UpdatedAt)
+	}
+	// The projection's terminal live rows, not yet archived out.
+	for _, run := range live.Runs {
+		if !strings.HasPrefix(run.Phase, "stopped:") {
+			continue
+		}
+		add(run.IssueID, run.Title, run.Phase, "", run.Attempt, "", run.UpdatedAt)
+	}
+	// The registry's terminal rows: runs that finished without a
+	// projection record (MCP-spawned runs before the loop picks them up).
+	// Those records carry no operator phase, so none is served — the
+	// coarse state and outcome text are what they actually hold.
+	for _, run := range a.registry.List() {
+		if runLive(run.State) {
+			continue
+		}
+		add(run.IssueID, "", "", stateName(run.State), run.Attempt, run.Outcome, run.LastEventAt)
+	}
+	sort.SliceStable(history.Runs, func(i, j int) bool {
+		return history.Runs[i].UpdatedAt.After(history.Runs[j].UpdatedAt)
+	})
+	if len(history.Runs) > maxHistoryEntries {
+		history.Runs = history.Runs[:maxHistoryEntries]
+	}
+	return history
+}
+
+// Issue returns one issue's state from the live registry, enriched with the
+// projection's operator phase, turn, workflow, last gate preview, and
+// output tail; issues only known to the cached report report their tracker
+// status. The second return is false when the issue is unknown to both.
 func (a *StateSourceAdapter) Issue(id string) (httpstate.IssueState, bool) {
 	if run, ok := a.registry.Lookup(id); ok {
-		return httpstate.IssueState{
+		st := httpstate.IssueState{
 			State:     stateName(run.State),
 			Attempt:   run.Attempt,
 			Session:   run.Session,
 			LastEvent: run.LastEventAt,
 			Summary:   run.Outcome,
-		}, true
+			Thread:    run.Session,
+			Workspace: run.Workspace,
+			WakeAt:    run.WakeAt,
+			Tail:      run.Tail,
+		}
+		// The projection carries the supervision vocabulary the registry
+		// does not; the file read is the projection's own flush cadence.
+		if projected, ok := projectionIndex(a.readProjection())[id]; ok {
+			st.Phase = projected.Phase
+			st.Turn = projected.Turn
+			st.Workflow = projected.Workflow
+			st.LastGate = projected.LastGate
+			if projected.Thread != "" {
+				st.Thread = projected.Thread
+			}
+			if st.Session == "" {
+				st.Session = projected.Thread
+			}
+			if st.Tail == "" {
+				st.Tail = projected.Tail
+			}
+			if st.WakeAt.IsZero() {
+				st.WakeAt = projected.WakeAt
+			}
+		}
+		return st, true
 	}
 	if a.reports != nil {
 		rep, _ := a.reports.Load()

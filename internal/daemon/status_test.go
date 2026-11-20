@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -48,11 +49,167 @@ func seedReportTracker(t *testing.T, nIssues int) (*fakeTracker, time.Time) {
 // TestBuildReportGroupsAttemptsInOneRead is the perf contract: a report over
 // many issues must answer every attempt join from the single grouped
 // ListByMetadata read, never one Attempts query per issue.
+// readinessCountingTracker adds a readiness source over a fakeTracker and
+// counts both reads, so tests can pin the canonical queue read's cost.
+type readinessCountingTracker struct {
+	tracker.Tracker
+	rows           []tracker.ReadinessRow
+	readinessErr   error
+	mu             sync.Mutex
+	readinessCalls int
+	idReads        int
+}
+
+func (t *readinessCountingTracker) Readiness(context.Context, []string, []string) ([]tracker.ReadinessRow, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.readinessCalls++
+	if t.readinessErr != nil {
+		return nil, t.readinessErr
+	}
+	return t.rows, nil
+}
+
+func (t *readinessCountingTracker) Dispatchable(ctx context.Context, q tracker.DispatchQuery) ([]tracker.Issue, error) {
+	t.mu.Lock()
+	if len(q.IDs) > 0 {
+		t.idReads++
+	}
+	t.mu.Unlock()
+	return t.Tracker.Dispatchable(ctx, q)
+}
+
+func TestBuildReportNeedsHumanReasonAndSince(t *testing.T) {
+	t.Parallel()
+	tr := newFakeTracker()
+	updated := time.Now().Add(-30 * time.Minute).UTC().Truncate(time.Second)
+	// The primary path's record shape: the escalation reason stamped in
+	// metadata alongside the parked status.
+	tr.issues["meta-reason"] = tracker.Issue{
+		ID:        "meta-reason",
+		Status:    gate.StatusNeedsHuman,
+		UpdatedAt: updated,
+		Metadata: map[string]string{
+			gate.MetaNeedsHumanReason: "completion check failed",
+			"lambe_last_gate_output":  "gate output blob\nmore lines",
+		},
+	}
+	// The fallback shape: no recorded reason, only gate output.
+	tr.issues["fallback"] = tracker.Issue{
+		ID:        "fallback",
+		Status:    tracker.StatusBlocked,
+		UpdatedAt: updated,
+		Metadata:  map[string]string{"lambe_last_gate_output": "gh:pr rejected\nfull log follows"},
+	}
+
+	rep, err := BuildReport(context.Background(), tr, nil, nil)
+	if err != nil {
+		t.Fatalf("build report: %v", err)
+	}
+	byID := map[string]NeedsHumanItem{}
+	for _, item := range rep.NeedsHuman {
+		byID[item.Issue] = item
+	}
+	meta, ok := byID["meta-reason"]
+	if !ok {
+		t.Fatalf("primary-path item missing: %+v", rep.NeedsHuman)
+	}
+	// Authoritative record first, gate summary only as detail.
+	if meta.Reason != "completion check failed" {
+		t.Errorf("primary-path reason = %q, want the recorded escalation reason", meta.Reason)
+	}
+	if meta.LastGateOutput != "gate output blob" {
+		t.Errorf("primary-path gate summary = %q", meta.LastGateOutput)
+	}
+	if !meta.Since.Equal(updated) {
+		t.Errorf("primary-path since = %s, want the record's update time %s", meta.Since, updated)
+	}
+	fallback, ok := byID["fallback"]
+	if !ok {
+		t.Fatalf("fallback item missing: %+v", rep.NeedsHuman)
+	}
+	// Without metadata the reason degrades to the gate-output summary —
+	// never a hardcoded constant.
+	if fallback.Reason != "gh:pr rejected" {
+		t.Errorf("fallback reason = %q, want the gate-output summary", fallback.Reason)
+	}
+	if !fallback.Since.Equal(updated) {
+		t.Errorf("fallback since = %s, want the record's update time", fallback.Since)
+	}
+}
+
+// TestBuildReportQueueReadsTrackerOnce pins the queue's cost: one report
+// build answers the whole readiness projection with one readiness read and
+// one grouped label read, and the served rows are lane-valid with
+// ambiguity never presented as dispatchable.
+func TestBuildReportQueueReadsTrackerOnce(t *testing.T) {
+	t.Parallel()
+	fake := newFakeTracker()
+	qt := &readinessCountingTracker{
+		Tracker: fake,
+		rows: []tracker.ReadinessRow{
+			{ID: "ready-1", Title: "ready task", Reason: "no blockers"},
+			{
+				ID: "blocked-1", Title: "blocked task", Reason: "waiting on api", Blocked: true,
+				Blockers: []struct{ ID, Title string }{{ID: "dep-1", Title: "api migration"}},
+			},
+			{ID: "ambiguous", Title: "tagged twice"},
+			{ID: "stray", Title: "outside every lane"},
+		},
+	}
+	// The label records the post-filter verifies against; the readiness
+	// rows above deliberately include issues the filters should have
+	// excluded, mirroring the observed bd behavior.
+	fake.issues["ready-1"] = tracker.Issue{ID: "ready-1", Labels: []string{"lane-a"}}
+	fake.issues["blocked-1"] = tracker.Issue{ID: "blocked-1", Labels: []string{"lane-a"}, BlockedBy: []tracker.BlockerRef{{ID: "dep-1", Identifier: "dep-1"}}}
+	fake.issues["ambiguous"] = tracker.Issue{ID: "ambiguous", Labels: []string{"lane-a", "lane-b"}}
+	fake.issues["stray"] = tracker.Issue{ID: "stray", Labels: []string{"unrelated"}}
+
+	rep, err := BuildReport(context.Background(), qt, nil, []string{"lane-a", "lane-b"})
+	if err != nil {
+		t.Fatalf("build report: %v", err)
+	}
+	if qt.readinessCalls != 1 || qt.idReads != 1 {
+		t.Fatalf("tracker reads = (readiness %d, ids %d), want (1, 1)", qt.readinessCalls, qt.idReads)
+	}
+	byID := map[string]tracker.ReadinessRow{}
+	for _, row := range rep.Queue {
+		byID[row.ID] = row
+	}
+	if len(rep.Queue) != 3 {
+		t.Fatalf("queue rows = %+v, want every lane-valid row", rep.Queue)
+	}
+	if row := byID["ready-1"]; row.Blocked {
+		t.Errorf("ready row = %+v", row)
+	}
+	if row := byID["blocked-1"]; !row.Blocked || len(row.Blockers) != 1 || row.Blockers[0].ID != "dep-1" {
+		t.Errorf("blocked row = %+v, want blockers carried", row)
+	}
+	if row := byID["ambiguous"]; !row.Blocked || row.Reason == "" {
+		t.Errorf("ambiguous row = %+v, want blocked with a reason", row)
+	}
+	if _, ok := byID["stray"]; ok {
+		t.Errorf("row outside every configured lane served")
+	}
+}
+
+func TestBuildReportQueueEmptyTracker(t *testing.T) {
+	t.Parallel()
+	qt := &readinessCountingTracker{Tracker: newFakeTracker()}
+	rep, err := BuildReport(context.Background(), qt, nil, nil)
+	if err != nil {
+		t.Fatalf("build report: %v", err)
+	}
+	if len(rep.Queue) != 0 {
+		t.Errorf("queue = %+v, want an empty list, not an error", rep.Queue)
+	}
+}
+
 func TestBuildReportGroupsAttemptsInOneRead(t *testing.T) {
 	t.Parallel()
 	tr, wake := seedReportTracker(t, 50)
 
-	rep, err := BuildReport(context.Background(), tr, nil)
+	rep, err := BuildReport(context.Background(), tr, nil, nil)
 	if err != nil {
 		t.Fatalf("build report: %v", err)
 	}
@@ -63,6 +220,10 @@ func TestBuildReportGroupsAttemptsInOneRead(t *testing.T) {
 	}
 	if metadataReads != 1 {
 		t.Errorf("ListByMetadata calls = %d, want 1", metadataReads)
+	}
+	// A tracker without a readiness source serves no queue rows.
+	if len(rep.Queue) != 0 {
+		t.Errorf("queue rows = %+v, want none without a readiness source", rep.Queue)
 	}
 
 	if len(rep.Active) != 17 {
@@ -94,7 +255,7 @@ func TestBuildReportDegradesWhenAttemptReadFails(t *testing.T) {
 	tr, _ := seedReportTracker(t, 6)
 	tr.metadataErr["lambe_kind=attempt"] = errors.New("bd unreachable")
 
-	rep, err := BuildReport(context.Background(), tr, nil)
+	rep, err := BuildReport(context.Background(), tr, nil, nil)
 	if err != nil {
 		t.Fatalf("build report: %v", err)
 	}
@@ -132,7 +293,7 @@ func TestBuildReportPropagatesParkedReadFailure(t *testing.T) {
 		Tracker: newFakeTracker(),
 		err:     &tracker.ExitError{Code: 1, Stderr: "Error: database unavailable\n"},
 	}
-	if _, err := BuildReport(t.Context(), tr, nil); !errors.Is(err, tr.err) {
+	if _, err := BuildReport(t.Context(), tr, nil, nil); !errors.Is(err, tr.err) {
 		t.Fatalf("BuildReport error = %v, want %v", err, tr.err)
 	}
 }
@@ -173,7 +334,7 @@ func TestBuildReportListsEscalationsAgainstBdTracker(t *testing.T) {
 	}
 	assertParked := func(want ...string) {
 		t.Helper()
-		rep, err := BuildReport(ctx, local, []string{"supervised"})
+		rep, err := BuildReport(ctx, local, []string{"supervised"}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -204,6 +365,29 @@ func TestBuildReportListsEscalationsAgainstBdTracker(t *testing.T) {
 	custom := park("status-custom", "supervised", gate.StatusNeedsHuman)
 	park("status-unrelated", "unrelated", gate.StatusNeedsHuman)
 	assertParked(fallback, custom)
+
+	// Every parked item — the blocked fallback and the custom-status
+	// primary path alike — carries the recorded escalation reason and a
+	// real wait time, so the served attention view is truthful.
+	rep, err := BuildReport(ctx, local, []string{"supervised"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, item := range rep.NeedsHuman {
+		got[item.Issue] = true
+		if item.Reason != "completion check failed" {
+			t.Errorf("parked %s reason = %q, want the recorded escalation reason", item.Issue, item.Reason)
+		}
+		if item.Since.IsZero() {
+			t.Errorf("parked %s carries no wait time", item.Issue)
+		}
+	}
+	for _, id := range []string{fallback, custom} {
+		if !got[id] {
+			t.Errorf("report lacks parked item %s", id)
+		}
+	}
 }
 
 func TestRenderReportMarksGateHistoryUnavailable(t *testing.T) {
@@ -262,7 +446,7 @@ func TestBuildReportBulkAttemptsAgainstBdTracker(t *testing.T) {
 		t.Fatalf("claim: %v", err)
 	}
 
-	rep, err := BuildReport(ctx, local, nil)
+	rep, err := BuildReport(ctx, local, nil, nil)
 	if err != nil {
 		t.Fatalf("build report: %v", err)
 	}
