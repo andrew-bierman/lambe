@@ -63,6 +63,28 @@ Add `~/.local/bin` to your `PATH` to use the `lambe` command by name.
 Run `lambe tui -demo` to try the dashboard before setting up a tracker or agent.
 Press `h` for history or `:` for commands. The demo runs entirely in memory.
 
+### Native dashboard (macOS)
+
+`apps/dashboard/` holds a native macOS SwiftUI app that attaches to a running
+daemon over the daemon's authenticated local HTTP state API and renders the
+same views the TUI shows — Queue, Attention, History, and run detail. The app
+is read-only: needs-human items are resolved in Beads or your tracker, not in
+the app.
+
+Open [apps/dashboard/LambeDash.xcodeproj](apps/dashboard/LambeDash.xcodeproj)
+and press Cmd+R, or run `mise dashboard:build` and `mise dashboard:test`.
+The toolbar's Live/Demo picker shows the four views with sample data before
+any daemon is set up.
+
+The app reads the daemon's optional local state API, which is off by default:
+set `stateapi.enable: true` (or `LAMBE_STATEAPI_ENABLE=true`) to turn it on.
+Discovery, instance selection, and demo mode are covered in
+[apps/dashboard/README.md](apps/dashboard/README.md), and the wire contract
+is specified in [docs/api/state-api.md](docs/api/state-api.md). Attaching
+never restarts a daemon — production start, stop, and restart stay with
+`lambe run` and the service units in
+[OS-level restart](#os-level-restart-production).
+
 ### Run a disposable task
 
 The end-to-end walkthrough — a throwaway Beads tracker, one task, and a shell

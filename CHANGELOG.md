@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Serve the local HTTP state API on loopback when `stateapi.enable` is set: opt-in, bearer-guarded on every route (refresh included), with per-instance endpoint descriptors, queue and history reads, and daemon identity plus per-section timestamps in every response.
 - Document the versioned wire contract in `docs/api/state-api.md` and pin it with Go-generated fixtures in `testdata/contract/v1/` that drift-checked tests and the Swift dashboard decode.
 - Mark `POST /api/v1/refresh` as a mutating operator action — it triggers a full supervision cycle and can write to the hub — so read-only clients stay GET-only.
+- Add the read-only native macOS dashboard under `apps/dashboard`, which attaches to a daemon through its opt-in (`stateapi.enable`, default off) bearer-authenticated local state API to show queue, attention, history, and run detail.
 - Add an Attention view for retries and failed gates, with the latest rejection visible in the inspector.
 - Make agent output easier to scan with tool-result markers and fewer repeated tool-start lines.
 - Add optional Rex actions for opening the dashboard and demo, including a native picker on supported versions.

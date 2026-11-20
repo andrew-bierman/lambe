@@ -109,6 +109,16 @@ the repo or the tracker item itself), then resetting the item's attempts in
 the tracker. lambe picks it up on the next tick; there is no resume command to
 run.
 
+## Dashboard (read-only)
+
+The native macOS dashboard (`apps/dashboard/`) is another read path: it polls
+the daemon's loopback HTTP state API and shows the same Queue, Attention,
+History, and run detail views, changing nothing. It only sees daemons running
+with `stateapi.enable: true`; daemon start, stop, and restart stay with
+`lambe run` or your launchd/systemd unit, and needs-human items are still
+resolved in the tracker with `bd`. Setup, demo mode, and the API contract:
+[apps/dashboard/README.md](../apps/dashboard/README.md).
+
 ## Log lines to watch
 
 Structured logs go to stdout; the service manager captures them
