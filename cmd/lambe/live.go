@@ -137,6 +137,7 @@ func runLogsFollow(path, issue string, follow, asJSON bool, out io.Writer) error
 	defer stop()
 
 	previous := map[string]daemon.LiveRun{}
+	notifiedMissing := false
 	render := func() error {
 		snapshot, alive, err := daemon.ReadLive(path)
 		if err != nil {
@@ -150,16 +151,22 @@ func runLogsFollow(path, issue string, follow, asJSON bool, out io.Writer) error
 				return err
 			}
 		}
-		for _, run := range snapshot.Runs {
-			if issue != "" && run.IssueID != issue {
-				continue
+		runs := selectRuns(snapshot, issue)
+		if issue != "" && len(runs) == 0 && !notifiedMissing {
+			notifiedMissing = true
+			if _, err := fmt.Fprintf(out, "No current or archived output for %s yet.\n", terminalText(issue)); err != nil {
+				return err
 			}
+		}
+		for _, run := range runs {
 			text := run.Tail
 			old, seen := previous[run.IssueID]
 			if seen && old.TailBytes == run.TailBytes && old.Progress == run.Progress {
 				continue
 			}
-			text = tailDelta(text, run.TailBytes-old.TailBytes)
+			if seen {
+				text = tailDelta(text, run.TailBytes-old.TailBytes)
+			} // A first sighting prints its full tail, whatever TailBytes claims.
 			previous[run.IssueID] = run
 			if !run.WakeAt.IsZero() {
 				text = "wake at " + run.WakeAt.Format(time.RFC3339) + "\n" + text
@@ -197,6 +204,26 @@ func runLogsFollow(path, issue string, follow, asJSON bool, out io.Writer) error
 			}
 		}
 	}
+}
+
+// selectRuns returns the single run a `lambe logs -issue` invocation shows:
+// the live projection when the issue is current, otherwise its newest
+// archived attempt from history, and nothing when it appears in neither.
+// One entry per issue keeps the follow renderer's per-issue output deltas
+// well-defined. Unfiltered output keeps its existing Runs-only view:
+// history never leaks into `lambe logs`.
+func selectRuns(snapshot daemon.LiveSnapshot, issue string) []daemon.LiveRun {
+	if issue == "" {
+		return snapshot.Runs
+	}
+	for _, source := range [][]daemon.LiveRun{snapshot.Runs, snapshot.History} {
+		for _, run := range source {
+			if run.IssueID == issue {
+				return []daemon.LiveRun{run}
+			}
+		}
+	}
+	return nil
 }
 
 func tailDelta(current string, added int64) string {

@@ -7,7 +7,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/andrew-bierman/lambe)](https://goreportcard.com/report/github.com/andrew-bierman/lambe)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Keep your agents working while you sleep.**
+**Keep your agents working while you sleep. Follow their work in Rex.**
 
 lambe is an MIT-licensed Go supervisor daemon for autonomous coding agents. It
 implements the OpenAI Symphony specification (§18.1, pinned to commit
@@ -16,9 +16,9 @@ repo, or an in-repo `.beads` directory.
 
 ![Lambe demo dashboard showing active, ready, and blocked work](docs/assets/dashboard.png)
 
-**Use Lambe from the Rex command palette.** Open the live dashboard or demo
-in its own tab, see run history and Beads blockers, and keep the daemon running
-when the tab closes. [Set up Lambe in Rex](contrib/rex/README.md).
+**Built with Rex in mind.** Open the dashboard or demo from the command
+palette, inspect Beads blockers and run history, and keep the daemon running
+when you close the tab. [Set up Lambe in Rex](contrib/rex/README.md).
 
 ## Why
 
@@ -328,7 +328,8 @@ descriptors; nothing needs to be parsed from configuration or logs.
 ### Rex integration
 
 Open the live dashboard or interactive demo from the Rex command palette.
-Supported Rex clients also offer a native destination picker via `rex.ui`.
+On Rex clients with custom UI, **Lambe: Open Run…** searches live and
+archived runs and opens the selected output in its own tab.
 A terminal-hosted daemon can report its state through a Rex program status
 badge. [Install the actions and check compatibility](contrib/rex/README.md).
 
