@@ -35,7 +35,7 @@ verified completion, is the product.
 Install a checksummed release on macOS or Linux (Intel and ARM64). The
 installer verifies the archive against the release checksum before extracting
 it and installs `lambe` to `~/.local/bin`. Set `LAMBE_VERSION` to pin a
-release (default `0.8.4`) and `LAMBE_INSTALL_DIR` to change the destination.
+release (default `0.9.1`) and `LAMBE_INSTALL_DIR` to change the destination.
 
 Once the repository is public:
 

@@ -118,8 +118,18 @@ nonisolated struct GatedSnapshotClient: DaemonClient, Sendable {
 @MainActor
 @Suite("Connection lifecycle")
 struct ConnectionModelTests {
+    private func isolatedModel() -> ConnectionModel {
+        let suite = "LambeDashTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = InstanceStore(defaults: defaults)
+        // Re-resolution in a test must never discover the workstation daemon.
+        for record in store.records { store.remove(record) }
+        return ConnectionModel(instanceStore: store)
+    }
+
     private func attachedModel() -> ConnectionModel {
-        let model = ConnectionModel()
+        let model = isolatedModel()
         model.client = StubClient.ok()
         return model
     }
@@ -244,7 +254,7 @@ struct ConnectionModelTests {
 
     @Test("Demo mode applies sample data without a client and stays honest")
     func demoMode() async {
-        let model = ConnectionModel()
+        let model = isolatedModel()
         model.setMode(.demo)
         await model.tick()
         #expect(model.mode == .demo)
@@ -258,7 +268,7 @@ struct ConnectionModelTests {
 
     @Test("Demo content is connection-active — no disconnected overlay over sample data")
     func demoIsActive() async {
-        let model = ConnectionModel()
+        let model = isolatedModel()
         model.setMode(.demo)
         await model.tick()
         #expect(model.isConnectionActive)
@@ -309,7 +319,7 @@ struct ConnectionModelTests {
 
     @Test("A tick suspended mid-flight cannot overwrite demo sample data")
     func staleTickAbandonedOnDemoSwitch() async throws {
-        let model = ConnectionModel()
+        let model = isolatedModel()
         let gate = FetchGate<WireSnapshot>()
         model.client = GatedSnapshotClient(gate: gate, rest: StubClient.ok())
         let tickTask = Task { await model.tick() }

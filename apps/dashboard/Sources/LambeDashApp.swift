@@ -26,6 +26,7 @@ struct LambeDashApp: App {
             ShellView()
                 .environment(connection)
         }
+        .defaultSize(width: 1080, height: 700)
         .commands {
             CommandMenu("Dashboard") {
                 Button("Refresh State") {
