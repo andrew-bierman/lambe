@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -86,12 +87,14 @@ func runDoctor(args []string, e doctorEnv, out io.Writer) error {
 	fs := flag.NewFlagSet("lambe doctor", flag.ContinueOnError)
 	configFile := fs.String("config", "", "path to a lambe config file")
 	asJSON := fs.Bool("json", false, "print the report as JSON")
+	label := fs.String("service-label", "", "check the service installed with `lambe service install -label NAME`")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
+	e.sys.Label = *label
 	results := diagnose(context.Background(), e, *configFile)
 
 	failed := false
@@ -467,6 +470,13 @@ func checkStateAPI(ctx context.Context, e doctorEnv, cfg *config.Config) checkRe
 	if err != nil {
 		r.Status, r.Detail = statusWarn, "enabled but no descriptor found (daemon not running?)"
 		r.Fix = "start the daemon, then re-run doctor"
+		if ln, lerr := net.Listen("tcp", cfg.StateAPI.Addr); lerr != nil && errors.Is(lerr, syscall.EADDRINUSE) {
+			// A fixed port that something else holds makes the daemon run without the API.
+			r.Detail = "enabled but " + cfg.StateAPI.Addr + " is already in use, so the daemon runs without the state API"
+			r.Fix = "stop the process holding the port or change stateapi.addr (port 0 picks a free one)"
+		} else if lerr == nil {
+			_ = ln.Close()
+		}
 		return r
 	}
 	var d daemon.StateAPIDescriptor

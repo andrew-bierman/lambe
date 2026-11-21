@@ -7,12 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `lambe service install|status|uninstall -label NAME` and `lambe doctor -service-label NAME` run a second, isolated launchd/systemd service; `service install` bakes in `LAMBE_STATE_DIR` when set.
+
 ### Fixed
 
 - Dashboard: darker secondary text and error red on a light terminal so they meet WCAG AA contrast on the selected row and status bar.
-
-### Fixed
-
+- `lambe service uninstall` on macOS waits for launchd to finish stopping the daemon, so the agent is gone when the command returns.
+- `lambe doctor` says when a fixed `stateapi.addr` port is already in use instead of "daemon not running?".
 - `lambe init` no longer fails with `read answer: EOF` when stdin is not a terminal, and it says when it adopts a Beads tracker found above the current directory.
 
 ### Documentation

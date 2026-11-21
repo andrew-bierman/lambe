@@ -65,6 +65,13 @@ lambe service status                 # unit file + launchd/systemd state
 lambe service uninstall
 ```
 
+`-label NAME` installs under another launchd label / systemd unit name
+(`dev.me.lambe-test`, `lambe-test.service`) with its own log file, for a second
+or throwaway daemon; pass the same flag to `status` and `uninstall`, and
+`-service-label NAME` to `lambe doctor`. If `LAMBE_STATE_DIR` is set when you
+install, the unit carries it. `uninstall` waits for launchd to finish stopping
+the daemon before it returns.
+
 `--root DIR` writes the unit under DIR instead of `$HOME` and never calls
 launchctl/systemctl, for inspection and tests; `--no-start` writes without
 loading; `--manager launchd|systemd` overrides OS detection. Restarting the

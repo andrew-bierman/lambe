@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeSys records service-manager calls instead of executing them.
@@ -36,7 +39,7 @@ func writeConfig(t *testing.T) string {
 
 func TestRenderUnit(t *testing.T) {
 	t.Parallel()
-	p := unitParams{Binary: "/bin/lambe", Config: "/cfg/a&b.yaml", Path: "/x:/y", Log: "/log/d.log"}
+	p := unitParams{Binary: "/bin/lambe", Config: "/cfg/a&b.yaml", Path: "/x:/y", Log: "/log/d.log", Label: "com.lambe.daemon"}
 	plist, err := renderUnit("launchd", p)
 	if err != nil {
 		t.Fatal(err)
@@ -148,5 +151,95 @@ func TestServiceInstallRequiresConfig(t *testing.T) {
 	err := runService([]string{"install", "-config", filepath.Join(t.TempDir(), "missing.yaml")}, f.env("linux", t.TempDir()), &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "lambe init") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+func TestServiceLabelIsolatesUnitLogAndLaunchctlCalls(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		goos, unit string
+	}{
+		{"darwin", filepath.Join("Library", "LaunchAgents", "dev.test.lambe.plist")},
+		{"linux", filepath.Join(".config", "systemd", "user", "dev.test.lambe.service")},
+	} {
+		home := t.TempDir()
+		f := &fakeSys{}
+		var out bytes.Buffer
+		if err := runService([]string{"install", "-label", "dev.test.lambe", "-config", writeConfig(t)}, f.env(tc.goos, home), &out); err != nil {
+			t.Fatalf("%s install: %v", tc.goos, err)
+		}
+		data, err := os.ReadFile(filepath.Join(home, tc.unit)) //nolint:gosec // G304: path under t.TempDir.
+		if err != nil {
+			t.Fatalf("%s: %v", tc.goos, err)
+		}
+		if tc.goos == "darwin" {
+			if !strings.Contains(string(data), "<string>dev.test.lambe</string>") || strings.Contains(string(data), "com.lambe.daemon") {
+				t.Errorf("plist label not isolated:\n%s", data)
+			}
+			if !strings.Contains(string(data), filepath.Join("Logs", "lambe", "dev.test.lambe.log")) {
+				t.Errorf("plist log path not isolated:\n%s", data)
+			}
+		}
+		for _, call := range f.calls {
+			if strings.Contains(call, "com.lambe.daemon") || strings.Contains(call, " lambe.service") {
+				t.Errorf("%s: call touches the default unit: %s", tc.goos, call)
+			}
+		}
+		if err := runService([]string{"uninstall", "-label", "dev.test.lambe"}, f.env(tc.goos, home), &out); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(home, tc.unit)); !os.IsNotExist(err) {
+			t.Errorf("%s: unit survived uninstall: %v", tc.goos, err)
+		}
+	}
+	if err := runService([]string{"install", "-label", "../evil", "-dry-run"}, (&fakeSys{}).env("darwin", t.TempDir()), io.Discard); err == nil {
+		t.Error("path-like label accepted")
+	}
+}
+
+func TestRenderUnitCarriesStateDir(t *testing.T) {
+	t.Parallel()
+	p := unitParams{Binary: "/bin/lambe", Config: "/c.yaml", Path: "/x", Label: "l", StateDir: "/s/a&b"}
+	plist, err := renderUnit("launchd", p)
+	if err != nil || !strings.Contains(plist, "<key>LAMBE_STATE_DIR</key>\n        <string>/s/a&amp;b</string>") {
+		t.Errorf("plist: %v\n%s", err, plist)
+	}
+	unit, err := renderUnit("systemd", p)
+	if err != nil || !strings.Contains(unit, `Environment="LAMBE_STATE_DIR=/s/a&b"`) {
+		t.Errorf("unit: %v\n%s", err, unit)
+	}
+	for _, m := range []string{"launchd", "systemd"} {
+		p.StateDir = ""
+		if out, _ := renderUnit(m, p); strings.Contains(out, "LAMBE_STATE_DIR") {
+			t.Errorf("%s: state dir emitted when unset", m)
+		}
+	}
+}
+
+func TestServiceUninstallWaitsForLaunchdToStopTheJob(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	prints := 0
+	f := &fakeSys{reply: func(_ string, args []string) (string, error) {
+		if len(args) > 0 && args[0] == "print" {
+			if prints++; prints < 3 {
+				return "pid = 1\n", nil // still shutting down
+			}
+			return "", errors.New("could not find service")
+		}
+		return "", nil
+	}}
+	env := f.env("darwin", home)
+	env.StopWait = 10 * time.Second
+	var out bytes.Buffer
+	if err := runService([]string{"install", "-config", writeConfig(t)}, env, &out); err != nil {
+		t.Fatal(err)
+	}
+	f.calls, prints = nil, 0
+	if err := runService([]string{"uninstall"}, env, &out); err != nil {
+		t.Fatal(err)
+	}
+	if prints != 3 {
+		t.Errorf("uninstall polled launchd %d times, want 3 (calls: %v)", prints, f.calls)
 	}
 }
