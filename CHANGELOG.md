@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Dashboard: darker secondary text and error red on a light terminal so they meet WCAG AA contrast on the selected row and status bar.
+
+### Fixed
+
 - `lambe init` no longer fails with `read answer: EOF` when stdin is not a terminal, and it says when it adopts a Beads tracker found above the current directory.
 
 ### Documentation

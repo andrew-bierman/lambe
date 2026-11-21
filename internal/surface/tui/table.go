@@ -18,7 +18,7 @@ var clock = time.Now
 // Adaptive palette shared by the table, tabs and chrome.
 var (
 	colBorder = lipgloss.AdaptiveColor{Light: "#B9AFC9", Dark: "#4A3F5E"}
-	colFaint  = lipgloss.AdaptiveColor{Light: "#6F6580", Dark: "#9A90A8"}
+	colFaint  = lipgloss.AdaptiveColor{Light: "#645B73", Dark: "#9A90A8"}
 	colSelBg  = lipgloss.AdaptiveColor{Light: "#E4D8FB", Dark: "#352A4C"}
 	colBarBg  = lipgloss.AdaptiveColor{Light: "#EBE1FF", Dark: "#29203A"}
 )
