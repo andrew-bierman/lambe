@@ -10,6 +10,16 @@
 //	permission      asks session/request_permission, records the denial,
 //	                then end_turn; honors cancel
 //	ignore-interrupt streams past a session/cancel and still ends the turn
+//	quiet-tool      starts a tool call, stays silent for LAMBE_FAKE_QUIET
+//	                (default 1.2s) while it "runs", then completes it and
+//	                ends the turn
+//	e2e             end-to-end supervision scenarios, driven by environment:
+//	                LAMBE_FAKE_DIR records one "pid unix-nano" line per prompt
+//	                in spawns.log; LAMBE_FAKE_STALL_FIRST=1 makes the first
+//	                prompt across all processes go silent forever (marker file
+//	                stalled); LAMBE_FAKE_QUIET is the silent tool duration. A
+//	                prompt that does not stall runs the quiet tool, writes
+//	                done.txt in the workspace, and ends the turn
 //	silent          accepts the prompt and never answers; ignores cancel
 //	stop-die        answers the prompt with end_turn, then exits at once:
 //	                the stop response races the process exit
@@ -39,6 +49,11 @@ func main() {
 	conn := acpsdk.NewAgentSideConnection(agent, os.Stdout, os.Stdin)
 	currentConn = conn
 	<-conn.Done()
+	if behavior == "e2e" && os.Getenv("LAMBE_FAKE_SURVIVE") == "1" {
+		// Outlive a SIGKILLed daemon (stdin EOF) so restart tests exercise
+		// orphan reconciliation.
+		time.Sleep(time.Minute)
+	}
 }
 
 // currentConn is the agent-side connection, set once in main so turn
@@ -170,6 +185,10 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.
 		return a.turnPermission(ctx, p)
 	case "ignore-interrupt":
 		return a.turnIgnoreInterrupt(p)
+	case "quiet-tool":
+		return a.turnQuietTool(ctx, p)
+	case "e2e":
+		return a.turnE2E(ctx, p)
 	case "silent":
 		<-make(chan struct{}) // never answer; only the watchdog ends this
 		return acpsdk.PromptResponse{}, nil
@@ -225,6 +244,58 @@ func (a *fakeAgent) turnWork(ctx context.Context, p acpsdk.PromptRequest) (acpsd
 		StopReason: acpsdk.StopReasonEndTurn,
 		Usage:      &acpsdk.Usage{InputTokens: 100, OutputTokens: 20, TotalTokens: 120},
 	}, nil
+}
+
+// turnQuietTool: a tool call that runs silently for longer than a short
+// silence window, then completes and ends the turn.
+func (a *fakeAgent) turnQuietTool(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+	quiet := 1200 * time.Millisecond
+	if v, err := time.ParseDuration(os.Getenv("LAMBE_FAKE_QUIET")); err == nil {
+		quiet = v
+	}
+	tool := acpsdk.ToolCallId("quiet-1")
+	if err := sendUpdate(ctx, currentConn, p.SessionId, acpsdk.SessionUpdate{ToolCall: &acpsdk.SessionUpdateToolCall{
+		SessionUpdate: "tool_call", ToolCallId: tool, Title: "long build", Kind: acpsdk.ToolKindExecute, Status: acpsdk.ToolCallStatusInProgress,
+	}}); err != nil {
+		return acpsdk.PromptResponse{}, err
+	}
+	if err := sleepOrCancel(ctx, quiet); err != nil {
+		return cancelled(), nil
+	}
+	if err := sendUpdate(ctx, currentConn, p.SessionId, acpsdk.SessionUpdate{ToolCallUpdate: &acpsdk.SessionToolCallUpdate{
+		SessionUpdate: "tool_call_update", ToolCallId: tool, Title: ptrString("long build"), Status: ptrStatus(acpsdk.ToolCallStatusCompleted),
+	}}); err != nil {
+		return acpsdk.PromptResponse{}, err
+	}
+	return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+}
+
+// turnE2E drives the end-to-end supervision scenarios documented on the
+// package comment.
+func (a *fakeAgent) turnE2E(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+	dir := os.Getenv("LAMBE_FAKE_DIR")
+	if dir != "" {
+		f, err := os.OpenFile(dir+"/spawns.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // G304: test-owned directory from the test environment
+		if err == nil {
+			_, _ = fmt.Fprintf(f, "%d %d\n", os.Getpid(), time.Now().UnixNano())
+			_ = f.Close()
+		}
+	}
+	if os.Getenv("LAMBE_FAKE_STALL_FIRST") == "1" && dir != "" {
+		// O_EXCL makes exactly one prompt, across processes, the stalled one.
+		if f, err := os.OpenFile(dir+"/stalled", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600); err == nil { //nolint:gosec // G304: test-owned directory from the test environment
+			_ = f.Close()
+			<-make(chan struct{}) // silent forever; only the watchdog ends this
+		}
+	}
+	res, err := a.turnQuietTool(ctx, p)
+	if err != nil || res.StopReason != acpsdk.StopReasonEndTurn {
+		return res, err
+	}
+	if err := os.WriteFile("done.txt", []byte("done\n"), 0o600); err != nil {
+		return acpsdk.PromptResponse{}, err
+	}
+	return res, nil
 }
 
 // turnStream: a long update stream, then end_turn. The stop only comes after

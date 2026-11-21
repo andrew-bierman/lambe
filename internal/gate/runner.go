@@ -1,6 +1,7 @@
 package gate
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -301,7 +302,9 @@ func (r *Runner) ShouldDispatch(ctx context.Context, issue string) (bool, error)
 func (r *Runner) Evaluate(ctx context.Context, req symphony.GateRequest) (symphony.GateOutcome, error) {
 	var specs []Spec
 	var err error
-	if len(req.GateSpec) > 0 {
+	// A checkpoint round-trips an absent snapshot as JSON null, which is not a
+	// snapshot: fall through to the live formulas directory.
+	if snapshot := bytes.TrimSpace(req.GateSpec); len(snapshot) > 0 && string(snapshot) != "null" {
 		err = json.Unmarshal(req.GateSpec, &specs)
 	} else {
 		specs, err = r.ensurePin(req.Revision)

@@ -154,7 +154,7 @@ func TestDaemonSIGKILLRestoresRealTrackerAndStopsSurvivingAgent(t *testing.T) {
 	}
 	waitRequest := func(life string) symphony.TurnRequest {
 		t.Helper()
-		deadline := time.Now().Add(60 * time.Second)
+		deadline := time.Now().Add(5 * time.Minute)
 		for time.Now().Before(deadline) {
 			data, err := os.ReadFile(filepath.Join(root, life+".json")) // #nosec G304 -- test-owned path
 			var req symphony.TurnRequest

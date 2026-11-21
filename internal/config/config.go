@@ -100,6 +100,9 @@ type NamedWorkflow struct {
 	Label   string
 	Path    string
 	GateDir string
+	// Harness optionally overrides the top-level harness for this workflow
+	// ("pi", "codex", or "acp"); empty inherits it.
+	Harness string
 }
 
 // Config is the fully resolved daemon configuration.
@@ -300,8 +303,12 @@ func Load(opts Options) (*Config, error) {
 		if gateDir != "" && opts.File != "" && !filepath.IsAbs(gateDir) {
 			gateDir = filepath.Join(filepath.Dir(opts.File), gateDir)
 		}
+		workflowHarness := strings.TrimSpace(raw.String("harness"))
+		if !validHarness(workflowHarness) && workflowHarness != "" {
+			return nil, fmt.Errorf("workflow %q: harness must be pi, codex, or acp; got %q", name, workflowHarness)
+		}
 		workflowNames[name], workflowLabels[label] = true, true
-		cfg.Workflows = append(cfg.Workflows, NamedWorkflow{Name: name, Label: label, Path: path, GateDir: gateDir})
+		cfg.Workflows = append(cfg.Workflows, NamedWorkflow{Name: name, Label: label, Path: path, GateDir: gateDir, Harness: workflowHarness})
 	}
 	if len(cfg.Workflows) > 0 && len(cfg.Labels) > 0 {
 		return nil, fmt.Errorf("use workflow labels instead of top-level labels when workflows are configured")
@@ -471,6 +478,43 @@ func validIdentityToken(v string) bool {
 	return !strings.ContainsFunc(v, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) })
 }
 
+func validHarness(name string) bool { return name == "pi" || name == "codex" || name == "acp" }
+
+// HarnessFor returns the harness for an issue carrying the given labels: the
+// matching named workflow's override, else the top-level harness.
+func (c *Config) HarnessFor(labels []string) string {
+	for _, w := range c.Workflows {
+		if w.Harness == "" {
+			continue
+		}
+		for _, l := range labels {
+			if strings.EqualFold(l, w.Label) {
+				return w.Harness
+			}
+		}
+	}
+	return c.Harness
+}
+
+// Harnesses lists every distinct harness the configuration can select.
+func (c *Config) Harnesses() []string {
+	seen, out := map[string]bool{}, []string(nil)
+	for _, h := range append([]string{c.Harness}, workflowHarnesses(c.Workflows)...) {
+		if h != "" && !seen[h] {
+			seen[h], out = true, append(out, h)
+		}
+	}
+	return out
+}
+
+func workflowHarnesses(ws []NamedWorkflow) []string {
+	var out []string
+	for _, w := range ws {
+		out = append(out, w.Harness)
+	}
+	return out
+}
+
 func validate(cfg *Config) []error {
 	var errs []error
 	if !validIdentityToken(cfg.Machine) {
@@ -479,9 +523,7 @@ func validate(cfg *Config) []error {
 	if !validIdentityToken(cfg.Actor) {
 		errs = append(errs, fmt.Errorf("actor must not contain whitespace or control characters, got %q", cfg.Actor))
 	}
-	switch cfg.Harness {
-	case "pi", "codex", "acp":
-	default:
+	if !validHarness(cfg.Harness) {
 		errs = append(errs, fmt.Errorf("harness must be pi, codex, or acp; got %q", cfg.Harness))
 	}
 

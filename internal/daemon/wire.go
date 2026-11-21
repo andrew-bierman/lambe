@@ -49,8 +49,10 @@ const (
 // the work itself.
 func DefaultWire(cfg *config.Config, bdBin, actor string) func(*Assembly) error {
 	return func(asm *Assembly) error {
-		if _, err := HarnessCommand(cfg); err != nil {
-			return err
+		for _, h := range cfg.Harnesses() {
+			if _, err := HarnessCommand(&config.Config{Harness: h, ACP: cfg.ACP}); err != nil {
+				return err
+			}
 		}
 		log := logging.Default()
 
@@ -228,15 +230,16 @@ func (r *harnessRunner) RunTurn(ctx context.Context, req symphony.TurnRequest) (
 	if err := ctx.Err(); err != nil {
 		return symphony.TurnResult{Exit: symphony.TurnFailure}, err
 	}
-	backend := r.backendKey()
-	foreign := req.ThreadID != "" && ((req.ThreadHarness != "" && req.ThreadHarness != backend) || (r.name != "pi" && req.ThreadID == sessionIDFor(req.SessionID)))
+	name, cfg := r.harnessFor(req)
+	backend := backendKey(name, cfg)
+	foreign := req.ThreadID != "" && ((req.ThreadHarness != "" && req.ThreadHarness != backend) || (name != "pi" && req.ThreadID == sessionIDFor(req.SessionID)))
 	if foreign {
 		if req.Turn > 1 {
 			return symphony.TurnResult{Exit: symphony.TurnFailure}, symphony.ErrRestartFromFullPrompt
 		}
 		logging.Default().Warn("harness changed; starting from the full task prompt", "issue", req.SessionID)
 		req.ThreadID = ""
-		if r.name == "pi" {
+		if name == "pi" {
 			req.ThreadID = sessionIDFor(req.SessionID) + "-" + rand.Text()
 		}
 	}
@@ -267,7 +270,7 @@ func (r *harnessRunner) RunTurn(ctx context.Context, req symphony.TurnRequest) (
 		return symphony.TurnResult{Exit: symphony.TurnFailure}, err
 	}
 	thread := sessionIDFor(req.SessionID)
-	if r.name == "pi" {
+	if name == "pi" {
 		if req.ThreadID != "" {
 			thread = req.ThreadID
 		}
@@ -397,22 +400,23 @@ func (r *harnessRunner) newDriver(req symphony.TurnRequest) (harness.Driver, err
 	if req.ThreadID != "" {
 		sess = req.ThreadID
 	}
+	name, cfg := r.harnessFor(req)
 	persist := r.persistFor(req.SessionID)
 	// Loop dispatch is top-level: supervised agents run at depth 1 so the
 	// MCP server's recursion pre-check sees them and refuses their spawns.
 	env := append(os.Environ(), mcp.DepthEnvVar+"=1")
 	stderr := agentStderr{log: logging.Default().With("session", sess)}
-	if r.name == "pi" {
-		return pidrv.New(pidrv.Options{SessionID: sess, Dir: req.Workspace, Env: env, Logger: logging.Default(), Stderr: stderr, Persist: persist, SilenceAfter: silenceTimeout(r.cfg), MaxRun: turnTimeout(r.cfg), ProbeWindow: r.cfg.Supervisor.ProbeWindow}), nil
+	if name == "pi" {
+		return pidrv.New(pidrv.Options{SessionID: sess, Dir: req.Workspace, Env: env, Logger: logging.Default(), Stderr: stderr, Persist: persist, SilenceAfter: silenceTimeout(cfg), MaxRun: turnTimeout(cfg), ProbeWindow: cfg.Supervisor.ProbeWindow}), nil
 	}
-	argv, err := launchCommand(r.cfg)
+	argv, err := launchCommand(cfg)
 	if err != nil {
 		return nil, err
 	}
-	if len(r.cfg.ACP.Command) == 0 {
+	if len(cfg.ACP.Command) == 0 {
 		env = runtimeEnv(argv, env)
 	}
-	return acpdrv.New(acpdrv.Options{SessionID: req.ThreadID, Argv: argv, Dir: req.Workspace, Env: env, Logger: logging.Default(), Stderr: stderr, Persist: persist, SilenceAfter: silenceTimeout(r.cfg), MaxRun: turnTimeout(r.cfg)})
+	return acpdrv.New(acpdrv.Options{SessionID: req.ThreadID, Argv: argv, Dir: req.Workspace, Env: env, Logger: logging.Default(), Stderr: stderr, Persist: persist, SilenceAfter: silenceTimeout(cfg), MaxRun: turnTimeout(cfg)})
 }
 
 // persistFor binds the runner's persist seam to one issue. It returns nil
@@ -584,24 +588,46 @@ func HarnessCommand(cfg *config.Config) ([]string, error) {
 
 // CheckHarness fails startup before claiming work when the backend executable is missing.
 func CheckHarness(cfg *config.Config) error {
-	argv, err := launchCommand(cfg)
-	if err != nil {
-		return err
+	for _, name := range cfg.Harnesses() {
+		one := *cfg
+		one.Harness = name
+		argv, err := launchCommand(&one)
+		if err != nil {
+			return err
+		}
+		if len(one.ACP.Command) > 0 {
+			continue
+		}
+		if err := checkAdapterRuntime(argv); err != nil {
+			return err
+		}
 	}
-	if len(cfg.ACP.Command) > 0 {
-		return nil
+	return nil
+}
+
+// harnessFor resolves the harness for one issue: a named workflow's harness
+// override when the issue carries that workflow's label, else the daemon's.
+func (r *harnessRunner) harnessFor(req symphony.TurnRequest) (string, *config.Config) {
+	if r.cfg == nil {
+		return r.name, nil
 	}
-	return checkAdapterRuntime(argv)
+	name := r.cfg.HarnessFor(req.Issue.Labels)
+	if name == "" || name == r.cfg.Harness {
+		return r.name, r.cfg
+	}
+	override := *r.cfg
+	override.Harness = name
+	return name, &override
 }
 
 // backendKey keeps saved conversations attached to their originating agent command.
-func (r *harnessRunner) backendKey() string {
-	if r.name != "acp" || r.cfg == nil {
-		return r.name
+func backendKey(name string, cfg *config.Config) string {
+	if name != "acp" || cfg == nil {
+		return name
 	}
-	argv, err := HarnessCommand(r.cfg)
+	argv, err := HarnessCommand(cfg)
 	if err != nil {
-		return r.name
+		return name
 	}
 	sum := sha256.Sum256([]byte(strings.Join(argv, "\x00")))
 	return fmt.Sprintf("acp:%x", sum[:8])

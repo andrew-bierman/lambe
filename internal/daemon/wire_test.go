@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -833,4 +834,43 @@ func TestRetryPersistUsesSharedDeadline(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expired transaction: %v", err)
 	}
+}
+
+// TestWorkflowHarnessSelectsDriverPerIssue pins per-workflow harness
+// selection: an issue routed to a workflow that names a harness gets that
+// harness's driver; everything else keeps the daemon default.
+func TestWorkflowHarnessSelectsDriverPerIssue(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		Harness:    "pi",
+		ACP:        config.ACP{Command: []string{self}},
+		Workflows:  []config.NamedWorkflow{{Name: "Repo", Label: "lambe:repo"}, {Name: "Fleet", Label: "lambe:fleet", Harness: "acp"}},
+		Supervisor: config.Supervisor{SilenceTimeout: time.Minute, TurnTimeout: time.Hour},
+	}
+	r := newHarnessRunner("pi", cfg)
+	pi, err := r.newDriver(symphony.TurnRequest{SessionID: "a", Issue: tracker.Issue{Labels: []string{"lambe:repo"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fleet, err := r.newDriver(symphony.TurnRequest{SessionID: "b", Issue: tracker.Issue{Labels: []string{"lambe:fleet"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeDriver(pi); closeDriver(fleet) })
+	if _, ok := fleet.(*acpdrv.Driver); !ok {
+		t.Fatalf("fleet workflow driver = %T, want *acp.Driver", fleet)
+	}
+	if _, ok := pi.(*acpdrv.Driver); ok {
+		t.Fatal("repo workflow must keep the default pi harness")
+	}
+	if a, b := backendKeyFor(r, "lambe:repo"), backendKeyFor(r, "lambe:fleet"); a == b {
+		t.Fatalf("saved conversations from different harnesses share backend key %q", a)
+	}
+}
+
+func backendKeyFor(r *harnessRunner, label string) string {
+	return backendKey(r.harnessFor(symphony.TurnRequest{Issue: tracker.Issue{Labels: []string{label}}}))
 }

@@ -36,6 +36,11 @@ const (
 	// scriptProbeThenChatter is silent after the prompt ack, then emits
 	// events forever (never settling) once the steer probe arrives.
 	scriptProbeThenChatter = "probe-then-chatter"
+	// scriptQuietTool starts a tool execution, stays silent past the silence
+	// window while the tool "runs", then ends the tool and settles.
+	scriptQuietTool = "quiet-tool"
+	// quietToolRuntime is how long the fake tool runs without any output.
+	quietToolRuntime = 1200 * time.Millisecond
 )
 
 var scriptCalls atomic.Int32
@@ -228,6 +233,13 @@ func scriptEvents(script string) {
 			event("agent_start", nil)
 			time.Sleep(40 * time.Millisecond)
 		}
+	case scriptQuietTool:
+		event("agent_start", nil)
+		event("tool_execution_start", map[string]any{"toolCallId": "t1", "toolName": "bash"})
+		time.Sleep(quietToolRuntime)
+		event("tool_execution_end", map[string]any{"toolCallId": "t1", "toolName": "bash"})
+		event("agent_end", map[string]any{"willRetry": false})
+		event("agent_settled", map[string]any{"aborted": false})
 	case scriptSilentAck:
 		// Acked the prompt above, then goes silent forever.
 		blockForever()
