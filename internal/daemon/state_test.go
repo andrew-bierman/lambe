@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/andrew-bierman/lambe/internal/config"
+	"github.com/andrew-bierman/lambe/internal/httpstate"
 	"github.com/andrew-bierman/lambe/internal/mcp"
 	"github.com/andrew-bierman/lambe/internal/proc"
 	"github.com/andrew-bierman/lambe/internal/symphony"
@@ -579,5 +580,71 @@ func TestNewStateAPIToken(t *testing.T) {
 	}
 	if len(a) < 32 {
 		t.Errorf("token %q shorter than its 32-byte source", a)
+	}
+}
+
+func TestStateSourceStalledAndActivityFields(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	reg := NewRunRegistry(nil, nil)
+	for _, id := range []string{"quiet", "chatty", "waiting", "fresh"} {
+		reg.Register(id, "issues", "", "", 1)
+	}
+	reg.MarkRunning("quiet")
+	reg.MarkRunning("chatty")
+	reg.MarkRunning("fresh")
+	reg.MarkDeferred("waiting", now.Add(time.Hour))
+	// Age the registry's own stamp: only the projection's activity time can
+	// keep a run from being stalled.
+	reg.mu.Lock()
+	for _, id := range []string{"quiet", "chatty", "waiting"} {
+		reg.runs[id].LastEventAt = now.Add(-30 * time.Minute)
+	}
+	reg.mu.Unlock()
+
+	old := now.Add(-20 * time.Minute).UTC().Truncate(time.Second)
+	recent := now.Add(-10 * time.Second).UTC().Truncate(time.Second)
+	tick := now.Add(-3 * time.Second).UTC().Truncate(time.Second)
+	live := LiveSnapshot{
+		TickAt: tick,
+		Runs: []LiveRun{
+			{Progress: symphony.Progress{IssueID: "quiet", Phase: "running", Workflow: "review"}, LastActivityAt: old},
+			{Progress: symphony.Progress{IssueID: "chatty", Phase: "running", Workflow: "general"}, LastActivityAt: recent},
+			{Progress: symphony.Progress{IssueID: "waiting", Phase: "deferred"}, LastActivityAt: old},
+		},
+	}
+	src := NewStateSource(reg, &ReportCache{}, nil)
+	src.Identify("studio", "v", "")
+	src.SetActor("lambe@studio")
+	src.SetStallAfter(func() time.Duration { return 5 * time.Minute })
+	src.WatchLive(writeProjectionFile(t, live))
+
+	snap := src.Snapshot()
+	if !snap.TickAt.Equal(tick) {
+		t.Errorf("tick_at = %s, want %s", snap.TickAt, tick)
+	}
+	if snap.StallAfter != 5*time.Minute {
+		t.Errorf("stall_after = %s, want 5m", snap.StallAfter)
+	}
+	byIssue := map[string]httpstate.Run{}
+	for _, r := range snap.Runs {
+		byIssue[r.Issue] = r
+	}
+	want := map[string]bool{"quiet": true, "chatty": false, "waiting": false, "fresh": false}
+	for id, stalled := range want {
+		if byIssue[id].Stalled != stalled {
+			t.Errorf("%s stalled = %v, want %v", id, byIssue[id].Stalled, stalled)
+		}
+	}
+	if q := byIssue["quiet"]; q.Workflow != "review" || q.Machine != "studio" || q.Actor != "lambe@studio" || !q.LastActivity.Equal(old) {
+		t.Errorf("quiet run fields = %+v", q)
+	}
+
+	st, ok := src.Issue("quiet")
+	if !ok || !st.Stalled || st.StallAfter != 5*time.Minute || st.Actor != "lambe@studio" || st.Machine != "studio" || !st.LastActivity.Equal(old) {
+		t.Errorf("issue detail = %+v ok=%v, want stalled with identity and activity", st, ok)
+	}
+	if st, _ := src.Issue("chatty"); st.Stalled {
+		t.Errorf("chatty issue reported stalled: %+v", st)
 	}
 }

@@ -698,3 +698,50 @@ func postJSON(t *testing.T, url string, into any) error {
 	}
 	return json.NewDecoder(resp.Body).Decode(into)
 }
+
+// TestStallAndIdentityFieldsAreAdditive pins the wire names of the stall,
+// activity, workflow and identity fields consumers read.
+func TestStallAndIdentityFieldsAreAdditive(t *testing.T) {
+	at := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	snap := testSnapshot()
+	snap.TickAt = at
+	snap.StallAfter = 5 * time.Minute
+	snap.Runs[0].Workflow, snap.Runs[0].Machine, snap.Runs[0].Actor = "review", "studio", "lambe@studio"
+	snap.Runs[0].LastActivity, snap.Runs[0].Stalled = at.Add(-time.Hour), true
+	src := &fakeSource{
+		snapshot: snap,
+		identity: Daemon{PID: 1, Machine: "studio", Actor: "lambe@studio"},
+		issueID:  "T-1", issueOK: true,
+		issue: IssueState{State: "running", Machine: "studio", Actor: "lambe@studio", LastActivity: at, Stalled: true, StallAfter: 5 * time.Minute},
+	}
+	ts := httptest.NewServer(handlerFor(src))
+	defer ts.Close()
+
+	var raw struct {
+		TickAt            string `json:"tick_at"`
+		StallAfterSeconds int    `json:"stall_after_seconds"`
+		Daemon            map[string]any
+		Runs              []map[string]any
+	}
+	if err := getJSON(t, ts.URL+"/api/v1/state", &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw.TickAt != "2026-11-15T12:00:00Z" || raw.StallAfterSeconds != 300 || raw.Daemon["actor"] != "lambe@studio" {
+		t.Errorf("snapshot extras = %+v", raw)
+	}
+	run := raw.Runs[0]
+	if run["workflow"] != "review" || run["machine"] != "studio" || run["actor"] != "lambe@studio" ||
+		run["last_activity_at"] != "2026-11-15T11:00:00Z" || run["stalled"] != true {
+		t.Errorf("run extras = %+v", run)
+	}
+	if raw.Runs[1]["stalled"] != false {
+		t.Errorf("stalled must always be present, got %+v", raw.Runs[1])
+	}
+	var issue map[string]any
+	if err := getJSON(t, ts.URL+"/api/v1/T-1", &issue); err != nil {
+		t.Fatal(err)
+	}
+	if issue["stalled"] != true || issue["stall_after_seconds"] != float64(300) || issue["actor"] != "lambe@studio" || issue["last_activity_at"] != "2026-11-15T12:00:00Z" {
+		t.Errorf("issue extras = %+v", issue)
+	}
+}

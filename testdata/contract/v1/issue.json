@@ -5,7 +5,8 @@
     "identity": "darwin:boot:1:2",
     "machine": "operators-mac",
     "version": "v0.9.0",
-    "config_path": "/Users/operator/lambe/lambe.yaml"
+    "config_path": "/Users/operator/lambe/lambe.yaml",
+    "actor": "lambe@operators-mac"
   },
   "issue": "T-1",
   "state": "running",
@@ -21,5 +22,10 @@
   "workflow": "general",
   "wake_at": "2026-11-19T13:00:00Z",
   "last_gate": "pr checks pending",
-  "tail": "10:59:30 assistant: running the completion gate"
+  "tail": "10:59:30 assistant: running the completion gate",
+  "machine": "operators-mac",
+  "actor": "lambe@operators-mac",
+  "last_activity_at": "2026-11-19T11:59:30Z",
+  "stalled": false,
+  "stall_after_seconds": 300
 }

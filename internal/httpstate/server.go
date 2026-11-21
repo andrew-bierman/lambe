@@ -31,6 +31,16 @@ type Run struct {
 	// Phase is the operator-facing supervision phase (e.g. "running",
 	// "gating", "stopped: gate red"); empty when not observed.
 	Phase string
+	// Workflow is the named workflow the run executes; empty when unknown.
+	Workflow string
+	// Machine and Actor are the daemon identity that owns the run.
+	Machine string
+	Actor   string
+	// LastActivity is the last agent event of any kind; zero when none.
+	LastActivity time.Time
+	// Stalled is the source's verdict that a running run has had no
+	// activity for the configured stall threshold.
+	Stalled bool
 }
 
 // NeedsHuman is one item awaiting human attention.
@@ -75,6 +85,8 @@ type Daemon struct {
 	Version string
 	// ConfigPath is the configuration file the daemon loaded.
 	ConfigPath string
+	// Actor is the daemon's tracker identity for claims.
+	Actor string
 }
 
 // QueueRow is one readiness row in the queue read: a task that is
@@ -135,6 +147,11 @@ type Snapshot struct {
 	GateRejections []GateRejection
 	// RunsAsOf is when the runs section was read; zero when unknown.
 	RunsAsOf time.Time
+	// TickAt is the daemon loop heartbeat; zero when unknown.
+	TickAt time.Time
+	// StallAfter is the stall threshold behind every Run.Stalled; zero when
+	// unknown.
+	StallAfter time.Duration
 	// NeedsHumanAsOf is when the needs-human section was read from the
 	// tracker; zero before the first read.
 	NeedsHumanAsOf time.Time
@@ -174,6 +191,14 @@ type IssueState struct {
 	LastGate string
 	// Tail is the run's bounded recent output tail.
 	Tail string
+	// Machine and Actor are the daemon identity that owns the run.
+	Machine string
+	Actor   string
+	// LastActivity is the last agent event of any kind; zero when none.
+	LastActivity time.Time
+	// Stalled and StallAfter mirror the snapshot's server-side verdict.
+	Stalled    bool
+	StallAfter time.Duration
 }
 
 // StateSource is the narrow interface httpstate reads from. The daemon is the
@@ -289,16 +314,23 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 		RunsAsOf:           formatTime(snap.RunsAsOf),
 		NeedsHumanAsOf:     formatTime(snap.NeedsHumanAsOf),
 		GateRejectionsAsOf: formatTime(snap.GateRejectionsAsOf),
+		TickAt:             formatTime(snap.TickAt),
+		StallAfterSeconds:  int(snap.StallAfter.Seconds()),
 	}
 	for _, run := range snap.Runs {
 		resp.Runs = append(resp.Runs, RunDTO{
-			Issue:        run.Issue,
-			Session:      run.Session,
-			Attempt:      run.Attempt,
-			State:        run.State,
-			LastEventAge: formatAge(run.LastEvent, time.Now()),
-			LastEventAt:  formatTime(run.LastEvent),
-			Phase:        run.Phase,
+			Issue:          run.Issue,
+			Session:        run.Session,
+			Attempt:        run.Attempt,
+			State:          run.State,
+			LastEventAge:   formatAge(run.LastEvent, time.Now()),
+			LastEventAt:    formatTime(run.LastEvent),
+			Phase:          run.Phase,
+			Workflow:       run.Workflow,
+			Machine:        run.Machine,
+			Actor:          run.Actor,
+			LastActivityAt: formatTime(run.LastActivity),
+			Stalled:        run.Stalled,
 		})
 	}
 	for _, nh := range snap.NeedsHuman {
@@ -389,24 +421,29 @@ func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	tail, truncated := boundTail(st.Tail)
 	writeJSON(w, http.StatusOK, IssueResponse{
-		SchemaVersion: SchemaVersion,
-		Daemon:        daemonDTO(s.source.Identity()),
-		Issue:         id,
-		State:         st.State,
-		Attempt:       st.Attempt,
-		Session:       st.Session,
-		LastEventAge:  formatAge(st.LastEvent, time.Now()),
-		LastEventAt:   formatTime(st.LastEvent),
-		Summary:       st.Summary,
-		Phase:         st.Phase,
-		Turn:          st.Turn,
-		Thread:        st.Thread,
-		Workspace:     st.Workspace,
-		Workflow:      st.Workflow,
-		WakeAt:        formatTime(st.WakeAt),
-		LastGate:      st.LastGate,
-		Tail:          tail,
-		TailTruncated: truncated,
+		SchemaVersion:     SchemaVersion,
+		Daemon:            daemonDTO(s.source.Identity()),
+		Issue:             id,
+		State:             st.State,
+		Attempt:           st.Attempt,
+		Session:           st.Session,
+		LastEventAge:      formatAge(st.LastEvent, time.Now()),
+		LastEventAt:       formatTime(st.LastEvent),
+		Summary:           st.Summary,
+		Phase:             st.Phase,
+		Turn:              st.Turn,
+		Thread:            st.Thread,
+		Workspace:         st.Workspace,
+		Workflow:          st.Workflow,
+		WakeAt:            formatTime(st.WakeAt),
+		LastGate:          st.LastGate,
+		Tail:              tail,
+		TailTruncated:     truncated,
+		Machine:           st.Machine,
+		Actor:             st.Actor,
+		LastActivityAt:    formatTime(st.LastActivity),
+		Stalled:           st.Stalled,
+		StallAfterSeconds: int(st.StallAfter.Seconds()),
 	})
 }
 
