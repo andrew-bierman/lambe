@@ -47,8 +47,9 @@ func demoSnapshot(now time.Time) daemon.LiveSnapshot {
 				LastOutputAt: now.Add(-8 * time.Second),
 			},
 			{
-				Progress: symphony.Progress{IssueID: "demo-43", Title: "Recheck the artifact checksum", Phase: "gating", Attempt: 1},
-				Tail:     "Build finished. Verifying the release manifest.",
+				Progress:     symphony.Progress{IssueID: "demo-43", Title: "Recheck the artifact checksum", Phase: "gating", Attempt: 1},
+				LastOutputAt: now.Add(-4 * time.Minute),
+				Tail:         "Build finished. Verifying the release manifest.",
 			},
 			{
 				Progress: symphony.Progress{IssueID: "demo-44", Title: "Retry the install smoke test", Phase: "retry", Attempt: 2, WakeAt: now.Add(time.Minute), LastGate: "The registry timed out during the install smoke test."},
