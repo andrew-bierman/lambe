@@ -30,7 +30,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -44,6 +46,12 @@ func main() {
 	behavior := "work"
 	if len(os.Args) > 1 {
 		behavior = os.Args[1]
+	}
+	if behavior == "e2e" && os.Getenv("LAMBE_FAKE_SURVIVE") == "1" {
+		// A dead daemon leaves stdout a broken pipe. Linux raises SIGPIPE on the
+		// in-flight prompt's reply and kills the agent at once; macOS did not.
+		// Ignore it so survival is the same everywhere.
+		signal.Ignore(syscall.SIGPIPE)
 	}
 	agent := &fakeAgent{behavior: behavior, sessions: map[string]string{}}
 	conn := acpsdk.NewAgentSideConnection(agent, os.Stdout, os.Stdin)
