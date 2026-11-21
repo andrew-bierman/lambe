@@ -119,9 +119,13 @@ nonisolated struct WireRun: Decodable, Equatable, Sendable {
     /// Operator-facing phase ("running", "gating", "stopped: gate red");
     /// nil when the projection has not observed the run (KTD4).
     let phase: String?
+    /// Named workflow the run executes (additive; nil when unknown).
+    let workflow: String?
+    /// Machine of the daemon that owns the run (additive; nil when unknown).
+    let machine: String?
 
     enum CodingKeys: String, CodingKey {
-        case issue, session, attempt, state, phase
+        case issue, session, attempt, state, phase, workflow, machine
         case lastEventAge = "last_event_age"
         case lastEventAt = "last_event_at"
     }
@@ -135,6 +139,8 @@ nonisolated struct WireRun: Decodable, Equatable, Sendable {
         lastEventAge = try c.decodeIfPresent(String.self, forKey: .lastEventAge) ?? "n/a"
         lastEventAt = try c.decodeIfPresent(String.self, forKey: .lastEventAt)
         phase = try c.decodeIfPresent(String.self, forKey: .phase)
+        workflow = try c.decodeIfPresent(String.self, forKey: .workflow)
+        machine = try c.decodeIfPresent(String.self, forKey: .machine)
     }
 }
 
@@ -310,6 +316,8 @@ nonisolated struct WireIssue: Decodable, Equatable, Sendable {
     let thread: String?
     let workspace: String?
     let workflow: String?
+    /// Machine of the daemon that owns the run (additive).
+    let machine: String?
     let wakeAt: String?
     /// Bounded preview of the last gate output.
     let lastGate: String?
@@ -320,7 +328,7 @@ nonisolated struct WireIssue: Decodable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version"
         case daemon, issue, state, attempt, session, summary, phase, turn
-        case thread, workspace, workflow
+        case thread, workspace, workflow, machine
         case wakeAt = "wake_at"
         case lastGate = "last_gate"
         case tail
@@ -345,6 +353,7 @@ nonisolated struct WireIssue: Decodable, Equatable, Sendable {
         thread = try c.decodeIfPresent(String.self, forKey: .thread)
         workspace = try c.decodeIfPresent(String.self, forKey: .workspace)
         workflow = try c.decodeIfPresent(String.self, forKey: .workflow)
+        machine = try c.decodeIfPresent(String.self, forKey: .machine)
         wakeAt = try c.decodeIfPresent(String.self, forKey: .wakeAt)
         lastGate = try c.decodeIfPresent(String.self, forKey: .lastGate)
         tail = try c.decodeIfPresent(String.self, forKey: .tail)
@@ -387,9 +396,17 @@ extension WireDaemonIdentity {
     /// the connection footer.
     var versionPidText: String {
         var parts: [String] = []
-        if let version, !version.isEmpty { parts.append("v\(version)") }
+        if let version, !version.isEmpty { parts.append(VersionLabel.text(version)) }
         parts.append("pid \(pid)")
         return parts.joined(separator: " · ")
+    }
+}
+
+/// "v0.9.3": daemons report versions both with and without the leading v.
+nonisolated enum VersionLabel {
+    static func text(_ version: String) -> String {
+        let digitAfterV = version.hasPrefix("v") && version.dropFirst().first?.isNumber == true
+        return digitAfterV ? version : "v" + version
     }
 }
 

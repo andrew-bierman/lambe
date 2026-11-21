@@ -32,7 +32,7 @@ nonisolated struct InstanceStatus: Identifiable, Equatable, Sendable {
             (detail, tone) = ("offline: no live daemon descriptor", .bad)
         case 1:
             let d = endpoints[0].descriptor
-            (detail, tone) = (["daemon up", "pid \(d.pid)", d.version.isEmpty ? nil : "v\(d.version)"].compactMap { $0 }.joined(separator: " · "), .good)
+            (detail, tone) = (["daemon up", "pid \(d.pid)", d.version.isEmpty ? nil : VersionLabel.text(d.version)].compactMap { $0 }.joined(separator: " · "), .good)
         default:
             (detail, tone) = ("\(endpoints.count) daemons: " + endpoints.map(\.instance).joined(separator: ", "), .warning)
         }

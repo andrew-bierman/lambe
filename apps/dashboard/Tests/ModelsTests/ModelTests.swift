@@ -263,7 +263,7 @@ struct ConnectionModelTests {
         #expect(model.snapshotFeed.payload?.daemon.version == "demo")
         #expect(model.queueFeed.hasPayload)
         // Demo has no live detail — the seed facts carry the column.
-        #expect(model.detailFetch(id: "demo-hk4") == nil)
+        #expect(model.detailFetch(id: "demo-kd8") == nil)
     }
 
     @Test("Demo content is connection-active — no disconnected overlay over sample data")

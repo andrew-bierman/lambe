@@ -72,25 +72,41 @@ remove in a later minor release and list it under "Removed".
    goreleaser builds linux/darwin x amd64/arm64 archives plus
    `checksums.txt`, and publishes the GitHub release using the CHANGELOG
    section as notes.
-4. **Mac app.** On a Mac with Xcode and a Developer ID certificate, from the
-   tagged commit:
+4. **Mac app.** On a Mac with Xcode, from the tagged commit:
    ```sh
    git checkout vX.Y.Z
    scripts/package-dashboard.sh              # reads the version from the tag
    ```
    The script stamps `CFBundleShortVersionString` and `CFBundleVersion` with
-   `X.Y.Z`, verifies them, and writes `LambeDash.zip` and `LambeDash.zip.sha256`
-   under `apps/dashboard/.build/package/`. It signs ad hoc by default. For a
-   notarized build, re-sign with the Developer ID identity, run
-   `xcrun notarytool submit LambeDash.zip --keychain-profile <profile> --wait`,
-   `xcrun stapler staple` the app, and re-zip with `ditto -c -k --keepParent`.
+   `X.Y.Z`, checks the app icon, builds a universal (arm64 + x86_64) app,
+   signs it, verifies the signature, and writes `LambeDash.zip` and
+   `LambeDash.zip.sha256` under `apps/dashboard/.build/package/`.
+
+   - **Without a Developer ID** (the default today) the app is signed ad hoc
+     with the hardened runtime and is not notarized. Gatekeeper blocks a
+     downloaded copy until the user right-clicks it and chooses Open, or
+     removes the quarantine flag; the release notes must say so (copy the
+     "Signing, and opening it the first time" section of
+     `apps/dashboard/README.md`). Never sign a release with a personal or
+     self-signed local identity.
+   - **With a Developer ID** set `APPLE_SIGNING_IDENTITY` to the
+     "Developer ID Application: ..." identity, plus either
+     `APPLE_NOTARY_PROFILE` (a `notarytool store-credentials` profile) or
+     `APPLE_ID`, `APPLE_TEAM_ID` and `APPLE_APP_SPECIFIC_PASSWORD`. The same
+     command then signs, submits to Apple, waits, staples the ticket, and
+     re-packs; the result opens with no Gatekeeper prompt.
+
    Then attach both files to the same release:
    ```sh
    gh release upload vX.Y.Z apps/dashboard/.build/package/LambeDash.zip \
      apps/dashboard/.build/package/LambeDash.zip.sha256
    ```
-   This stays manual because notarization needs Apple credentials that are not
-   in CI.
+   This stays manual because signing and notarization need credentials that
+   are not in CI.
+
+   Note for release notes: the app's run controls are navigation only (Rex,
+   Terminal, copy, Finder) and read-only by design until the state API gets
+   mutating actions.
 5. **Verify.**
    ```sh
    gh release download vX.Y.Z --dir /tmp/lambe-verify   # use a scratch dir
@@ -99,7 +115,8 @@ remove in a later minor release and list it under "Removed".
    ```
 6. **Install check.** Unpack the archive for your platform and confirm
    `./lambe version --json` reports `"version": "vX.Y.Z"` and the expected
-   `api_version`; open `LambeDash.app` and confirm About shows `X.Y.Z`.
+   `api_version`; open `LambeDash.app` (right-click Open for an ad-hoc build) and confirm About
+   shows `X.Y.Z`.
 
 ## Legacy
 

@@ -17,51 +17,68 @@ struct ShellView: View {
     @Environment(ConnectionModel.self) private var connection
     @Environment(\.scenePhase) private var scenePhase
 
-    /// The sidebar destination driving the content column.
-    @State private var section: SidebarSection = .queue
-    /// The selected issue ID across all sections. Authoritative state lives
-    /// here — payload updates never write to it, so selection survives
-    /// reordering (the U8 selection rule).
-    @State private var selectedIssue: String?
+    /// Section, selected issue and run actions, owned by the app so the
+    /// menu bar drives the same state. Payload updates never write to it,
+    /// so selection survives reordering (the U8 selection rule), and a
+    /// change of connection context clears it.
+    @Environment(ShellModel.self) private var shell
 
-    init(initialSection: SidebarSection = .queue, initialIssue: String? = nil) {
-        _section = State(initialValue: initialSection)
-        _selectedIssue = State(initialValue: initialIssue)
+    /// No daemon to show and none attached: the setup guide replaces the
+    /// three columns. Demo data and attached daemons never need it unless
+    /// the operator asks.
+    private var showsSetup: Bool {
+        if shell.showSetup { return true }
+        guard connection.mode == .live else { return false }
+        if case .neverConnected = connection.state { return true }
+        return false
     }
 
     var body: some View {
-        NavigationSplitView {
-            SidebarView(section: $section)
-                .navigationSplitViewColumnWidth(min: 170, ideal: 200)
-        } content: {
-            contentColumn
-                .navigationSplitViewColumnWidth(min: 320, ideal: 380)
-        } detail: {
-            RunDetailView(
-                selectedIssue: selectedIssue,
-                seed: SeedResolver.resolve(
-                    issue: selectedIssue,
-                    snapshot: connection.snapshotFeed.payload,
-                    queue: connection.queueFeed.payload,
-                    history: connection.historyFeed.payload
-                )
-            )
-            .navigationSplitViewColumnWidth(min: 300, ideal: 420)
+        Group {
+            if showsSetup {
+                OnboardingView()
+            } else {
+                splitView
+            }
         }
-        .frame(minWidth: 900, minHeight: 560)
-        .safeAreaInset(edge: .bottom) {
-            StatusFooter()
-        }
+        .background(WindowSizeApplier())
         .toolbar { toolbar }
         .navigationTitle("LambeDash")
-        .navigationSubtitle(subtitle)
+        .navigationSubtitle(showsSetup ? "Setup" : subtitle)
         .task { await connection.pollLoop() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 connection.refreshIfStale()
             }
         }
+        .onChange(of: connection.contextID) { shell.contextChanged() }
         .animation(.default, value: connection.state)
+    }
+
+    private var splitView: some View {
+        @Bindable var shell = shell
+        return NavigationSplitView {
+            SidebarView(section: $shell.section)
+                .navigationSplitViewColumnWidth(min: 190, ideal: 220)
+        } content: {
+            contentColumn
+                .navigationSplitViewColumnWidth(min: 340, ideal: 400)
+        } detail: {
+            RunDetailView(
+                selectedIssue: shell.selectedIssue,
+                seed: SeedResolver.resolve(
+                    issue: shell.selectedIssue,
+                    snapshot: connection.snapshotFeed.payload,
+                    queue: connection.queueFeed.payload,
+                    history: connection.historyFeed.payload
+                )
+            )
+            .navigationSplitViewColumnWidth(min: 320, ideal: 440)
+        }
+        .frame(minWidth: 960, idealWidth: 1200, minHeight: 600, idealHeight: 780)
+        .safeAreaInset(edge: .bottom) {
+            StatusFooter()
+        }
     }
 
     // MARK: - Content column
@@ -71,10 +88,11 @@ struct ShellView: View {
         VStack(spacing: 0) {
             ConnectionHeader()
             ConnectionBanners()
-            switch section {
-            case .queue: QueueView(selectedIssue: $selectedIssue)
-            case .attention: AttentionView(selectedIssue: $selectedIssue)
-            case .history: HistoryView(selectedIssue: $selectedIssue)
+            @Bindable var shell = shell
+            switch shell.section {
+            case .queue: QueueView(selectedIssue: $shell.selectedIssue)
+            case .attention: AttentionView(selectedIssue: $shell.selectedIssue)
+            case .history: HistoryView(selectedIssue: $shell.selectedIssue)
             }
         }
     }
@@ -101,8 +119,8 @@ struct ShellView: View {
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
-            .keyboardShortcut("r", modifiers: .command)
             .disabled(connection.mode == .demo)
+            .help("Refresh (⌘R)")
             .accessibilityLabel("Refresh state from the daemon")
         }
     }

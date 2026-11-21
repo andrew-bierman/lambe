@@ -12,7 +12,95 @@
 
 import SwiftUI
 
+/// The Settings scene: General, Instances, and Tools tabs.
 struct SettingsView: View {
+    var body: some View {
+        TabView {
+            Tab("General", systemImage: "gearshape") { GeneralSettings() }
+            Tab("Instances", systemImage: "server.rack") { InstanceSettings() }
+            Tab("Tools", systemImage: "terminal") { ToolSettings() }
+        }
+        .frame(width: 560, height: 380)
+    }
+}
+
+/// Behavior preferences.
+struct GeneralSettings: View {
+    @Environment(ConnectionModel.self) private var connection
+    @Environment(ShellModel.self) private var shell
+    @AppStorage(Prefs.startInDemo, store: Prefs.defaults) private var startInDemo = false
+    @AppStorage(Prefs.handoff, store: Prefs.defaults) private var handoff = Prefs.Handoff.rex.rawValue
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Open runs in", selection: $handoff) {
+                    ForEach(Prefs.Handoff.allCases) { Text($0.title).tag($0.rawValue) }
+                }
+                Text("Rex opens a tab on the machine that runs the agent. Terminal is used when Rex is not installed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section {
+                Toggle("Start with demo data", isOn: $startInDemo)
+                Text("Opens the sample runs instead of looking for a daemon. Handy for a tour or screenshots.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section {
+                Button("Show Setup Guide…") { shell.showSetup = true }
+                    .help("Find running daemons and see the commands to set one up")
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+/// Where `lambe` and `rex` are found, with an override for each.
+struct ToolSettings: View {
+    var body: some View {
+        Form {
+            ToolPathRow(name: "lambe", key: Prefs.lambeOverride, detail: "Used for the commands the app shows and starts.")
+            ToolPathRow(name: "rex", key: Prefs.rexOverride, detail: "Optional. Enables Open in Rex.")
+        }
+        .formStyle(.grouped)
+    }
+}
+
+struct ToolPathRow: View {
+    let name: String
+    let key: String
+    let detail: String
+    @AppStorage private var override: String
+    @State private var found: String?
+
+    init(name: String, key: String, detail: String) {
+        self.name = name
+        self.key = key
+        self.detail = detail
+        _override = AppStorage(wrappedValue: "", key, store: Prefs.defaults)
+    }
+
+    var body: some View {
+        Section(name) {
+            LabeledContent("Found") {
+                Text(found ?? "not found")
+                    .font(.callout.monospaced())
+                    .foregroundStyle(found == nil ? Color.red : Color.secondary)
+                    .textSelection(.enabled)
+            }
+            TextField("Override path", text: $override, prompt: Text("/path/to/\(name)"))
+                .accessibilityLabel("\(name) path override")
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .task(id: override) { found = ToolLocator.locate(name, override: override) }
+    }
+}
+
+/// The instance list: which daemons the app knows, and which is attached.
+struct InstanceSettings: View {
     @Environment(ConnectionModel.self) private var connection
     @State private var addingSheet = false
 
@@ -38,7 +126,6 @@ struct SettingsView: View {
             }
             .padding(12)
         }
-        .frame(width: 520, height: 320)
         .sheet(isPresented: $addingSheet) {
             AddInstanceSheet()
         }
@@ -118,7 +205,7 @@ nonisolated enum InstanceHealth {
             let d = endpoints[0].descriptor
             var parts = ["live", "pid \(d.pid)"]
             if !d.version.isEmpty {
-                parts.append("v\(d.version)")
+                parts.append(VersionLabel.text(d.version))
             }
             return parts.joined(separator: " · ")
         default:
