@@ -742,6 +742,10 @@ func (d *Daemon) cycle(ctx context.Context, prefix string, immediate bool) {
 // uses the minute floor.
 func (d *Daemon) cycleBound() time.Duration { return controlTimeout(d.opts.Config) }
 
+// ControlTimeout is the bound on control operations (hub pull, write flush):
+// half the silence timeout, never below a minute.
+func ControlTimeout(cfg *config.Config) time.Duration { return controlTimeout(cfg) }
+
 func controlTimeout(cfg *config.Config) time.Duration {
 	bound := time.Duration(0)
 	if cfg != nil {

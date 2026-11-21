@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- lambe supervisor daemon — launchd user agent example.
+     `lambe service install` generates this with your real paths.
      KeepAlive restarts the daemon whenever it exits for any reason other
      than an unload; the flock state lock makes a doubled start harmless. -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -13,7 +14,7 @@
         <string>/usr/local/bin/lambe</string>
         <string>run</string>
         <string>-config</string>
-        <string>/usr/local/etc/lambe/lambe.toml</string>
+        <string>/Users/you/Library/Application Support/lambe/config.yaml</string>
     </array>
 
     <!-- Always keep the supervisor alive: crash, clean exit, reboot. -->
@@ -29,12 +30,19 @@
     <string>Background</string>
 
     <key>StandardOutPath</key>
-    <string>/tmp/lambe-daemon.out.log</string>
+    <string>/Users/you/Library/Logs/lambe/daemon.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/lambe-daemon.err.log</string>
+    <string>/Users/you/Library/Logs/lambe/daemon.log</string>
 
-    <!-- Reload configuration without restarting the daemon. -->
-    <key>SIGHUP</key>
-    <false/>
+    <!-- launchd starts jobs with a minimal PATH; bd and the agent must be reachable. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/you/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <!-- Room for the daemon's SIGTERM -> grace -> SIGKILL ladder (default is 20s). -->
+    <key>ExitTimeOut</key>
+    <integer>45</integer>
 </dict>
 </plist>

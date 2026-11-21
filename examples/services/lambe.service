@@ -1,4 +1,5 @@
 # lambe supervisor daemon — systemd user unit example.
+# `lambe service install` generates this with your real paths and PATH.
 # The flock state lock (~/.local/state/lambe/lambe.lock) makes a doubled
 # start harmless: the second instance exits 3 immediately, so an aggressive
 # restart policy cannot wedge anything.
@@ -8,7 +9,9 @@ Documentation=file:///usr/local/share/doc/lambe/README.md
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/lambe run --config %h/.config/lambe/lambe.toml
+ExecStart=/usr/local/bin/lambe run --config %h/.config/lambe/config.yaml
+# systemd starts with a minimal PATH; bd and the agent must be reachable.
+Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
 Restart=on-failure
 RestartSec=5
 # SIGTERM triggers the bounded child kill ladder (SIGTERM -> grace -> SIGKILL)
