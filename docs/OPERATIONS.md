@@ -93,6 +93,10 @@ change:
 - Reclaim fires at roughly 2× TTL — an unclaimed item waits one full TTL to
   expire plus headroom before another agent picks it up.
 
+Reclaim is OFF unless `supervisor.auto_reclaim: true` is set; it is meant for
+several hosts sharing one Dolt server. See [MULTI-MACHINE.md](MULTI-MACHINE.md)
+for when to enable it and the proof of the ownership fences.
+
 Default pacing: tick 10s, heartbeat 150s. If you lengthen the tick, lengthen
 the heartbeat proportionally.
 

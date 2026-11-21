@@ -475,6 +475,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go HeartbeatLoop(runCtx, primary, d.opts.Actor,
 		func() time.Duration { return d.opts.Config.Supervisor.HeartbeatInterval }, d.log)
 
+	if sup := d.opts.Config.Supervisor; sup.AutoReclaim {
+		d.log.Info("auto reclaim enabled", "grace", sup.ReclaimGrace.String())
+		go ReclaimLoop(runCtx, primary, time.Duration(sup.TickSeconds)*time.Second, sup.ReclaimGrace, d.log)
+	}
+
 	runningAttrs := []any{
 		"machine", d.opts.Machine, "actor", d.opts.Actor,
 		"tick_seconds", d.opts.Config.Supervisor.TickSeconds,
