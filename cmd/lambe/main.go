@@ -388,6 +388,9 @@ func runInit(args []string, in io.Reader, out io.Writer) error {
 		if err != nil {
 			return err
 		}
+	} else if cwd, err := os.Getwd(); err == nil && trackerDir != cwd {
+		// A stray ancestor .beads (for example in $HOME) would otherwise be adopted silently.
+		say(out, "using the Beads tracker at %s (found above the current directory)\n", trackerDir)
 	}
 	absTracker, err := filepath.Abs(trackerDir)
 	if err != nil {
@@ -489,7 +492,8 @@ func maybeInitTracker(dir string, nonInteractive bool, in io.Reader, out io.Writ
 	say(out, "no .beads tracker found at or above %s.\ninitialize one now with `%s init`? [y/N] ", dir, bd)
 	line, err := bufio.NewReader(in).ReadString('\n')
 	if err != nil && line == "" {
-		return dir, false, fmt.Errorf("read answer: %w", err)
+		say(out, "\nno answer (stdin is not a terminal); run `bd init` in %s, then re-run `lambe init`, or pass -non-interactive\n", dir)
+		return dir, false, nil
 	}
 	answer := strings.ToLower(strings.TrimSpace(line))
 	if answer != "y" && answer != "yes" {

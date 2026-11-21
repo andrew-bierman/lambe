@@ -41,8 +41,11 @@ checks pass.
 curl -fsSL https://raw.githubusercontent.com/andrew-bierman/lambe/master/scripts/install.sh | sh
 lambe init     # from the project that holds your Beads tracker
 lambe run      # start the supervisor
-lambe version  # confirm the installed build
 ```
+
+Before `lambe run` you need [`bd`](https://github.com/gastownhall/beads) with a
+tracker (`bd init`), an agent (Pi by default), and a `[gate]` completion check
+in the formula `lambe init` writes. `lambe doctor` lists whatever is missing.
 
 Other ways to install:
 
