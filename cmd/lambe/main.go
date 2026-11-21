@@ -36,6 +36,8 @@ usage:
   lambe init    [-config FILE] [--non-interactive] set up config, workflow, and starter formula
   lambe run     [-config FILE] run the supervisor daemon until SIGTERM/SIGINT
   lambe status  [-config FILE] print the morning report
+  lambe doctor  [-config FILE] [-json] check for anything that could stall your agents
+  lambe service install|status|uninstall  keep the daemon alive under launchd/systemd
   lambe mcp     [-config FILE] serve lambe's MCP tools over stdio
   lambe logs    [-config FILE] [-issue ID] [-follow] [-json] show agent output
   lambe enqueue [-config FILE] -workflow NAME [-apply] ISSUE_ID
@@ -73,6 +75,18 @@ func main() {
 	case "logs", "tui":
 		if err := runLive(args[1:], args[0] == "tui", os.Stdin, os.Stdout); err != nil {
 			logging.Default().Error("live view failed", "error", err)
+			os.Exit(1)
+		}
+	case "doctor":
+		if err := runDoctor(args[1:], hostDoctorEnv(), os.Stdout); err != nil {
+			if !errors.Is(err, errDoctorFailed) {
+				logging.Default().Error("lambe doctor failed", "error", err.Error())
+			}
+			os.Exit(1)
+		}
+	case "service":
+		if err := runService(args[1:], hostEnv(), os.Stdout); err != nil {
+			logging.Default().Error("lambe service failed", "error", err.Error())
 			os.Exit(1)
 		}
 	case "status":
@@ -432,7 +446,8 @@ func runInit(args []string, in io.Reader, out io.Writer) error {
 	say(out, "  edit %s to taste (prompt, hooks, gates)\n", workflowDst)
 	say(out, "  add a [gate] completion check to %s (or a separate formula); all gates apply to every task\n", formulaDst)
 	say(out, "  configure the gate before starting: existing ready issues are dispatched automatically; the starter trigger is disabled\n")
-	say(out, "  lambe run      # Lambe starts and supervises the configured agent itself\n")
+	say(out, "  lambe doctor   # check config, bd, the agent, and stall risks\n")
+	say(out, "  lambe service install   # keep the daemon alive across crashes and reboots (or: lambe run)\n")
 	say(out, "  bd create \"Your task, with acceptance criteria\" --type task  # queue work after configuring the gate\n")
 	say(out, "  lambe status   # print the morning report\n")
 	return nil

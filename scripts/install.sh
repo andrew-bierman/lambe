@@ -78,4 +78,9 @@ mv -f "$staged" "$install_dir/lambe"
 staged=
 printf 'install.sh: installed %s\n' "$install_dir/lambe"
 "$install_dir/lambe" version
+case ":$PATH:" in
+  *":$install_dir:"*) ;;
+  *) printf 'install.sh: add %s to your PATH to run `lambe` by name\n' "$install_dir" ;;
+esac
+printf 'install.sh: next: lambe init && lambe doctor && lambe service install\n'
 )
