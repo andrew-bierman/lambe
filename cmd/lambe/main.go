@@ -174,8 +174,7 @@ func requireConfig(configPath string) error {
 }
 
 func daemonOptions(cfg *config.Config, configPath string) daemon.Options {
-	machine := daemon.DefaultMachine()
-	actor := "lambe@" + machine
+	machine, actor := hostIdentity(cfg)
 	return daemon.Options{
 		Config:       cfg,
 		ConfigPath:   configPath,
@@ -190,6 +189,12 @@ func daemonOptions(cfg *config.Config, configPath string) daemon.Options {
 	}
 }
 
+// hostIdentity resolves this host's dispatch machine and tracker actor from
+// config (file, LAMBE_MACHINE / LAMBE_ACTOR) with the hostname as fallback.
+func hostIdentity(cfg *config.Config) (machine, actor string) {
+	return cfg.Identity(os.Hostname)
+}
+
 // runStatus prints the morning report from the local tracker.
 func runStatus(args []string) error {
 	cfg, _, err := parseCommon(args)
@@ -199,7 +204,8 @@ func runStatus(args []string) error {
 	if err := requireLocalTracker(cfg); err != nil {
 		return err
 	}
-	return daemon.Status(os.Stdout, cfg, daemon.DefaultMachine())
+	machine, _ := hostIdentity(cfg)
+	return daemon.Status(os.Stdout, cfg, machine)
 }
 
 // runMCP serves lambe's MCP tools over stdio: it assembles the daemon's
@@ -216,10 +222,12 @@ func runMCP(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
+	machine, actor := hostIdentity(cfg)
 	control, release, err := daemon.OpenControl(ctx, daemon.Options{
 		Config:   cfg,
 		StateDir: daemon.DefaultStateDir(),
-		Machine:  daemon.DefaultMachine(),
+		Machine:  machine,
+		Actor:    actor,
 		Log:      logging.Default(),
 	})
 	if err != nil {

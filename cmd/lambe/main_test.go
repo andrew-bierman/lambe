@@ -397,3 +397,24 @@ func TestInitHelpIsSuccess(t *testing.T) {
 		t.Fatalf("runInit(-h) = %v; want nil", err)
 	}
 }
+
+// Hosts sharing one tracker need distinct actors; the daemon must take its
+// identity from config (machine/actor, env included), not from the hostname
+// alone.
+func TestDaemonOptionsUseConfiguredIdentity(t *testing.T) {
+	cfg, err := config.Load(config.Options{Env: []string{"LAMBE_MACHINE=studio", "LAMBE_ACTOR=lambe@studio-2"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := daemonOptions(cfg, "")
+	if opts.Machine != "studio" || opts.Actor != "lambe@studio-2" {
+		t.Fatalf("identity = %q / %q, want studio / lambe@studio-2", opts.Machine, opts.Actor)
+	}
+	cfg, err = config.Load(config.Options{Env: []string{"LAMBE_MACHINE=studio"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts := daemonOptions(cfg, ""); opts.Actor != "lambe@studio" {
+		t.Fatalf("derived actor = %q, want lambe@studio", opts.Actor)
+	}
+}

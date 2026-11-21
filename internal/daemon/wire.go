@@ -72,7 +72,7 @@ func DefaultWire(cfg *config.Config, bdBin, actor string) func(*Assembly) error 
 		cancelBoot()
 		esc := gate.NewEscalator(hub)
 		gates := gate.NewRunner(formulaDir(primary), hub, esc, actor, log)
-		gates.CheckTimeout = controlTimeout(cfg)
+		gates.CheckTimeout = gateCheckTimeout(cfg)
 		asm.Gates = gates
 
 		name := "pi"
@@ -403,7 +403,7 @@ func (r *harnessRunner) newDriver(req symphony.TurnRequest) (harness.Driver, err
 	env := append(os.Environ(), mcp.DepthEnvVar+"=1")
 	stderr := agentStderr{log: logging.Default().With("session", sess)}
 	if r.name == "pi" {
-		return pidrv.New(pidrv.Options{SessionID: sess, Dir: req.Workspace, Env: env, Logger: logging.Default(), Stderr: stderr, Persist: persist, SilenceAfter: silenceTimeout(r.cfg), MaxRun: turnTimeout(r.cfg)}), nil
+		return pidrv.New(pidrv.Options{SessionID: sess, Dir: req.Workspace, Env: env, Logger: logging.Default(), Stderr: stderr, Persist: persist, SilenceAfter: silenceTimeout(r.cfg), MaxRun: turnTimeout(r.cfg), ProbeWindow: r.cfg.Supervisor.ProbeWindow}), nil
 	}
 	argv, err := launchCommand(r.cfg)
 	if err != nil {
@@ -547,6 +547,15 @@ func retryPersistTimeout(ctx context.Context, operation func(context.Context) er
 // restarts resume the same session.
 func sessionIDFor(issueID string) string {
 	return "lambe-" + issueID
+}
+
+// gateCheckTimeout is the per-check gate bound: gate.check_timeout when set,
+// otherwise the control timeout (half the silence timeout, floored at a minute).
+func gateCheckTimeout(cfg *config.Config) time.Duration {
+	if cfg != nil && cfg.Gate.CheckTimeout > 0 {
+		return cfg.Gate.CheckTimeout
+	}
+	return controlTimeout(cfg)
 }
 
 func silenceTimeout(cfg *config.Config) time.Duration { return cfg.Supervisor.SilenceTimeout }

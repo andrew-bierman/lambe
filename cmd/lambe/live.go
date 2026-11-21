@@ -108,7 +108,8 @@ func runLive(args []string, useTUI bool, _ io.Reader, out io.Writer) error {
 				return tracker.QueueReadiness(readCtx, local, every, anyLabels)
 			}
 			create := func(title string, labels []string) (string, error) {
-				local, err := tracker.NewLocal("", trackerPath, "lambe@"+daemon.DefaultMachine())
+				_, actor := hostIdentity(cfg)
+				local, err := tracker.NewLocal("", trackerPath, actor)
 				if err != nil {
 					return "", err
 				}

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/confmap"
@@ -17,6 +18,9 @@ import (
 
 // EnvPrefix is the prefix every lambe environment variable carries.
 const EnvPrefix = "LAMBE_"
+
+// DefaultStallAfter is the stall threshold when none is configured.
+const DefaultStallAfter = 5 * time.Minute
 
 // Defaults for every tunable the supervisor reads. The heartbeat default is
 // one third of the assumed 450s heartbeat TTL. The state surface binds an
@@ -28,6 +32,7 @@ const (
 	defaultTurnTimeout        = 1 * time.Hour
 	defaultHeartbeatInterval  = 150 * time.Second
 	defaultHeartbeatTTLSecond = 450
+	defaultStallAfter         = DefaultStallAfter
 	defaultStateAPIAddr       = "127.0.0.1:0"
 )
 
@@ -39,6 +44,21 @@ type Supervisor struct {
 	TurnTimeout        time.Duration
 	HeartbeatInterval  time.Duration
 	HeartbeatTTLSecond int
+	// StallAfter is the single stall threshold: a running run with no agent
+	// activity for this long is "stalled" to the state API, dashboard,
+	// TUI, and doctor. It is observation only; the watchdog still acts at
+	// SilenceTimeout.
+	StallAfter time.Duration
+	// ProbeWindow bounds the wait for any response after the Pi steer
+	// probe; zero uses the driver default (30s). Pi harness only.
+	ProbeWindow time.Duration
+}
+
+// Gate holds completion-gate tuning.
+type Gate struct {
+	// CheckTimeout bounds each external gate check (a test run, a CI
+	// poll). Zero derives it from silence_timeout/2, floored at one minute.
+	CheckTimeout time.Duration
 }
 
 // Tracker names one Beads source lambe may consult.
@@ -80,7 +100,18 @@ type Config struct {
 	// WorkspaceRoot overrides the per-issue workspace directory; empty uses the state directory.
 	WorkspaceRoot string
 
+	// Machine names this host for dispatch affinity (lambe/machine:<name>
+	// labels). Empty falls back to the hostname's first label; see Identity.
+	Machine string
+	// Actor is the Beads identity stamped on claims and heartbeats. Every
+	// host sharing one tracker MUST have a distinct actor: bd treats a
+	// repeated claim by the same actor as idempotent, so two hosts with the
+	// same actor would both "win" the same issue. Empty derives
+	// "lambe@<machine>"; see Identity.
+	Actor string
+
 	Supervisor Supervisor
+	Gate       Gate
 	// Harness selects "pi", "codex", or a configurable "acp" backend.
 	Harness  string
 	ACP      ACP
@@ -168,7 +199,12 @@ func Load(opts Options) (*Config, error) {
 			TurnTimeout:        k.Duration("supervisor.turn_timeout"),
 			HeartbeatInterval:  k.Duration("supervisor.heartbeat_interval"),
 			HeartbeatTTLSecond: k.Int("supervisor.heartbeat_ttl_second"),
+			StallAfter:         k.Duration("supervisor.stall_after"),
+			ProbeWindow:        k.Duration("supervisor.probe_window"),
 		},
+		Gate:          Gate{CheckTimeout: k.Duration("gate.check_timeout")},
+		Machine:       strings.TrimSpace(k.String("machine")),
+		Actor:         strings.TrimSpace(k.String("actor")),
 		WorkflowPath:  strings.TrimSpace(k.String("workflow_path")),
 		WorkspaceRoot: strings.TrimSpace(k.String("workspace.root")),
 		StateAPI: StateAPI{
@@ -305,6 +341,7 @@ func defaultsProvider() *confmap.Confmap {
 			"turn_timeout":         defaultTurnTimeout.String(),
 			"heartbeat_interval":   defaultHeartbeatInterval.String(),
 			"heartbeat_ttl_second": defaultHeartbeatTTLSecond,
+			"stall_after":          defaultStallAfter.String(),
 		},
 	}, ".")
 }
@@ -397,8 +434,40 @@ func DefaultWorkflowPath(trackers []Tracker) string {
 	return "WORKFLOW.md"
 }
 
+// Identity resolves this host's dispatch machine name and Beads actor.
+// Precedence per field: config (file, LAMBE_MACHINE / LAMBE_ACTOR env,
+// flags), then the hostname's first label, with the actor defaulting to
+// "lambe@<machine>". hostname is injectable for tests.
+func (c *Config) Identity(hostname func() (string, error)) (machine, actor string) {
+	machine = c.Machine
+	if machine == "" {
+		host, err := hostname()
+		if err != nil || host == "" {
+			host = "unknown"
+		}
+		machine, _, _ = strings.Cut(host, ".")
+	}
+	actor = c.Actor
+	if actor == "" {
+		actor = "lambe@" + machine
+	}
+	return machine, actor
+}
+
+// validIdentityToken rejects empty-after-trim, whitespace, and control
+// characters: the value rides in bd argv, labels, and the audit trail.
+func validIdentityToken(v string) bool {
+	return !strings.ContainsFunc(v, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) })
+}
+
 func validate(cfg *Config) []error {
 	var errs []error
+	if !validIdentityToken(cfg.Machine) {
+		errs = append(errs, fmt.Errorf("machine must not contain whitespace or control characters, got %q", cfg.Machine))
+	}
+	if !validIdentityToken(cfg.Actor) {
+		errs = append(errs, fmt.Errorf("actor must not contain whitespace or control characters, got %q", cfg.Actor))
+	}
 	switch cfg.Harness {
 	case "pi", "codex", "acp":
 	default:
@@ -423,6 +492,15 @@ func validate(cfg *Config) []error {
 	}
 	if s.TurnTimeout <= s.SilenceTimeout {
 		errs = append(errs, fmt.Errorf("supervisor.turn_timeout (%s) must exceed silence_timeout (%s)", s.TurnTimeout, s.SilenceTimeout))
+	}
+	if s.StallAfter <= 0 {
+		errs = append(errs, fmt.Errorf("supervisor.stall_after must be positive, got %s", s.StallAfter))
+	}
+	if s.ProbeWindow < 0 {
+		errs = append(errs, fmt.Errorf("supervisor.probe_window must not be negative, got %s", s.ProbeWindow))
+	}
+	if cfg.Gate.CheckTimeout < 0 {
+		errs = append(errs, fmt.Errorf("gate.check_timeout must not be negative, got %s", cfg.Gate.CheckTimeout))
 	}
 	if s.HeartbeatInterval <= 0 {
 		errs = append(errs, fmt.Errorf("supervisor.heartbeat_interval must be positive, got %s", s.HeartbeatInterval))
@@ -478,6 +556,7 @@ func (c *Config) Summary() string {
 	b.WriteString(" silence_timeout=" + c.Supervisor.SilenceTimeout.String())
 	b.WriteString(" turn_timeout=" + c.Supervisor.TurnTimeout.String())
 	b.WriteString(" heartbeat_interval=" + c.Supervisor.HeartbeatInterval.String())
+	b.WriteString(" stall_after=" + c.Supervisor.StallAfter.String())
 	b.WriteString(" trackers=" + strconv.Itoa(len(c.Trackers)))
 	if c.StateAPI.Enable {
 		b.WriteString(" stateapi=on addr=" + c.StateAPI.Addr)

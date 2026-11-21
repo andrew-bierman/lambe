@@ -472,3 +472,75 @@ func TestStateAPIAddrIgnoredWhenDisabled(t *testing.T) {
 		t.Fatalf("disabled surface must not fail validation: %+v, %v", cfg, err)
 	}
 }
+
+func TestIdentity(t *testing.T) {
+	host := func() (string, error) { return "box-7.lan", nil }
+	tests := []struct {
+		name        string
+		env         []string
+		file        string
+		wantMachine string
+		wantActor   string
+	}{
+		{"hostname fallback", nil, "", "box-7", "lambe@box-7"},
+		{"env machine derives actor", []string{"LAMBE_MACHINE=east"}, "", "east", "lambe@east"},
+		{"file actor", nil, "machine: east\nactor: lambe@east-2\n", "east", "lambe@east-2"},
+		{"env beats file", []string{"LAMBE_ACTOR=env-actor"}, "actor: file-actor\n", "box-7", "env-actor"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := Options{Env: tt.env}
+			if opts.Env == nil {
+				opts.Env = []string{}
+			}
+			if tt.file != "" {
+				opts.File = writeTemp(t, tt.file)
+			}
+			cfg, err := Load(opts)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			machine, actor := cfg.Identity(host)
+			if machine != tt.wantMachine || actor != tt.wantActor {
+				t.Errorf("Identity = (%q, %q), want (%q, %q)", machine, actor, tt.wantMachine, tt.wantActor)
+			}
+		})
+	}
+}
+
+func TestActorRejectsWhitespace(t *testing.T) {
+	if _, err := Load(Options{Env: []string{"LAMBE_ACTOR=bad actor"}}); err == nil {
+		t.Fatal("actor with whitespace must fail validation")
+	}
+}
+
+func TestStallAndTimeoutKnobs(t *testing.T) {
+	cfg, err := Load(Options{Env: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Supervisor.StallAfter != 5*time.Minute {
+		t.Errorf("stall_after default = %s, want 5m", cfg.Supervisor.StallAfter)
+	}
+	if cfg.Supervisor.ProbeWindow != 0 || cfg.Gate.CheckTimeout != 0 {
+		t.Errorf("probe_window / gate.check_timeout default to unset, got %s / %s", cfg.Supervisor.ProbeWindow, cfg.Gate.CheckTimeout)
+	}
+	file := writeTemp(t, "supervisor:\n  stall_after: 2m\n  probe_window: 45s\ngate:\n  check_timeout: 20m\n")
+	cfg, err = Load(Options{File: file, Env: []string{"LAMBE_GATE_CHECK_TIMEOUT=30m"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Supervisor.StallAfter != 2*time.Minute || cfg.Supervisor.ProbeWindow != 45*time.Second {
+		t.Errorf("file knobs: stall_after=%s probe_window=%s", cfg.Supervisor.StallAfter, cfg.Supervisor.ProbeWindow)
+	}
+	if cfg.Gate.CheckTimeout != 30*time.Minute {
+		t.Errorf("env must override file: gate.check_timeout = %s, want 30m", cfg.Gate.CheckTimeout)
+	}
+	for _, bad := range []string{"supervisor.stall_after: 0s", "supervisor.probe_window: -1s", "gate.check_timeout: -5m"} {
+		key, val, _ := strings.Cut(bad, ": ")
+		section, name, _ := strings.Cut(key, ".")
+		if _, err := Load(Options{File: writeTemp(t, section+":\n  "+name+": "+val+"\n"), Env: []string{}}); err == nil {
+			t.Errorf("%s accepted, want a validation error", bad)
+		}
+	}
+}
