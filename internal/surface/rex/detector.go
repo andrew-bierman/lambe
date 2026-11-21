@@ -76,7 +76,7 @@ type Detector struct {
 
 // Detect reports Rex availability. Environment evidence (REX_SESSION or
 // REX_SERVER) short-circuits the probe; otherwise `rex ls --json` is probed
-// and exit code 4 is treated as a definitive absence rather than an error.
+// (without autostarting a server) and exit code 4 is treated as a definitive absence rather than an error.
 func (d Detector) Detect(ctx context.Context) Availability {
 	for _, key := range []string{"REX_SESSION", "REX_SERVER"} {
 		if lookup(d.Env, key) != "" {
@@ -88,7 +88,9 @@ func (d Detector) Detect(ctx context.Context) Availability {
 	}
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
-	_, code, err := d.Runner(ctx, "rex", "ls", "--json")
+	// --autostart=false: detection must observe Rex, never launch a server
+	// on a machine where it is installed but not running.
+	_, code, err := d.Runner(ctx, "rex", "--autostart=false", "ls", "--json")
 	switch {
 	case err == nil && code == 0:
 		return Availability{Available: true, Reason: ReasonProbe}

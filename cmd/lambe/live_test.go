@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/term"
 
 	"github.com/andrew-bierman/lambe/internal/daemon"
+	"github.com/andrew-bierman/lambe/internal/proc"
 	"github.com/andrew-bierman/lambe/internal/symphony"
 )
 
@@ -70,6 +71,71 @@ func TestBareLiveViewUsesInitializedTrackerNamespace(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "initialized-tracker-proof") {
 		t.Fatal("live view selected a different tracker namespace")
+	}
+}
+
+func TestLogsJSONReportsDaemonLivenessAndMachine(t *testing.T) {
+	isolatedConfigDir(t)
+	state := t.TempDir()
+	t.Setenv("LAMBE_STATE_DIR", state)
+	t.Setenv("LAMBE_MACHINE", "mini")
+	project := t.TempDir()
+	t.Chdir(project)
+	if err := os.Mkdir(".beads", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runInit([]string{"-non-interactive"}, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := parseCommon(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := daemon.LivePath(state, cfg)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := proc.ProcessIdentity(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		snapshot daemon.LiveSnapshot
+		alive    bool
+	}{
+		{"running daemon", daemon.LiveSnapshot{PID: os.Getpid(), Identity: identity}, true},
+		{"stopped daemon", daemon.LiveSnapshot{PID: os.Getpid(), Identity: "someone-else"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.snapshot.Runs = []daemon.LiveRun{{Progress: symphony.Progress{IssueID: "ac-1", Workflow: "Fleet"}}}
+			data, err := json.Marshal(tc.snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			out.Reset()
+			if err := runLive([]string{"-json"}, false, strings.NewReader(""), &out); err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				Alive   bool
+				Machine string
+				Runs    []struct{ IssueID, Workflow string }
+			}
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("decode %q: %v", out.String(), err)
+			}
+			if got.Alive != tc.alive || got.Machine != "mini" {
+				t.Errorf("Alive=%v Machine=%q, want %v and mini", got.Alive, got.Machine, tc.alive)
+			}
+			if len(got.Runs) != 1 || got.Runs[0].IssueID != "ac-1" || got.Runs[0].Workflow != "Fleet" {
+				t.Errorf("runs = %+v, want the flat snapshot rows with their workflow", got.Runs)
+			}
+		})
 	}
 }
 
