@@ -28,6 +28,9 @@ type DaemonDTO struct {
 	// ConfigPath is the configuration file the daemon loaded; empty when
 	// it ran without one.
 	ConfigPath string `json:"config_path,omitempty"`
+	// Actor is the daemon's tracker identity for claims and heartbeats
+	// (additive).
+	Actor string `json:"actor,omitempty"`
 }
 
 // SnapshotResponse is the DTO for GET /api/v1/state.
@@ -57,6 +60,14 @@ type SnapshotResponse struct {
 	// GateRejectionsAsOf is when the gate-rejection section was read, RFC
 	// 3339; empty before the daemon's first read.
 	GateRejectionsAsOf string `json:"gate_rejections_as_of,omitempty"`
+	// TickAt is the daemon loop heartbeat, RFC 3339: stamped at the start
+	// and end of every daemon cycle. A stale value on a live daemon means a
+	// wedged loop. Empty before the first cycle or from an older daemon
+	// (additive).
+	TickAt string `json:"tick_at,omitempty"`
+	// StallAfterSeconds is the single stall threshold (supervisor.stall_after)
+	// behind every run's stalled flag; omitted when unknown (additive).
+	StallAfterSeconds int `json:"stall_after_seconds,omitempty"`
 }
 
 // RunDTO describes one supervised run in the snapshot.
@@ -80,6 +91,20 @@ type RunDTO struct {
 	// "gating", "stopped: gate red"); richer than state and displayed
 	// alongside it. Empty when the projection has not observed the run.
 	Phase string `json:"phase,omitempty"`
+	// Workflow is the named workflow the run executes (additive).
+	Workflow string `json:"workflow,omitempty"`
+	// Machine and Actor are the daemon identity that owns the run
+	// (additive).
+	Machine string `json:"machine,omitempty"`
+	Actor   string `json:"actor,omitempty"`
+	// LastActivityAt is the last agent event of any kind (tool, message,
+	// diagnostic), RFC 3339; empty when none was observed (additive).
+	LastActivityAt string `json:"last_activity_at,omitempty"`
+	// Stalled is true when the run is running and its freshest sign of life
+	// (activity or supervisor progress) is older than the snapshot's
+	// stall_after_seconds. Deferred, gating-wait, and finished runs are
+	// never stalled. Always present (additive).
+	Stalled bool `json:"stalled"`
 }
 
 // NeedsHumanDTO describes one item awaiting human attention.
@@ -155,6 +180,16 @@ type IssueResponse struct {
 	Tail string `json:"tail,omitempty"`
 	// TailTruncated reports whether the tail was cut at the 4KB bound.
 	TailTruncated bool `json:"tail_truncated,omitempty"`
+	// Machine and Actor are the daemon identity that owns the run
+	// (additive).
+	Machine string `json:"machine,omitempty"`
+	Actor   string `json:"actor,omitempty"`
+	// LastActivityAt is the last agent event of any kind, RFC 3339 (additive).
+	LastActivityAt string `json:"last_activity_at,omitempty"`
+	// Stalled and StallAfterSeconds are the server-computed stall verdict
+	// and its threshold (additive).
+	Stalled           bool `json:"stalled"`
+	StallAfterSeconds int  `json:"stall_after_seconds,omitempty"`
 }
 
 // QueueResponse is the DTO for GET /api/v1/queue.

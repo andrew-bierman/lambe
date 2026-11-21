@@ -210,6 +210,7 @@ Rules that apply to every DTO:
 | `machine` | string | optional | Configured dispatch identity. |
 | `version` | string | optional | Daemon build version. |
 | `config_path` | string | optional | Configuration file loaded; absent when the daemon ran without one. |
+| `actor` | string | optional | Tracker identity the daemon claims and heartbeats as (`lambe@<machine>` by default). Additive. |
 
 ### `SnapshotResponse` — `GET /api/v1/state`
 
@@ -228,6 +229,8 @@ The full supervised state. Fixture:
 | `runs_as_of` | string | optional | When the runs section was read (serve time on a live daemon). |
 | `needs_human_as_of` | string | optional | When the needs-human section was last read from the tracker; absent before the first read. |
 | `gate_rejections_as_of` | string | optional | When the gate-rejection section was last read; absent before the first read. |
+| `tick_at` | string | optional | Loop heartbeat, RFC 3339: stamped at the start and end of every daemon cycle (read from the live projection). A value much older than a cycle (see `supervisor.tick_seconds`) on a live daemon means a wedged loop. Absent before the first cycle. Additive. |
+| `stall_after_seconds` | number | optional | The stall threshold (`supervisor.stall_after`) behind every run's `stalled` flag. Additive. |
 
 `RunDTO`:
 
@@ -240,6 +243,11 @@ The full supervised state. Fixture:
 | `last_event_age` | string | always | Human age of the last observed event (`"30s"`, `"n/a"` when none observed). |
 | `last_event_at` | string | optional | RFC 3339 counterpart of `last_event_age`; absent when no event observed. |
 | `phase` | string | optional | Operator-facing phase; absent when not yet observed. |
+| `workflow` | string | optional | Named workflow the run executes. Additive. |
+| `machine` | string | optional | Configured machine of the daemon that owns the run. Additive. |
+| `actor` | string | optional | Tracker actor of the daemon that owns the run. Additive. |
+| `last_activity_at` | string | optional | RFC 3339 time of the last agent event of any kind (tool, message, diagnostic); absent when none seen. Unlike `last_event_at`, supervisor bookkeeping never moves it. Additive. |
+| `stalled` | boolean | always | Server-computed: `state` is `running`, the phase is not `stopped: ...`, and the freshest of `last_activity_at` and `last_event_at` is older than `stall_after_seconds`. Deferred and finished runs are never stalled. Clients should render this instead of re-deriving a threshold. Additive. |
 
 `NeedsHumanDTO`:
 
@@ -285,6 +293,14 @@ answer 404 `not_found`.
 | `last_gate` | string | optional | Bounded preview of the last gate output. |
 | `tail` | string | optional | At most 4 KiB of the run's most recent output, cut on a UTF-8 boundary. Full output lives in artifacts, never here. |
 | `tail_truncated` | boolean | optional | `true` when the tail was cut at the bound; absent (false) otherwise. |
+| `machine`, `actor` | string | optional | Owning daemon's machine and tracker actor. Additive. |
+| `last_activity_at` | string | optional | As in `RunDTO`. Additive. |
+| `stalled` | boolean | always | As in `RunDTO`. Additive. |
+| `stall_after_seconds` | number | optional | Threshold behind `stalled`. Additive. |
+
+There is deliberately no `log_path`: Lambe keeps no per-issue log file (agent
+output is in `tail`, and `lambe logs -issue ID` reads the live projection).
+A field will be added only once a real file exists.
 
 ### `QueueResponse` — `GET /api/v1/queue`
 

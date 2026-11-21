@@ -51,6 +51,7 @@ func canonicalDaemon() DaemonDTO {
 		Machine:    "operators-mac",
 		Version:    "v0.9.0",
 		ConfigPath: "/Users/operator/lambe/lambe.yaml",
+		Actor:      "lambe@operators-mac",
 	}
 }
 
@@ -63,8 +64,12 @@ func canonicalSnapshot() SnapshotResponse {
 		SchemaVersion: SchemaVersion,
 		Daemon:        canonicalDaemon(),
 		Runs: []RunDTO{
-			{Issue: "T-1", Session: "ses-t1", Attempt: 2, State: "running", LastEventAge: "30s", LastEventAt: "2026-11-19T11:59:30Z", Phase: "gating"},
-			{Issue: "T-2", Attempt: 1, State: "deferred", LastEventAge: "n/a", Phase: "deferred"},
+			{
+				Issue: "T-1", Session: "ses-t1", Attempt: 2, State: "running", LastEventAge: "30s", LastEventAt: "2026-11-19T11:59:30Z", Phase: "gating",
+				Workflow: "general", Machine: "operators-mac", Actor: "lambe@operators-mac", LastActivityAt: "2026-11-19T11:59:30Z",
+			},
+			{Issue: "T-2", Attempt: 1, State: "deferred", LastEventAge: "n/a", Phase: "deferred", Machine: "operators-mac", Actor: "lambe@operators-mac"},
+			{Issue: "T-3", Attempt: 1, State: "running", LastEventAge: "12m", LastEventAt: "2026-11-19T11:48:00Z", Phase: "running", Workflow: "review", Machine: "operators-mac", Actor: "lambe@operators-mac", LastActivityAt: "2026-11-19T11:48:00Z", Stalled: true},
 		},
 		DeferredUntil: "2026-11-19T12:10:00Z",
 		WakeAt:        "2026-11-19T12:05:00Z",
@@ -77,6 +82,8 @@ func canonicalSnapshot() SnapshotResponse {
 		RunsAsOf:           "2026-11-19T12:00:00Z",
 		NeedsHumanAsOf:     "2026-11-19T12:00:00Z",
 		GateRejectionsAsOf: "2026-11-19T12:00:00Z",
+		TickAt:             "2026-11-19T11:59:55Z",
+		StallAfterSeconds:  300,
 	}
 }
 
@@ -101,6 +108,11 @@ func canonicalIssue() IssueResponse {
 		WakeAt:        "2026-11-19T13:00:00Z",
 		LastGate:      "pr checks pending",
 		Tail:          "10:59:30 assistant: running the completion gate",
+
+		Machine:           "operators-mac",
+		Actor:             "lambe@operators-mac",
+		LastActivityAt:    "2026-11-19T11:59:30Z",
+		StallAfterSeconds: 300,
 	}
 }
 

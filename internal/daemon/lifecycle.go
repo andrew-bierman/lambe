@@ -140,6 +140,9 @@ type Daemon struct {
 	// stateapi is the bound HTTP state surface for this daemon life; nil
 	// when the surface is disabled or failed to start.
 	stateapi *stateAPISurface
+	// live is the projection the cycle stamps its heartbeat on; nil before
+	// Run starts it.
+	live *liveView
 }
 
 // Registry returns the daemon's live run registry. Wired runners record
@@ -182,6 +185,8 @@ func OpenControl(ctx context.Context, opts Options) (mcp.Control, func(), error)
 func (d *Daemon) StateSource() httpstate.StateSource {
 	src := NewStateSource(d.asm.Registry, d.asm.Reports, d.poke)
 	src.Identify(d.opts.Machine, d.opts.Version, d.opts.ConfigPath)
+	src.SetActor(d.opts.Actor)
+	src.SetStallAfter(func() time.Duration { return d.opts.Config.Supervisor.StallAfter })
 	src.WatchLive(LivePath(d.opts.StateDir, d.opts.Config))
 	return src
 }
@@ -320,6 +325,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// daemon as running while startup reconciliation is still in flight.
 	view := newLiveView(LivePath(d.opts.StateDir, d.opts.Config), func(err error) { d.log.Warn("live view update failed", "error", err) })
 	view.registry = d.asm.Registry
+	d.live = view
 	view.start()
 	defer view.close()
 
@@ -684,6 +690,10 @@ func (d *Daemon) tickCycle(ctx context.Context) {
 func (d *Daemon) cycle(ctx context.Context, prefix string, immediate bool) {
 	d.cycleMu.Lock()
 	defer d.cycleMu.Unlock()
+	if d.live != nil {
+		d.live.tick()
+		defer d.live.tick()
+	}
 	cctx, cancel := context.WithTimeout(ctx, d.cycleBound())
 	if err := d.asm.Sync.Pull(cctx); err != nil {
 		d.log.Warn(prefix+": hub pull failed, continuing on local state",
