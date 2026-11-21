@@ -44,7 +44,22 @@ lambe run      # start the supervisor
 lambe version  # confirm the installed build
 ```
 
-The installer verifies the archive against the release checksum and puts
+Other ways to install:
+
+```sh
+brew install andrew-bierman/tap/lambe        # macOS and Linux (also installs beads)
+go install github.com/andrew-bierman/lambe/cmd/lambe@latest
+```
+
+Each [release](https://github.com/andrew-bierman/lambe/releases) also has
+`.deb`, `.rpm`, and `.apk` packages for amd64 and arm64. They install
+`/usr/bin/lambe` and an example unit under `/usr/share/doc/lambe/examples/`;
+no service is enabled. Checksums are signed with cosign and releases carry
+SBOMs and build attestations; verification commands are in
+[docs/RELEASING.md](docs/RELEASING.md#verifying-a-release).
+
+The installer verifies the archive against the release checksum (and the
+cosign signature when `cosign` is on your PATH) and puts
 `lambe` in `~/.local/bin`. Set `LAMBE_VERSION` to pin a release. Prefer to
 read it first? It is [scripts/install.sh](scripts/install.sh), and archives
 are on the [releases page](https://github.com/andrew-bierman/lambe/releases).
