@@ -737,7 +737,7 @@ func (d *Driver) resultPending() bool {
 	d.mu.Lock()
 	ch := d.result
 	d.mu.Unlock()
-	return ch != nil && len(ch) > 0
+	return len(ch) > 0
 }
 
 // deliverResult hands one outcome to the active Run, if any.
