@@ -42,6 +42,12 @@ struct RunDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header(seed)
+                liveness(seed)
+                RunActionsSection(
+                    issue: seed.issue,
+                    configPath: connection.daemon?.configPath,
+                    workspace: connection.detail.issue?.workspace
+                )
                 statusBlock(seed)
                 seedFacts(seed)
                 if let issue = connection.detail.issue {
@@ -71,12 +77,43 @@ struct RunDetailView: View {
 
     private func header(_ seed: RunSeed) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(seed.issue)
-                .font(.title3.weight(.semibold).monospaced())
+            HStack(spacing: 8) {
+                Text(seed.issue)
+                    .font(.title3.weight(.semibold).monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                StandingBadge(standing: seed.standing)
+            }
             if let title = seed.title, !title.isEmpty {
                 Text(title)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// The stalled/quiet callout for a live run, from its last event time.
+    @ViewBuilder
+    private func liveness(_ seed: RunSeed) -> some View {
+        if seed.standing == .live {
+            TimelineView(.periodic(from: .now, by: 15)) { context in
+                let at = connection.detail.issue?.lastEventAt ?? seed.updatedAt
+                let state = connection.detail.issue?.state ?? seed.state ?? ""
+                let kind = StallPolicy.classify(state: state, lastEventAt: at, now: context.date)
+                if kind == .stalled || kind == .quiet {
+                    let silence = StallPolicy.silence(lastEventAt: at, now: context.date)
+                    HStack(spacing: 8) {
+                        LivenessBadge(liveness: kind, silence: silence)
+                        Text(kind == .stalled
+                            ? "The agent has produced no events. Open the run to see what it is stuck on."
+                            : "The agent has gone quiet.")
+                            .font(.footnote)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background((kind == .stalled ? Color.red : Color.orange).opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                    .accessibilityElement(children: .combine)
+                }
             }
         }
     }

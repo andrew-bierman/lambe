@@ -121,63 +121,91 @@ struct QueueView: View {
 
     var body: some View {
         SectionContainer(section: .queue) { _ in
-            List(selection: $selectedIssue) {
-                let active = QueueComposition.activeRuns(in: connection.snapshotFeed.payload)
-                if !active.isEmpty {
-                    Section("Active runs") {
-                        ForEach(active) { run in
-                            ActiveRunRow(run: run)
-                                .tag(run.issue)
+            VStack(spacing: 0) {
+                StalledBanner(runs: QueueComposition.activeRuns(in: connection.snapshotFeed.payload))
+                List(selection: $selectedIssue) {
+                    let active = QueueComposition.activeRuns(in: connection.snapshotFeed.payload)
+                    if !active.isEmpty {
+                        Section("Active runs") {
+                            ForEach(active) { run in
+                                ActiveRunRow(run: run)
+                                    .tag(run.issue)
+                            }
+                        }
+                    }
+                    let readiness = QueueComposition.readinessRows(
+                        queue: connection.queueFeed.payload,
+                        snapshot: connection.snapshotFeed.payload
+                    )
+                    if !readiness.isEmpty {
+                        Section("Readiness") {
+                            ForEach(readiness) { row in
+                                QueueRowView(row: row)
+                                    .tag(row.id)
+                            }
                         }
                     }
                 }
-                let readiness = QueueComposition.readinessRows(
-                    queue: connection.queueFeed.payload,
-                    snapshot: connection.snapshotFeed.payload
-                )
-                if !readiness.isEmpty {
-                    Section("Readiness") {
-                        ForEach(readiness) { row in
-                            QueueRowView(row: row)
-                                .tag(row.id)
-                        }
-                    }
-                }
+                .listStyle(.inset)
             }
-            .listStyle(.inset)
         }
     }
 }
 
-/// One active run row: issue, phase badge, attempt, last event age.
+/// One active run row: issue, phase badge, attempt, last event age. A
+/// stalled run is unmistakable: red bar, red tint, and a STALLED badge
+/// carrying how long it has been silent. Liveness re-evaluates every 15 s
+/// even when the poll payload is unchanged.
 struct ActiveRunRow: View {
     let run: WireRun
+    /// Test/preview seam; live rows use the wall clock.
+    var fixedNow: Date?
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(run.issue)
-                    .font(.body.weight(.medium))
-                    .monospacedDigit()
-                if let phase = run.phase {
-                    Text(phase)
-                        .font(.footnote)
+        TimelineView(.periodic(from: .now, by: 15)) { context in
+            row(now: fixedNow ?? context.date)
+        }
+    }
+
+    private func row(now: Date) -> some View {
+        let liveness = StallPolicy.classify(state: run.state, lastEventAt: run.lastEventAt, now: now)
+        let silence = StallPolicy.silence(lastEventAt: run.lastEventAt, now: now)
+        return HStack(alignment: .top, spacing: 8) {
+            if liveness == .stalled {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.red)
+                    .frame(width: 4)
+                    .accessibilityHidden(true)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(run.issue)
+                        .font(.body.weight(.medium))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    LivenessBadge(liveness: liveness, silence: silence)
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    StateBadge(state: run.state, phase: run.phase)
+                    Text("attempt \(run.attempt)")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    Text("last event \(run.lastEventAge)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
-            Spacer()
-            StateBadge(state: run.state, phase: run.phase)
-            Text("attempt \(run.attempt)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(run.lastEventAge)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 3)
+        .padding(.horizontal, liveness == .stalled ? 4 : 0)
+        .background(liveness == .stalled ? Color.red.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 6))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
-            "Run \(run.issue), \(run.phase ?? run.state), attempt \(run.attempt), last event \(run.lastEventAge)"
+            "\(liveness == .stalled ? "Stalled run" : "Run") \(run.issue), \(run.phase ?? run.state), attempt \(run.attempt), last event \(run.lastEventAge)"
         )
     }
 }
@@ -359,9 +387,11 @@ struct HistoryView: View {
         SectionContainer(section: .history) { _ in
             List(selection: $selectedIssue) {
                 if let history = connection.historyFeed.payload {
-                    ForEach(history.runs) { run in
-                        HistoryRow(run: run)
-                            .tag(run.issue)
+                    Section("Archived attempts (not running)") {
+                        ForEach(history.runs) { run in
+                            HistoryRow(run: run)
+                                .tag(run.issue)
+                        }
                     }
                 }
             }
@@ -370,30 +400,37 @@ struct HistoryView: View {
     }
 }
 
-/// One history row: ending badge, attempt, last observed time.
+/// One history row: title and ending on the first line, attempt and age
+/// below. Two lines so a narrow column never wraps a badge mid-word.
 struct HistoryRow: View {
     let run: WireHistoryRun
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(run.title ?? run.issue)
                     .font(.body.weight(.medium))
+                    .lineLimit(2)
+                Spacer(minLength: 4)
+                OutcomeBadge(phase: run.phase, state: run.state, outcome: run.outcome)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(run.phase ?? run.state ?? "")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-            }
-            Spacer()
-            OutcomeBadge(phase: run.phase, state: run.state, outcome: run.outcome)
-            Text("attempt \(run.attempt)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            if RFC3339.date(run.updatedAt) != nil {
-                RelativeTimeText(label: "", iso: run.updatedAt)
-            } else {
-                Text("time unknown")
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text("attempt \(run.attempt)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if RFC3339.date(run.updatedAt) != nil {
+                    RelativeTimeText(label: "", iso: run.updatedAt)
+                        .lineLimit(1)
+                } else {
+                    Text("time unknown")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(.vertical, 2)
@@ -406,6 +443,6 @@ struct HistoryRow: View {
         let when = RFC3339.date(run.updatedAt) != nil
             ? ", last observed \(run.updatedAt ?? "")"
             : ", time unknown"
-        return "Finished run \(run.title ?? run.issue): \(ending), attempt \(run.attempt)\(when)"
+        return "Archived run \(run.title ?? run.issue): \(ending), attempt \(run.attempt)\(when)"
     }
 }

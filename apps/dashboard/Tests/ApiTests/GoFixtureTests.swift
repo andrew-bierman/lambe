@@ -59,7 +59,7 @@ struct GoFixtureTests {
         #expect(snap.schemaVersion == 1)
         #expect(snap.daemon.pid == 4242)
         #expect(snap.daemon.identity == "darwin:boot:1:2")
-        #expect(snap.runs.count == 2)
+        #expect(snap.runs.map(\.issue) == ["T-1", "T-2", "T-3"])
         // The fully populated run decodes field-for-field.
         #expect(snap.runs[0].issue == "T-1")
         #expect(snap.runs[0].session == "ses-t1")

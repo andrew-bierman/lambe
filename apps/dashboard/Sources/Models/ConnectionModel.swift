@@ -136,6 +136,12 @@ final class ConnectionModel {
     let historyFeed = FeedModel<WireHistory>()
     let detail = DetailModel()
 
+    /// Previews and scripted screenshots: feeds are filled by
+    /// `ConnectionModel.fixture(_:)` and nothing ever polls or touches the
+    /// network.
+    private(set) var isFixture = false
+    private var fixtureIssue: WireIssue?
+
     private var consecutiveFailures = 0
     private var hasEverAttached = false
     private var attachedIdentity: WireDaemonIdentity?
@@ -167,6 +173,19 @@ final class ConnectionModel {
 
     init(instanceStore: InstanceStore = InstanceStore()) {
         self.instanceStore = instanceStore
+    }
+
+    /// Short connection text and tone shared by the sidebar rows.
+    var statusSummary: (text: String, tone: OutcomeTone) {
+        if mode == .demo { return ("demo data", .neutral) }
+        switch state {
+        case .attached: return ("attached", .good)
+        case .degraded: return ("degraded: tracker data stale", .warning)
+        case .disconnected(let reason): return ("disconnected: \(reason)", .bad)
+        case .ambiguous: return ("ambiguous instance", .warning)
+        case .loading: return ("connecting…", .neutral)
+        case .neverConnected(let reason): return (reason.detail, .bad)
+        }
     }
 
     /// True when live polling is wired to a daemon right now.
@@ -226,7 +245,7 @@ final class ConnectionModel {
     /// Cancellation-aware: an interrupted fetch leaves state consistent
     /// for the next tick.
     private func runTick() async {
-        guard !tickInFlight else { return }
+        guard !tickInFlight, !isFixture else { return }
         if mode == .demo {
             applyDemo()
             return
@@ -401,6 +420,11 @@ final class ConnectionModel {
     /// The closure captures the existing client; it issues one GET and
     /// nothing else.
     func detailFetch(id: String) -> (() async throws -> WireIssue)? {
+        if let fixtureIssue {
+            return fixtureIssue.issue == id
+                ? { fixtureIssue }
+                : { throw APIError.status(code: 404) }
+        }
         guard mode == .live, let client else { return nil }
         return { try await client.issue(id) }
     }
@@ -585,5 +609,29 @@ final class DetailModel {
         phase = .idle
         issue = nil
         loadedID = nil
+    }
+}
+
+
+// MARK: - Fixtures
+
+extension ConnectionModel {
+    /// A fully populated model for previews and screenshots: no client, no
+    /// polling, no network (`isFixture` short-circuits every tick).
+    static func fixture(
+        _ scenario: FixtureScenario, store: InstanceStore? = nil
+    ) -> ConnectionModel {
+        let model = ConnectionModel(instanceStore: store ?? FixtureScenario.store(for: scenario))
+        let data = scenario.data
+        model.isFixture = true
+        model.hasEverAttached = true
+        model.snapshotFeed.apply(data.snapshot) { $0.runs.isEmpty && $0.needsHuman.isEmpty && $0.gateRejections.isEmpty }
+        model.queueFeed.apply(data.queue) { $0.rows.isEmpty }
+        model.historyFeed.apply(data.history) { $0.runs.isEmpty }
+        model.daemon = data.snapshot.daemon
+        model.fixtureIssue = data.issue
+        model.lastSync = Date()
+        model.state = data.state
+        return model
     }
 }

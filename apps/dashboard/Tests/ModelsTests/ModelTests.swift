@@ -597,12 +597,12 @@ struct QueueCompositionTests {
 
     @Test("Demo payloads: issues in both payloads count once, badge matches the list")
     func demoBadge() {
-        // Sample snapshot runs demo-hk4 + demo-pm7; the queue also lists
-        // both plus demo-fs2 and demo-jq9. Rendered: 2 runs + 2 readiness.
+        // Sample snapshot runs demo-hk4, demo-pm7, demo-zq2; the queue lists
+        // demo-hk4 and demo-pm7 plus demo-fs2 and demo-jq9. Rendered: 3 runs + 2 readiness.
         let count = QueueComposition.renderedRowCount(
             snapshot: SampleData.snapshot, queue: SampleData.queue
         )
-        #expect(count == 4)
+        #expect(count == 5)
         #expect(count != SampleData.queue.rows.count + SampleData.snapshot.runs.count)
     }
 

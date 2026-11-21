@@ -140,6 +140,8 @@ struct StateBadge: View {
     var body: some View {
         Text(display)
             .font(.caption2.weight(.medium))
+            .lineLimit(1)
+            .truncationMode(.tail)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(tone.color.opacity(0.15), in: Capsule())
@@ -328,5 +330,114 @@ struct StatusFooter: View {
         }
         parts.append("The app is read-only; resolve items in bd or the tracker")
         return parts.joined(separator: ". ")
+    }
+}
+
+// MARK: - Liveness and standing
+
+/// Per-run liveness: STALLED is loud, quiet is a warning, flowing is
+/// silent (the state badge already says it).
+struct LivenessBadge: View {
+    let liveness: RunLiveness
+    let silence: TimeInterval?
+
+    var body: some View {
+        switch liveness {
+        case .stalled:
+            Label("STALLED \(StallPolicy.format(silence ?? 0))", systemImage: "exclamationmark.octagon.fill")
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background(Color.red, in: Capsule())
+                .foregroundStyle(.white)
+                .accessibilityLabel("stalled, no events for \(StallPolicy.format(silence ?? 0))")
+        case .quiet:
+            Label("quiet \(StallPolicy.format(silence ?? 0))", systemImage: "hourglass")
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.orange)
+                .accessibilityLabel("quiet, no events for \(StallPolicy.format(silence ?? 0))")
+        case .waiting:
+            Label("waiting", systemImage: "pause.circle")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        case .unobserved:
+            Text("no events yet")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        case .flowing:
+            EmptyView()
+        }
+    }
+}
+
+/// Top-of-queue alarm naming every stalled run. Renders nothing when all
+/// runs are moving.
+struct StalledBanner: View {
+    let runs: [WireRun]
+    var fixedNow: Date?
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 15)) { context in
+            let stalled = StallPolicy.stalledRuns(runs, now: fixedNow ?? context.date)
+            if !stalled.isEmpty {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "exclamationmark.octagon.fill")
+                        .foregroundStyle(.red)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(stalled.count) run\(stalled.count == 1 ? "" : "s") stalled")
+                            .font(.callout.weight(.semibold))
+                        Text("No agent events for \(StallPolicy.format(StallPolicy.stalledAfter))+: \(stalled.map(\.issue).joined(separator: ", "))")
+                            .font(.footnote)
+                            .lineLimit(3)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(10)
+                .background(Color.red.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.red.opacity(0.5)))
+                .accessibilityElement(children: .combine)
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
+            }
+        }
+    }
+}
+
+/// Live / queued / archived badge for the detail header.
+struct StandingBadge: View {
+    let standing: RunSeed.Source
+
+    var body: some View {
+        Label(title, systemImage: icon)
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.15), in: Capsule())
+            .foregroundStyle(color)
+    }
+
+    private var title: String {
+        switch standing {
+        case .live: "LIVE"
+        case .queued: "QUEUED"
+        case .archived: "ARCHIVED"
+        case .unknown: "NO RECORD"
+        }
+    }
+    private var icon: String {
+        switch standing {
+        case .live: "dot.radiowaves.left.and.right"
+        case .queued: "tray"
+        case .archived: "archivebox"
+        case .unknown: "questionmark.circle"
+        }
+    }
+    private var color: Color {
+        switch standing {
+        case .live: .green
+        case .queued: .blue
+        case .archived, .unknown: .secondary
+        }
     }
 }

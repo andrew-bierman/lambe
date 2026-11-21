@@ -24,6 +24,11 @@ struct ShellView: View {
     /// reordering (the U8 selection rule).
     @State private var selectedIssue: String?
 
+    init(initialSection: SidebarSection = .queue, initialIssue: String? = nil) {
+        _section = State(initialValue: initialSection)
+        _selectedIssue = State(initialValue: initialIssue)
+    }
+
     var body: some View {
         NavigationSplitView {
             SidebarView(section: $section)
@@ -64,6 +69,7 @@ struct ShellView: View {
     @ViewBuilder
     private var contentColumn: some View {
         VStack(spacing: 0) {
+            ConnectionHeader()
             ConnectionBanners()
             switch section {
             case .queue: QueueView(selectedIssue: $selectedIssue)
@@ -113,6 +119,12 @@ struct ShellView: View {
         if let daemon = connection.daemon {
             parts.append(daemon.versionPidText)
         }
+        let stalled = StallPolicy.stalledRuns(
+            QueueComposition.activeRuns(in: connection.snapshotFeed.payload), now: Date()
+        ).count
+        if stalled > 0 {
+            parts.append("\(stalled) STALLED")
+        }
         return parts.joined(separator: " · ")
     }
 }
@@ -124,18 +136,21 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: $section) {
-            ForEach(SidebarSection.allCases) { item in
-                if let count = count(for: item) {
-                    Label(item.title, systemImage: item.systemImage)
-                        .badge(count)
-                        .tag(item)
-                        .accessibilityLabel("\(item.title), \(count) items")
-                } else {
-                    Label(item.title, systemImage: item.systemImage)
-                        .tag(item)
-                        .accessibilityLabel("\(item.title), no items")
+            Section("Views") {
+                ForEach(SidebarSection.allCases) { item in
+                    if let count = count(for: item) {
+                        Label(item.title, systemImage: item.systemImage)
+                            .badge(count)
+                            .tag(item)
+                            .accessibilityLabel("\(item.title), \(count) items")
+                    } else {
+                        Label(item.title, systemImage: item.systemImage)
+                            .tag(item)
+                            .accessibilityLabel("\(item.title), no items")
+                    }
                 }
             }
+            InstancesSection()
         }
         .listStyle(.sidebar)
         .navigationTitle("Views")

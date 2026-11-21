@@ -60,6 +60,14 @@ local override = "/absolute/path/to/lambe.yaml"
 `lambe tui -demo` never takes `-config`, so the demo always uses the host's
 default configuration.
 
+## From the LambeDash app
+
+The native LambeDash app's **Open in Rex** button uses the same window label
+(`Lambe · <issue>`): it focuses that window when it exists and otherwise opens
+one that follows the run's logs. The button appears only when the `rex` CLI is
+installed; without Rex the app offers Terminal and copy-command fallbacks. The
+app does not need `lambe.lua` installed.
+
 ## Daemon status
 
 When the daemon runs inside a Rex terminal, it can publish an OSC program
