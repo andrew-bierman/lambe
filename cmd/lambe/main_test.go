@@ -418,3 +418,45 @@ func TestDaemonOptionsUseConfiguredIdentity(t *testing.T) {
 		t.Fatalf("derived actor = %q, want lambe@studio", opts.Actor)
 	}
 }
+
+func TestInitNamesAncestorTracker(t *testing.T) {
+	isolatedConfigDir(t)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".beads"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(root, "sub")
+	if err := os.MkdirAll(sub, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(sub)
+	resolved, err := os.Getwd() // t.TempDir may sit behind a symlink
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runInit([]string{"-non-interactive"}, strings.NewReader(""), &out); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+	want := "using the Beads tracker at " + filepath.Dir(resolved)
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("init should name the ancestor tracker %q, got:\n%s", want, out.String())
+	}
+}
+
+func TestInitWithoutTerminalDoesNotFailOnPrompt(t *testing.T) {
+	isolatedConfigDir(t)
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "bd"), []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // G306: test stub must be executable.
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	t.Chdir(t.TempDir())
+	var out bytes.Buffer
+	if err := runInit(nil, strings.NewReader(""), &out); err != nil {
+		t.Fatalf("runInit with closed stdin: %v", err)
+	}
+	if !strings.Contains(out.String(), "bd init") || !strings.Contains(out.String(), "-non-interactive") {
+		t.Errorf("init should explain how to proceed, got:\n%s", out.String())
+	}
+}

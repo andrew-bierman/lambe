@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `lambe init` no longer fails with `read answer: EOF` when stdin is not a terminal, and it says when it adopts a Beads tracker found above the current directory.
+
 ### Documentation
 
 - `docs/release-template/`: reusable release setup (goreleaser, workflow, scripts) for other Go tools.
