@@ -109,12 +109,46 @@ var (
 
 // runItem adapts a live run to the bubbles/list Item interface.
 type runItem struct {
-	run daemon.LiveRun
+	run  daemon.LiveRun
+	live bool // the daemon is alive, so silence means a stall rather than history
+}
+
+// stallAfter is how long an active run may stay silent before it is flagged.
+// shortcut: the snapshot only carries LastOutputAt, so a chatty-but-stuck run
+// is not detected; upgrade when the daemon exports a last-progress time.
+const stallAfter = 2 * time.Minute
+
+// shortAge renders a whole-minute duration as "4m" or "1h5m".
+func shortAge(d time.Duration) string {
+	return strings.TrimSuffix(strings.Replace(d.String(), "m0s", "m", 1), "0s")
+}
+
+// stalledFor reports how long an active run has been silent past stallAfter.
+func stalledFor(run daemon.LiveRun, live bool, now time.Time) time.Duration {
+	switch run.Phase {
+	case "running", "gating", "preparing", "claiming":
+	default:
+		return 0
+	}
+	if !live || run.LastOutputAt.IsZero() {
+		return 0
+	}
+	if age := now.Sub(run.LastOutputAt); age >= stallAfter {
+		return age.Round(time.Minute)
+	}
+	return 0
 }
 
 func (i runItem) Title() string {
 	icon, _ := phasePresentation(i.run.Phase)
+	stalled := stalledFor(i.run, i.live, time.Now())
+	if stalled > 0 {
+		icon = "⚠"
+	}
 	phase := strings.SplitN(i.run.Phase, ":", 2)[0]
+	if stalled > 0 {
+		phase = "stalled " + shortAge(stalled)
+	}
 	if phase == "stopped" {
 		if i.run.Phase == "stopped: gate green" {
 			phase = "passed"
@@ -395,7 +429,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.snapshot.Runs, m.snapshot.History = runs, history
 		aliveChanged := m.alive != msg.alive
 		m.alive = msg.alive
-		if runsChanged || (m.showHistory && (historyChanged || aliveChanged)) {
+		if runsChanged || aliveChanged || (m.showHistory && historyChanged) {
 			m.setRuns(m.visibleRuns())
 			m.refreshDetail(!m.showHistory && !m.showAttention && m.detail.AtBottom())
 		}
@@ -781,7 +815,7 @@ func needsAttention(phase string) bool {
 func (m *Model) setRuns(runs []daemon.LiveRun) {
 	items := make([]list.Item, len(runs))
 	for i, run := range runs {
-		items[i] = runItem{run: run}
+		items[i] = runItem{run: run, live: m.alive}
 	}
 	m.replaceListItems(items)
 	if m.selectedID != "" {
@@ -893,9 +927,13 @@ func (m *Model) renderHeader() string {
 	if !m.snapshot.UpdatedAt.IsZero() {
 		updated = m.snapshot.UpdatedAt.Format("15:04:05")
 	}
-	active, waiting := 0, 0
+	active, waiting, stalled := 0, 0, 0
 	if m.alive {
+		now := time.Now()
 		for _, run := range m.snapshot.Runs {
+			if stalledFor(run, true, now) > 0 {
+				stalled++
+			}
 			switch run.Phase {
 			case "running", "claiming", "preparing", "gating":
 				active++
@@ -905,10 +943,16 @@ func (m *Model) renderHeader() string {
 		}
 	}
 	text := fmt.Sprintf("lambe  %s   %d active · %d waiting", stateStyle.Render("● "+state), active, waiting)
+	if stalled > 0 {
+		text += " · " + redStyle.Bold(true).Render(fmt.Sprintf("⚠ %d stalled", stalled))
+	}
 	if m.width < 44 {
 		text = "lambe  ·  " + stateStyle.Render(state)
 		if m.alive {
 			text = fmt.Sprintf("lambe %d active · %d waiting", active, waiting)
+			if stalled > 0 { // lead with the warning so truncation never hides it
+				text = redStyle.Bold(true).Render(fmt.Sprintf("⚠%d", stalled)) + " · " + strings.TrimPrefix(text, "lambe ")
+			}
 		}
 	}
 	if m.commandErr != nil {
@@ -922,7 +966,11 @@ func (m *Model) renderHeader() string {
 		text += " · Beads unavailable"
 	}
 	if m.path == "" {
-		text = "Demo" + strings.TrimPrefix(text, "lambe")
+		if strings.HasPrefix(text, "lambe") {
+			text = "Demo" + strings.TrimPrefix(text, "lambe")
+		} else {
+			text = "Demo " + text
+		}
 	} else if m.width >= splitWidth {
 		text += "  ·  Updated " + updated
 	}
@@ -1014,6 +1062,8 @@ func (m *Model) renderInspector() string {
 			switch {
 			case !run.WakeAt.IsZero():
 				timing = "retry in " + max(0, run.WakeAt.Sub(now)).Round(time.Second).String()
+			case stalledFor(run, m.alive, now) > 0:
+				timing = redStyle.Bold(true).Render("⚠ stalled " + shortAge(stalledFor(run, m.alive, now)))
 			case !run.LastOutputAt.IsZero() && run.Phase == "running":
 				timing = max(0, now.Sub(run.LastOutputAt)).Round(time.Second).String() + " ago"
 				if m.detail.Width >= 44 {
@@ -1267,10 +1317,7 @@ func truncate(s string, limit int) string {
 	if limit <= 0 {
 		return ""
 	}
-	if len(s) <= limit {
-		return s
-	}
-	return s[:limit-1] + "…"
+	return ansi.Truncate(s, limit, "…")
 }
 
 // readSnapshot returns a command that reads the live snapshot once.
