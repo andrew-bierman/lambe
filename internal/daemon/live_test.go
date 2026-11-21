@@ -118,3 +118,29 @@ func TestLiveHistoryKeepsAttemptsAcrossRestart(t *testing.T) {
 		}
 	}
 }
+
+// TestLiveSnapshotExposesLoopTickAndAgentActivity reproduces the "status lies
+// when wedged" gap: the projection only changed on run text, so a wedged loop
+// or a run whose agent emits only non-text events looked identical to a
+// healthy one. TickAt is the loop heartbeat; LastActivityAt is per-run agent
+// activity (any event, not just assistant text).
+func TestLiveSnapshotExposesLoopTickAndAgentActivity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	v := newLiveView(path, nil)
+	v.progress(symphony.Progress{IssueID: "a", Phase: "running", Attempt: 1})
+	v.event("a", harness.UnknownEvent{Type: "heartbeat"})
+	v.tick()
+	if err := v.save(); err != nil {
+		t.Fatal(err)
+	}
+	snap, _, err := ReadLive(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.TickAt.IsZero() {
+		t.Error("snapshot has no loop heartbeat (TickAt)")
+	}
+	if len(snap.Runs) != 1 || snap.Runs[0].LastActivityAt.IsZero() {
+		t.Errorf("run has no LastActivityAt after a non-text event: %+v", snap.Runs)
+	}
+}

@@ -5,7 +5,8 @@
     "identity": "darwin:boot:1:2",
     "machine": "operators-mac",
     "version": "v0.9.0",
-    "config_path": "/Users/operator/lambe/lambe.yaml"
+    "config_path": "/Users/operator/lambe/lambe.yaml",
+    "actor": "lambe@operators-mac"
   },
   "runs": [
     {
@@ -15,14 +16,35 @@
       "state": "running",
       "last_event_age": "30s",
       "last_event_at": "2026-11-19T11:59:30Z",
-      "phase": "gating"
+      "phase": "gating",
+      "workflow": "general",
+      "machine": "operators-mac",
+      "actor": "lambe@operators-mac",
+      "last_activity_at": "2026-11-19T11:59:30Z",
+      "stalled": false
     },
     {
       "issue": "T-2",
       "attempt": 1,
       "state": "deferred",
       "last_event_age": "n/a",
-      "phase": "deferred"
+      "phase": "deferred",
+      "machine": "operators-mac",
+      "actor": "lambe@operators-mac",
+      "stalled": false
+    },
+    {
+      "issue": "T-3",
+      "attempt": 1,
+      "state": "running",
+      "last_event_age": "12m",
+      "last_event_at": "2026-11-19T11:48:00Z",
+      "phase": "running",
+      "workflow": "review",
+      "machine": "operators-mac",
+      "actor": "lambe@operators-mac",
+      "last_activity_at": "2026-11-19T11:48:00Z",
+      "stalled": true
     }
   ],
   "deferred_until": "2026-11-19T12:10:00Z",
@@ -44,5 +66,7 @@
   ],
   "runs_as_of": "2026-11-19T12:00:00Z",
   "needs_human_as_of": "2026-11-19T12:00:00Z",
-  "gate_rejections_as_of": "2026-11-19T12:00:00Z"
+  "gate_rejections_as_of": "2026-11-19T12:00:00Z",
+  "tick_at": "2026-11-19T11:59:55Z",
+  "stall_after_seconds": 300
 }

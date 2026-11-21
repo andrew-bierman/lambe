@@ -25,6 +25,10 @@ type LiveRun struct {
 	Tail         string
 	TailBytes    int64
 	LastOutputAt time.Time
+	// LastActivityAt is the last agent event of any kind (tool, message,
+	// diagnostic, unknown); a stall shows as its age growing while the run
+	// is "running". Additive: zero when no event has been seen.
+	LastActivityAt time.Time `json:",omitempty"`
 }
 
 // LiveSnapshot is a derived view; checkpoints and the tracker remain authoritative.
@@ -32,8 +36,12 @@ type LiveSnapshot struct {
 	PID       int
 	Identity  string
 	UpdatedAt time.Time
-	Runs      []LiveRun
-	History   []LiveRun `json:",omitempty"`
+	// TickAt is the loop heartbeat, stamped at the start and end of every
+	// daemon cycle. A viewer treats a stale TickAt on a live PID as a wedged
+	// loop. Additive: zero from older daemons.
+	TickAt  time.Time `json:",omitempty"`
+	Runs    []LiveRun
+	History []LiveRun `json:",omitempty"`
 }
 
 // LivePath returns the private projection path for one configured daemon.
@@ -112,6 +120,7 @@ func (v *liveView) progress(p symphony.Progress) {
 }
 
 func (v *liveView) event(id string, event harness.Event) {
+	v.update(id, func(r *LiveRun) { r.LastActivityAt = time.Now() })
 	var text string
 	switch e := event.(type) {
 	case harness.MessageCompletedEvent:
@@ -140,6 +149,14 @@ func (v *liveView) event(id string, event harness.Event) {
 			}
 		}
 	})
+}
+
+// tick stamps the loop heartbeat so the projection proves the loop is turning.
+func (v *liveView) tick() {
+	v.mu.Lock()
+	v.snapshot.TickAt = time.Now()
+	v.snapshot.UpdatedAt = v.snapshot.TickAt
+	v.mu.Unlock()
 }
 
 func (v *liveView) update(id string, change func(*LiveRun)) {

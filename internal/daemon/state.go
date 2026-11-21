@@ -18,6 +18,7 @@ import (
 
 	"github.com/andrew-bierman/lambe/internal/config"
 	"github.com/andrew-bierman/lambe/internal/httpstate"
+	"github.com/andrew-bierman/lambe/internal/mcp"
 	"github.com/andrew-bierman/lambe/internal/proc"
 )
 
@@ -65,6 +66,9 @@ type StateSourceAdapter struct {
 	// gate-rejection derivation, and the history merge; empty disables
 	// those reads.
 	livePath string
+	// stallAfter reads the stall threshold per call so a config reload
+	// applies live; nil means the default.
+	stallAfter func() time.Duration
 }
 
 // Compile-time check that StateSourceAdapter satisfies the HTTP state seam.
@@ -89,6 +93,36 @@ func (a *StateSourceAdapter) Identify(machine, version, configPath string) {
 	if id, err := proc.ProcessIdentity(os.Getpid()); err == nil {
 		a.info.Identity = id
 	}
+}
+
+// SetActor stamps the daemon's tracker identity served with every response.
+func (a *StateSourceAdapter) SetActor(actor string) { a.info.Actor = actor }
+
+// SetStallAfter wires the stall threshold getter (supervisor.stall_after).
+func (a *StateSourceAdapter) SetStallAfter(f func() time.Duration) { a.stallAfter = f }
+
+// stallThreshold resolves the current stall threshold, never non-positive.
+func (a *StateSourceAdapter) stallThreshold() time.Duration {
+	if a.stallAfter != nil {
+		if d := a.stallAfter(); d > 0 {
+			return d
+		}
+	}
+	return config.DefaultStallAfter
+}
+
+// stalledRun is the one stall verdict: a running run (not deferred, not
+// finished) whose freshest sign of life -- agent activity or supervisor
+// progress -- is older than the threshold.
+func stalledRun(state, phase string, activity, event, now time.Time, after time.Duration) bool {
+	if state != stateName(mcp.StateRunning) || strings.HasPrefix(phase, "stopped:") {
+		return false
+	}
+	last := activity
+	if event.After(last) {
+		last = event
+	}
+	return !last.IsZero() && now.Sub(last) > after
 }
 
 // WatchLive points the adapter at the daemon's live projection file, the
@@ -150,6 +184,8 @@ func (a *StateSourceAdapter) Snapshot() httpstate.Snapshot {
 	var wake time.Time
 	live := a.readProjection()
 	byIssue := projectionIndex(live)
+	after := a.stallThreshold()
+	snap.TickAt, snap.StallAfter = live.TickAt, after
 	for _, run := range a.registry.List() {
 		entry := httpstate.Run{
 			Issue:     run.IssueID,
@@ -158,9 +194,13 @@ func (a *StateSourceAdapter) Snapshot() httpstate.Snapshot {
 			State:     stateName(run.State),
 			LastEvent: run.LastEventAt,
 		}
+		entry.Machine, entry.Actor = a.info.Machine, a.info.Actor
 		if projected, ok := byIssue[run.IssueID]; ok {
 			entry.Phase = projected.Phase
+			entry.Workflow = projected.Workflow
+			entry.LastActivity = projected.LastActivityAt
 		}
+		entry.Stalled = stalledRun(entry.State, entry.Phase, entry.LastActivity, run.LastEventAt, snap.RunsAsOf, after)
 		snap.Runs = append(snap.Runs, entry)
 		if run.WakeAt.IsZero() {
 			continue
@@ -303,7 +343,10 @@ func (a *StateSourceAdapter) Issue(id string) (httpstate.IssueState, bool) {
 			Workspace: run.Workspace,
 			WakeAt:    run.WakeAt,
 			Tail:      run.Tail,
+			Machine:   a.info.Machine,
+			Actor:     a.info.Actor,
 		}
+		st.StallAfter = a.stallThreshold()
 		// The projection carries the supervision vocabulary the registry
 		// does not; the file read is the projection's own flush cadence.
 		if projected, ok := projectionIndex(a.readProjection())[id]; ok {
@@ -323,7 +366,9 @@ func (a *StateSourceAdapter) Issue(id string) (httpstate.IssueState, bool) {
 			if st.WakeAt.IsZero() {
 				st.WakeAt = projected.WakeAt
 			}
+			st.LastActivity = projected.LastActivityAt
 		}
+		st.Stalled = stalledRun(st.State, st.Phase, st.LastActivity, run.LastEventAt, time.Now(), st.StallAfter)
 		return st, true
 	}
 	if a.reports != nil {
