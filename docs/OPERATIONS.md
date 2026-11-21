@@ -170,6 +170,15 @@ is the section separator):
 | `supervisor.probe_window` | driver default (30s) | Pi harness only: how long the watchdog waits for any response after its steer probe before killing. |
 | `gate.check_timeout` | `silence_timeout / 2`, min 1m | Bound on each external gate check (tests, CI polls), independent of the silence timeout. Raise it for slow suites. Per-gate overrides do not exist. |
 
+## Stalls and quiet tool calls
+
+`supervisor.silence_timeout` (default 10m) is how long an agent may emit
+nothing. A silent agent is probed (Pi) or killed (ACP) and the attempt is
+retried after the failure backoff (10s, doubling). A tool call that is still
+running does not count as silence, so a long build or test run is never
+mistaken for a stall; `supervisor.turn_timeout` (default 1h) still bounds the
+whole turn, tool calls included.
+
 ## Needs-human
 
 A work item lands in needs-human when:

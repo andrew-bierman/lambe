@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Opt-in `supervisor.auto_reclaim` / `reclaim_grace` (default off) for multi-host deployments sharing one Dolt server, with `docs/MULTI-MACHINE.md` and isolated multi-host tests.
 - Configurable machine/actor identity, `stall_after`, `probe_window`, and `gate.check_timeout`.
 - `lambe doctor` preflight checks and `lambe service install|status|uninstall` for launchd/systemd units.
+- Optional per-workflow `harness:` (pi, codex, or acp) for named workflows.
+
+### Fixed
+
+- A tool call that is quiet for longer than `silence_timeout` is no longer killed as a stall (Pi and ACP); `turn_timeout` still bounds it.
+- ACP no longer closes its event stream under an in-flight emit (data race, possible send-on-closed-channel panic).
+- Sessions recovered after a daemon restart no longer fail every gate with "no gate formulas configured" when no gate snapshot was taken at claim time.
 
 ### Changed
 

@@ -330,6 +330,49 @@ func TestSilentChildSteerProbeThenLadder(t *testing.T) {
 	waitGroupGone(t, pgid, 5*time.Second)
 }
 
+// TestQuietToolCallIsNotAStall pins that a healthy tool execution which emits
+// nothing for longer than the silence window plus the probe window is not
+// killed: the run settles normally.
+func TestQuietToolCallIsNotAStall(t *testing.T) {
+	opts, logPath := testEnv(t, scriptQuietTool, func(o *pi.Options) {
+		o.SilenceAfter = 150 * time.Millisecond
+		o.ProbeWindow = 200 * time.Millisecond
+		o.MaxRun = 10 * time.Second
+		o.TerminateGrace = 300 * time.Millisecond
+	})
+	d := pi.New(opts)
+	defer func() { _ = d.Close(t.Context()) }()
+
+	start := time.Now()
+	out, err := d.Run(t.Context(), "run the long build")
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if out.Kind != harness.OutcomeSettled {
+		t.Fatalf("outcome = %v after %s, want settled (quiet tool call killed as a stall)", out.Kind, time.Since(start))
+	}
+	if strings.Contains(readLog(t, logPath), `"type":"steer"`) {
+		t.Fatal("a quiet tool call must not be probed")
+	}
+}
+
+// TestQuietToolCallStillBoundedByMaxRun pins that the tool exemption does not
+// make a wedged tool immortal: the per-turn deadline still kills it.
+func TestQuietToolCallStillBoundedByMaxRun(t *testing.T) {
+	opts, _ := testEnv(t, scriptQuietTool, func(o *pi.Options) {
+		o.SilenceAfter = 100 * time.Millisecond
+		o.MaxRun = 500 * time.Millisecond
+		o.TerminateGrace = 300 * time.Millisecond
+	})
+	d := pi.New(opts)
+	defer func() { _ = d.Close(t.Context()) }()
+
+	out, _ := d.Run(t.Context(), "wedge")
+	if out.Kind != harness.OutcomeWatchdogKilled {
+		t.Fatalf("outcome = %v, want watchdog_killed at MaxRun", out.Kind)
+	}
+}
+
 // TestMaxRunSurvivesSteerProbe pins that the per-turn deadline still bounds a
 // run after a silence expiry sent the steer probe: an agent that answers the
 // probe with endless chatter and never settles must be killed at MaxRun, not

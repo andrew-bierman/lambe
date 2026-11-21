@@ -87,7 +87,24 @@ lambe enqueue -workflow 'Repo tasks' ISSUE_ID
 lambe enqueue -workflow 'Repo tasks' -apply ISSUE_ID
 ```
 
-Named workflows share the daemon's configured harness and workspace root.
+Named workflows share the daemon's workspace root and use its top-level
+`harness` unless a workflow sets its own. This sends repo tasks to Pi and
+fleet babysitting to Codex from one daemon:
+
+```yaml
+harness: pi            # default for workflows that do not name one
+workflows:
+  - name: Repo tasks
+    label: lambe:repo
+    path: workflows/REPO.md
+  - name: Fleet
+    label: lambe:babysit
+    path: workflows/FLEET.md
+    harness: codex     # pi, codex, or acp (uses the top-level acp: block)
+```
+
+Startup checks every harness a workflow names before claiming work. A saved
+conversation stays with the harness that created it.
 Their instructions, hooks, and completion gates are saved in the run
 checkpoint at claim time. Edits apply to new runs. When `gate_dir` is omitted,
 the workflow uses the primary tracker's `.beads/formulas` directory.

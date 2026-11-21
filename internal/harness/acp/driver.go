@@ -122,10 +122,13 @@ type Driver struct {
 
 	runMu sync.Mutex // serializes Run
 
-	wdMu     sync.Mutex // guards watchdog
+	wdMu     sync.Mutex // guards watchdog, runStart, tools
 	watchdog *proc.Watchdog
+	runStart time.Time           // start of the armed run
+	tools    map[string]struct{} // tool calls in flight this run
 
 	events    chan harness.Event
+	emitMu    sync.RWMutex // emit holds RLock so Close never closes events under a sender
 	closeOnce sync.Once
 	closed    chan struct{}
 }
@@ -428,7 +431,11 @@ func (d *Driver) Close(ctx context.Context) error {
 	d.closeOnce.Do(func() {
 		close(d.closed)
 		err = d.shutdown(ctx)
+		// An inbound notification may still be mid-emit after shutdown;
+		// closing under a sender would panic or race.
+		d.emitMu.Lock()
 		close(d.events)
+		d.emitMu.Unlock()
 	})
 	return err
 }
@@ -483,6 +490,7 @@ func (d *Driver) observeToolCall(id acpsdk.ToolCallId, title string, status acps
 	if name == "" {
 		name = string(id)
 	}
+	d.toolInFlight(string(id), status == acpsdk.ToolCallStatusPending || status == acpsdk.ToolCallStatusInProgress)
 	switch status {
 	case acpsdk.ToolCallStatusPending, acpsdk.ToolCallStatusInProgress:
 		d.emit(harness.ToolExecutionStartedEvent{ToolName: name})
@@ -665,6 +673,13 @@ func (d *Driver) flushMessage() {
 
 // emit delivers one typed event, aborting when the driver closes.
 func (d *Driver) emit(ev harness.Event) {
+	d.emitMu.RLock()
+	defer d.emitMu.RUnlock()
+	select {
+	case <-d.closed: // events may already be closed
+		return
+	default:
+	}
 	harness.Emit(d.events, ev, d.closed)
 }
 
@@ -733,7 +748,24 @@ func (d *Driver) armWatchdog() {
 	}
 	d.wdMu.Lock()
 	defer d.wdMu.Unlock()
+	d.runStart = time.Now()
+	d.tools = map[string]struct{}{}
 	d.watchdog = proc.NewWatchdog(maxRun, silence, d.onExpiry)
+}
+
+// toolInFlight records a tool call starting or finishing. A call that is
+// still running keeps a quiet agent alive: see onExpiry.
+func (d *Driver) toolInFlight(id string, running bool) {
+	d.wdMu.Lock()
+	defer d.wdMu.Unlock()
+	if d.tools == nil {
+		return
+	}
+	if running {
+		d.tools[id] = struct{}{}
+	} else {
+		delete(d.tools, id)
+	}
 }
 
 // stopWatchdog disarms the watchdog, if armed.
@@ -771,6 +803,23 @@ func (d *Driver) onExpiry(reason proc.ExpiryReason) {
 	d.mu.Unlock()
 	if client == nil {
 		return
+	}
+	// Silence while a tool call is in flight is not a stall (a long build or
+	// test run is quiet by nature): re-arm, and let only MaxRun bound it.
+	if reason == proc.ReasonSilence && d.opts.SilenceAfter > 0 {
+		d.wdMu.Lock()
+		busy := len(d.tools) > 0
+		if busy {
+			remaining := time.Duration(0)
+			if d.opts.MaxRun > 0 {
+				remaining = max(time.Millisecond, d.opts.MaxRun-time.Since(d.runStart))
+			}
+			d.watchdog = proc.NewWatchdog(remaining, d.opts.SilenceAfter, d.onExpiry)
+		}
+		d.wdMu.Unlock()
+		if busy {
+			return
+		}
 	}
 	d.kill(client, reason.String())
 }

@@ -571,3 +571,37 @@ func TestAutoReclaimDefaultsOffAndValidatesGrace(t *testing.T) {
 		t.Errorf("short grace with auto_reclaim off: %v", err)
 	}
 }
+
+func TestWorkflowHarnessOverride(t *testing.T) {
+	path := writeTemp(t, `harness: pi
+acp:
+  command: ["/bin/true"]
+workflows:
+  - {name: Repo, label: "lambe:repo", path: REPO.md}
+  - {name: Fleet, label: "Lambe:Fleet", path: FLEET.md, harness: acp}
+`)
+	cfg, err := Load(Options{File: path, Env: []string{}})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, tc := range []struct {
+		labels []string
+		want   string
+	}{
+		{[]string{"lambe:repo"}, "pi"},
+		{[]string{"other", "lambe:fleet"}, "acp"},
+		{nil, "pi"},
+	} {
+		if got := cfg.HarnessFor(tc.labels); got != tc.want {
+			t.Errorf("HarnessFor(%v) = %q, want %q", tc.labels, got, tc.want)
+		}
+	}
+	if got := cfg.Harnesses(); len(got) != 2 || got[0] != "pi" || got[1] != "acp" {
+		t.Errorf("Harnesses() = %v, want [pi acp]", got)
+	}
+
+	bad := writeTemp(t, "workflows:\n  - {name: A, label: a, path: A.md, harness: gpt}\n")
+	if _, err := Load(Options{File: bad, Env: []string{}}); err == nil {
+		t.Fatal("unknown workflow harness must fail validation")
+	}
+}

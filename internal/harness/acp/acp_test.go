@@ -379,6 +379,36 @@ func TestSilentAgentWatchdogKills(t *testing.T) {
 	t.Fatal("process group survived the kill ladder")
 }
 
+// TestQuietToolCallIsNotAStall pins that a tool call that stays in progress
+// without output for longer than the silence window is not killed.
+func TestQuietToolCallIsNotAStall(t *testing.T) {
+	drv, _ := newDriver(t, "quiet-tool", func(o *acp.Options) {
+		o.SilenceAfter = 300 * time.Millisecond
+		o.MaxRun = 10 * time.Second
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := drv.Run(ctx, "build")
+	if err != nil || out.Kind != harness.OutcomeSettled {
+		t.Fatalf("outcome = %+v err=%v, want settled (quiet tool call killed as a stall)", out, err)
+	}
+}
+
+// TestQuietToolCallStillBoundedByMaxRun pins that the exemption is bounded by
+// the per-turn deadline.
+func TestQuietToolCallStillBoundedByMaxRun(t *testing.T) {
+	drv, _ := newDriver(t, "quiet-tool", func(o *acp.Options) {
+		o.SilenceAfter = 100 * time.Millisecond
+		o.MaxRun = 500 * time.Millisecond
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, _ := drv.Run(ctx, "wedge")
+	if out.Kind != harness.OutcomeWatchdogKilled {
+		t.Fatalf("outcome kind = %s, want watchdog_killed at MaxRun", out.Kind)
+	}
+}
+
 // TestRunCancelStillKillsGroup covers the cancelled-run path: Run returns
 // on ctx cancellation, and the kill ladder — run on a background context —
 // still takes down the agent process group after the run context is dead.

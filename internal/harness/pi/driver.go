@@ -99,8 +99,9 @@ type Driver struct {
 
 	wdMu       sync.Mutex // guards watchdog
 	watchdog   *proc.Watchdog
-	escalation atomic.Int32 // 0 armed, 1 probe sent, 2 killing
-	runStart   time.Time    // guarded by wdMu; start of the armed run
+	escalation atomic.Int32        // 0 armed, 1 probe sent, 2 killing
+	runStart   time.Time           // guarded by wdMu; start of the armed run
+	tools      map[string]struct{} // guarded by wdMu; tool executions in flight this run
 	killed     atomic.Bool
 
 	events    chan harness.Event
@@ -468,8 +469,10 @@ func (d *Driver) handleRecord(client *Client, rec Record) bool {
 			d.classifier.Progress()
 		}
 	case EventToolExecStart:
+		d.toolInFlight(rec.ToolCallID, true)
 		d.emit(harness.ToolExecutionStartedEvent{ToolName: rec.ToolName})
 	case EventToolExecEnd:
+		d.toolInFlight(rec.ToolCallID, false)
 		d.emit(harness.ToolExecutionEndedEvent{ToolName: rec.ToolName, IsError: rec.IsError})
 		if rec.IsError {
 			d.observeError(client, "tool error: "+rec.ToolName)
@@ -644,6 +647,7 @@ func (d *Driver) armWatchdog() {
 	defer d.wdMu.Unlock()
 	d.escalation.Store(0)
 	d.runStart = time.Now()
+	d.tools = map[string]struct{}{}
 	d.watchdog = proc.NewWatchdog(maxRun, silence, d.onExpiry)
 }
 
@@ -676,10 +680,27 @@ func (d *Driver) recordSeen() {
 	}
 }
 
+// toolInFlight records a tool execution starting or ending. A tool that is
+// still running keeps a quiet agent alive: see onExpiry.
+func (d *Driver) toolInFlight(id string, running bool) {
+	d.wdMu.Lock()
+	defer d.wdMu.Unlock()
+	if d.tools == nil {
+		return
+	}
+	if running {
+		d.tools[id] = struct{}{}
+	} else {
+		delete(d.tools, id)
+	}
+}
+
 // onExpiry runs the escalation ladder. The first silence expiry sends a
 // steer probe and re-arms for one probe window; a second expiry, or a
 // deadline expiry, aborts and runs the kill ladder, delivering a
-// retryable watchdog-kill outcome.
+// retryable watchdog-kill outcome. Silence while a tool execution is in
+// flight is not a stall: a long build or test run is quiet by nature, so the
+// silence timer re-arms instead and only MaxRun bounds the tool.
 func (d *Driver) onExpiry(reason proc.ExpiryReason) {
 	select {
 	case <-d.closed:
@@ -692,6 +713,18 @@ func (d *Driver) onExpiry(reason proc.ExpiryReason) {
 	d.mu.Unlock()
 	if client == nil {
 		return
+	}
+	if reason == proc.ReasonSilence && d.opts.SilenceAfter > 0 {
+		d.wdMu.Lock()
+		busy := len(d.tools) > 0
+		if busy {
+			d.escalation.Store(0)
+			d.watchdog = proc.NewWatchdog(d.remainingRun(), d.opts.SilenceAfter, d.onExpiry)
+		}
+		d.wdMu.Unlock()
+		if busy {
+			return
+		}
 	}
 	if reason == proc.ReasonDeadline || d.escalation.Add(1) > 1 {
 		d.kill(client, reason.String())

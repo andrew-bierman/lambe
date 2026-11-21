@@ -934,6 +934,42 @@ func TestLoopGateErrorReusesAttempt(t *testing.T) {
 	}
 }
 
+// TestLoopClosesOnlyWhenTheGateIsGreen pins completion verification for every
+// gate type: an agent that settles and declares itself done never closes the
+// issue unless its gate (shell, gh:run, gh:pr) judges the work green.
+func TestLoopClosesOnlyWhenTheGateIsGreen(t *testing.T) {
+	cases := []struct {
+		name   string
+		toml   string
+		gh     gate.GHResult
+		closed bool
+	}{
+		{"shell red", "type = \"shell\"\ncommand = \"exit 1\"", 0, false},
+		{"shell green", "type = \"shell\"\ncommand = \"exit 0\"", 0, true},
+		{"gh:run failed", "type = \"gh:run\"\nref = \"123\"", gate.GHFail, false},
+		{"gh:run pending", "type = \"gh:run\"\nref = \"123\"", gate.GHPending, false},
+		{"gh:run green", "type = \"gh:run\"\nref = \"123\"", gate.GHPass, true},
+		{"gh:pr not merged", "type = \"gh:pr\"\npr = \"7\"", gate.GHFail, false},
+		{"gh:pr pending", "type = \"gh:pr\"\npr = \"7\"", gate.GHPending, false},
+		{"gh:pr merged", "type = \"gh:pr\"\npr = \"7\"", gate.GHPass, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLoopFixture(t, tc.toml)
+			f.gates.Gh = &fakeGH{result: tc.gh}
+			if err := f.loop.Tick(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := len(f.hub.closes) == 1; got != tc.closed {
+				t.Fatalf("closed = %v, want %v (closes: %+v)", got, tc.closed, f.hub.closes)
+			}
+			if !tc.closed && f.tr.status("bd-loop-1") == tracker.StatusClosed {
+				t.Fatal("issue closed without a green gate")
+			}
+		})
+	}
+}
+
 func TestLoopGreenClosesReleasesAndCleansWorkspace(t *testing.T) {
 	f := newLoopFixture(t, "type = \"shell\"\ncommand = \"exit 0\"")
 	ctx := context.Background()
@@ -1552,5 +1588,30 @@ func TestCheckpointGateSnapshotSurvivesRunnerRestart(t *testing.T) {
 	outcome, err := r.Evaluate(t.Context(), req)
 	if err != nil || outcome.Verdict != symphony.GateGreen {
 		t.Fatalf("checkpoint-pinned gate: verdict=%v err=%v", outcome.Verdict, err)
+	}
+}
+
+// TestRestoredCheckpointWithoutSnapshotUsesLiveFormulas pins the restart path
+// for a single-workflow deployment: no gate snapshot was taken at claim time,
+// the checkpoint round-trips the empty GateSpec as JSON null, and the
+// recovered session must still be judged by the formulas directory rather
+// than fail with "no gate formulas configured".
+func TestRestoredCheckpointWithoutSnapshotUsesLiveFormulas(t *testing.T) {
+	dir := t.TempDir()
+	writeFormula(t, dir, "tests", "type = \"shell\"\ncommand = \"exit 0\"")
+	raw, err := json.Marshal(symphony.Workflow{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored symphony.Workflow
+	if err := json.Unmarshal(raw, &restored); err != nil {
+		t.Fatal(err)
+	}
+	r := newTestRunner(t, dir, newFakeHub(), newMemKV(), gate.OsExec, nil)
+	req := reqWithWorkspace(t, 1, symphony.Revision("wf-1"))
+	req.GateSpec = restored.GateSpec
+	outcome, err := r.Evaluate(t.Context(), req)
+	if err != nil || outcome.Verdict != symphony.GateGreen {
+		t.Fatalf("restored checkpoint (GateSpec=%q): verdict=%v err=%v", restored.GateSpec, outcome.Verdict, err)
 	}
 }
