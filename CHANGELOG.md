@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lambe doctor` says when a fixed `stateapi.addr` port is already in use instead of "daemon not running?".
 - `lambe init` no longer fails with `read answer: EOF` when stdin is not a terminal, and it says when it adopts a Beads tracker found above the current directory.
 
+### Tests
+
+- The SIGKILL restart test asserts on every platform that an orphaned agent survives its daemon and is reaped before the re-prompt. The Linux-only failure was the fake agent dying of SIGPIPE, not a Lambe difference.
+
 ### Documentation
 
 - `docs/release-template/`: reusable release setup (goreleaser, workflow, scripts) for other Go tools.

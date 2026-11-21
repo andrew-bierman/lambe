@@ -258,7 +258,10 @@ same attempt; pending gate checks reuse the settled output. Workspace files
 remain available. Keep the state directory across upgrades.
 
 Before replacing a surviving agent, recovery verifies the tracker claim and
-the process's kernel identity on macOS or Linux. A foreign claim or unverifiable
+the process's kernel identity on macOS or Linux. Lambe sets no parent-death
+signal, so an agent that outlives a SIGKILLed daemon keeps running until the
+next daemon life reaps it; an agent that exits when its stdin closes leaves
+nothing to reap. A foreign claim or unverifiable
 process is left alone. Recovery errors are logged and retain the workspace;
 transient tracker failures are retried on subsequent ticks. Claims from older
 versions without checkpoints require inspection before releasing them for a

@@ -298,9 +298,13 @@ func TestE2EDaemonRestartPreservesHistoryWithoutDuplicateDispatch(t *testing.T) 
 			if sig == syscall.SIGKILL {
 				_ = first.Process.Kill()
 				_ = first.Wait()
-				// Survival is platform-dependent (it held on macOS, not on CI Linux),
-				// so only log it; the old agent must be gone before the re-prompt either way.
-				t.Logf("agent %d alive after daemon SIGKILL: %v", pids[0], pidAlive(pids[0]))
+				// Lambe sets no parent-death signal: an orphaned agent outlives its
+				// daemon and the next life must reap it. The fake agent ignores
+				// SIGPIPE so this holds on macOS and Linux alike.
+				time.Sleep(300 * time.Millisecond) // an agent that dies of the broken pipe does so within milliseconds
+				if !pidAlive(pids[0]) {
+					t.Fatalf("agent %d died with the daemon; orphan reaping is untested", pids[0])
+				}
 			} else {
 				stopDaemon(t, first)
 			}
