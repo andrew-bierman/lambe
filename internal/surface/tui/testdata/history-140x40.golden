@@ -1,0 +1,40 @@
+ lambe   ● running  demo  ⚠ 1 stalled  2 active · 1 waiting                                                                updated 12:00:00
+ 1 Queue 7 │ 2 Attention 3 │ 3 History 3
+────────────────────────────━━━━━━━━━━━━━───────────────────────────────────────────────────────────────────────────────────────────────────
+   ID      TITLE                                                   PHASE        AGE│ demo-45  ✘ escalated
+▌✘ demo-45 Validate the migration                                  escalated     2m│ Validate the migration
+ ✔ demo-46 Check upgrade instructions                              passed        5m│ attempt 3 · turn 0
+ ↻ demo-44 Retry the install smoke test                            retry           │ ── Agent output ──────────────────────────────────────
+                                                                                   │ Gate failed: migration snapshot differs from expected
+                                                                                   │ output.
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+ enter open  : cmd  ? help  q quit  1-3 views  / filter  j/k move                                                                       1/3

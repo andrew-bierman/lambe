@@ -1,0 +1,24 @@
+ lambe   ●  demo  ⚠1  2▶ 1↻
+ 1 Queue 7 │ 2 Attn 3 │ 3 Hist 3
+────────────━━━━━━━━━━──────────────────
+   ID      TITLE                     AGE
+▌↻ demo-44 Retry the install smo… in 37s
+ ✘ demo-45 Validate the migration     2m
+ ! demo-48 Publish migration not…
+
+
+
+
+
+
+
+
+ demo-44  ↻ retry  retry in 37s
+ Retry the install smoke test
+
+ Last gate rejection
+ The registry timed out during the
+ install smoke test.
+
+ Issue:      demo-44
+ enter open  : cmd  ?  q quit       1/3

@@ -245,21 +245,21 @@ func TestViewContainsExpectedContent(t *testing.T) {
 func TestNarrowViewSwitchesPanesAndShowsFilter(t *testing.T) {
 	m := withSnapshot(t, newSized(t))
 	m.Update(tea.WindowSizeMsg{Width: 36, Height: 14})
-	if view := m.View(); !strings.Contains(view, "enter details") || strings.Contains(view, "Agent output") {
+	if view := m.View(); !strings.Contains(view, "enter open") || strings.Contains(view, "Agent output") {
 		t.Fatalf("expected run picker and details shortcut:\n%s", view)
 	}
 
 	m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	if view := m.View(); !strings.Contains(view, "second issue") ||
-		!strings.Contains(view, "Agent output") || !strings.Contains(view, "esc runs") ||
+		!strings.Contains(view, "Agent output") || !strings.Contains(view, "esc back") ||
 		strings.Contains(view, "first issue") {
 		t.Fatalf("expected details for selected run:\n%s", view)
 	}
 
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	if view := m.View(); !strings.Contains(view, "Filter: a") || strings.Contains(view, "Agent output") {
+	if view := m.View(); !strings.Contains(view, "/ a") || strings.Contains(view, "Agent output") {
 		t.Fatalf("expected visible filter input:\n%s", view)
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -275,12 +275,12 @@ func TestNarrowEnterAndEscapeSwitchPanes(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 36, Height: 14})
 	m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if view := m.View(); !strings.Contains(view, "esc runs") ||
+	if view := m.View(); !strings.Contains(view, "esc back") ||
 		!strings.Contains(view, "second issue") || !strings.Contains(view, "Agent output") {
 		t.Fatalf("expected selected run details after enter:\n%s", view)
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if view := m.View(); !strings.Contains(view, "enter details") || strings.Contains(view, "Agent output") {
+	if view := m.View(); !strings.Contains(view, "enter open") || strings.Contains(view, "Agent output") {
 		t.Fatalf("expected run picker after escape:\n%s", view)
 	}
 }
@@ -288,12 +288,16 @@ func TestNarrowEnterAndEscapeSwitchPanes(t *testing.T) {
 func TestNarrowDetailKeysLeaveHiddenListSelectionAlone(t *testing.T) {
 	m := withSnapshot(t, newSized(t))
 	m.Update(tea.WindowSizeMsg{Width: 36, Height: 9})
+	m.Update(snapshotMsg{snapshot: manyRunsSnapshot(12), alive: true})
+	m.list.Select(0)
+	m.syncSelection()
+	first := m.selectedID
 	if m.list.Paginator.TotalPages < 2 {
 		t.Fatal("test needs multiple pages of runs")
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m.Update(tea.KeyMsg{Type: tea.KeyRight})
-	if m.focus != focusDetail || m.selectedID != "ac-1" {
+	if m.focus != focusDetail || m.selectedID != first {
 		t.Fatalf("detail navigation moved focus to %v and selection to %q", m.focus, m.selectedID)
 	}
 }
@@ -304,7 +308,7 @@ func TestResizeRevealsFilterWhileDetailHasFocus(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	m.Update(tea.WindowSizeMsg{Width: 36, Height: 14})
 
-	if view := m.View(); !strings.Contains(view, "Filter:") || strings.Contains(view, "Agent output") {
+	if view := m.View(); !strings.Contains(view, "/ ") || strings.Contains(view, "Agent output") {
 		t.Fatalf("expected filter to stay visible after resizing:\n%s", view)
 	}
 }
@@ -476,14 +480,14 @@ func TestEmptySnapshotShowsPlaceholder(t *testing.T) {
 
 func TestDashboardShowsActivityAndResumeShortcut(t *testing.T) {
 	m := withSnapshot(t, newSized(t))
-	for _, want := range []string{"1 active", "1 waiting", "enter details"} {
+	for _, want := range []string{"1 active", "1 waiting", "enter open"} {
 		if view := m.View(); !strings.Contains(view, want) {
 			t.Fatalf("dashboard missing %q:\n%s", want, view)
 		}
 	}
 
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	for _, want := range []string{"Following output", "G latest", "esc runs"} {
+	for _, want := range []string{"following", "G latest", "esc back"} {
 		if view := m.View(); !strings.Contains(view, want) {
 			t.Fatalf("detail missing %q:\n%s", want, view)
 		}
@@ -506,7 +510,7 @@ func TestInspectorKeepsRunVisibleDuringScrollback(t *testing.T) {
 
 	view := m.View()
 	lines := strings.Split(view, "\n")
-	if len(lines) != 12 || !strings.Contains(lines[1], "╭") || !strings.Contains(lines[2], "ac-1") || !strings.Contains(lines[3], "agent output") {
+	if len(lines) != 12 || !strings.Contains(lines[2], "ac-1") || !strings.Contains(lines[3], "first issue") || !strings.Contains(lines[4], "agent output") {
 		t.Fatalf("expected pinned run identity above transcript:\n%s", view)
 	}
 }
@@ -597,14 +601,14 @@ func TestPhoneWidthKeepsCoreControlsVisible(t *testing.T) {
 		m.Update(tea.WindowSizeMsg{Width: width, Height: 12})
 		m.Update(snapshotMsg{snapshot: demoSnapshot(time.Now()), alive: true})
 		view := m.View()
-		for _, want := range []string{"2 active · 1 waiting", "demo-43", ": cmd", "h hist", "?"} {
+		for _, want := range []string{"2▶ 1↻", "demo-43", ": cmd", "?"} {
 			if !strings.Contains(view, want) {
 				t.Fatalf("%d columns missing %q:\n%s", width, want, view)
 			}
 		}
 		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 		view = m.View()
-		if !strings.Contains(view, "esc runs G end : cmd ?") || !strings.Contains(view, "demo-42") {
+		if !strings.Contains(view, "esc back") || !strings.Contains(view, "demo-42") {
 			t.Fatalf("%d columns hid inspector controls or run identity:\n%s", width, view)
 		}
 	}
@@ -713,7 +717,7 @@ func TestStackedInspectorResizesAndRoutesWheel(t *testing.T) {
 		t.Fatalf("stacked view measures %dx%d", w, h)
 	}
 	selected := m.list.Index()
-	m.Update(tea.MouseMsg{Y: 2 + m.list.Height() + 3*m.panelInset + 1, Button: tea.MouseButtonWheelDown})
+	m.Update(tea.MouseMsg{Y: 1 + m.tabsH + 1 + m.list.Height() + 1 + 1, Button: tea.MouseButtonWheelDown})
 	if m.list.Index() != selected {
 		t.Fatal("scrolling the lower pane moved the list selection")
 	}

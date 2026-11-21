@@ -13,13 +13,17 @@ import (
 
 // RunDemo opens the dashboard with sample runs held entirely in memory.
 func RunDemo(ctx context.Context) error {
+	return run(ctx, demoModel(time.Now()))
+}
+
+func demoModel(now time.Time) *Model {
 	model := New("")
-	model.Update(snapshotMsg{snapshot: demoSnapshot(time.Now()), alive: true})
+	model.Update(snapshotMsg{snapshot: demoSnapshot(now), alive: true})
 	model.Update(readinessMsg{rows: []tracker.ReadinessRow{
 		{ID: "demo-47", Title: "Document the recovery workflow", Reason: "Dependencies resolved"},
 		{ID: "demo-48", Title: "Publish migration notes", Reason: "Waiting for demo-45 · Validate the migration", Blocked: true},
 	}})
-	return run(ctx, model)
+	return model
 }
 
 func demoSnapshot(now time.Time) daemon.LiveSnapshot {
