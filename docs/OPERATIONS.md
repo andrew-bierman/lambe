@@ -25,7 +25,7 @@ Try the full loop before pointing lambe at a tracker you care about. Install
 [Beads](https://github.com/gastownhall/beads) (`bd`) and authenticate
 [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) with
 your model provider. Lambe starts Pi when eligible work appears. For Codex or
-another ACP agent, see [Agent harnesses](../README.md#agent-harnesses).
+another ACP agent, see [Agent harnesses](REFERENCE.md#agent-harnesses).
 
 Run this in a fresh terminal. It creates a local tracker with one task, a
 separate state directory, and a workspace hook that supplies the task's input.

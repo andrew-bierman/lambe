@@ -10,3 +10,8 @@
 apps/dashboard/DerivedData/
 apps/dashboard/.build/
 apps/dashboard/*.xcodeproj/xcuserdata/
+
+# Editor and OS noise
+.DS_Store
+.worktrees/
+coverage.out
