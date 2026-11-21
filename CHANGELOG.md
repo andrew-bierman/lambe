@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `lambe version --json` and a `state API` line in `lambe version`; development builds report `vX.Y.Z-dev+<shortsha>`.
+- Opt-in `supervisor.auto_reclaim` / `reclaim_grace` (default off) for multi-host deployments sharing one Dolt server, with `docs/MULTI-MACHINE.md` and isolated multi-host tests.
 - Configurable machine/actor identity, `stall_after`, `probe_window`, and `gate.check_timeout`.
 
 ### Changed

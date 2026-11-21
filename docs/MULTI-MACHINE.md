@@ -7,8 +7,9 @@ an isolated throwaway Dolt server, never a production tracker.
 ## Design
 
 - One Lambe daemon per host, each with a distinct actor. `lambe run` writes as
-  `lambe@<machine>`, where machine is the short hostname or `LAMBE_MACHINE`;
-  set `LAMBE_MACHINE` if two hosts could share a hostname.
+  `lambe@<machine>`, where machine is the short hostname unless the `machine`
+  (`LAMBE_MACHINE`) or `actor` (`LAMBE_ACTOR`) config key overrides it; set one
+  if two hosts could share a hostname.
 - One live `dolt sql-server` owns the database. Every host's `.beads/` points
   at it (`bd init --server --external --server-host H --server-port P`). Claims
   are atomic server-side, so only one host wins a contested claim.
