@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Expand `docs/OPERATIONS.md` with the harness, workflow, dashboard, tuning, and restart-semantics reference.
 - Redesign the Mac dashboard as a tabbed table with a preview pane.
 - Releases now use a single `vX.Y.Z` tag for the CLI and the Mac app; see `docs/RELEASING.md`.
 - `scripts/install.sh` installs the latest release by default (checksum still verified) and prints next steps.
