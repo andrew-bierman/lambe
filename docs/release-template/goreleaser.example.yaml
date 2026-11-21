@@ -1,0 +1,96 @@
+# Copy to .goreleaser.yaml and replace every double-underscore placeholder (see README.md).
+version: 2
+
+project_name: __TOOL__
+
+builds:
+  - id: __TOOL__
+    main: __MAIN_PKG__
+    binary: __TOOL__
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: __TOOL__
+    ids: [__TOOL__]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true
+
+# Keyless (OIDC) signature over the checksums; verify with
+# `cosign verify-blob` as documented in docs/RELEASING.md.
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    output: true
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--yes"
+      - "--bundle=${signature}"
+      - "${artifact}"
+
+sboms:
+  - artifacts: archive
+
+nfpms:
+  - id: __TOOL__
+    ids: [__TOOL__]
+    package_name: __TOOL__
+    file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    homepage: https://github.com/__OWNER__/__TOOL__
+    maintainer: __MAINTAINER_NAME__ <__MAINTAINER_EMAIL__>
+    description: __DESCRIPTION__.
+    license: __LICENSE__
+    formats: [deb, rpm, apk]
+    bindir: /usr/bin
+    contents:
+      # DAEMON ONLY: delete this entry for tools without a service unit.
+      # An example only: the package never installs or enables a service.
+      - src: examples/services/__TOOL__.service
+        dst: /usr/share/doc/__TOOL__/examples/__TOOL__.service
+      - src: LICENSE
+        dst: /usr/share/doc/__TOOL__/LICENSE
+
+# Needs the HOMEBREW_TAP_DEPLOY_KEY secret (write deploy key on the tap).
+brews:
+  - name: __TOOL__
+    directory: Formula
+    ids: [__TOOL__]
+    homepage: https://github.com/__OWNER__/__TOOL__
+    description: __DESCRIPTION__
+    license: __LICENSE__
+    repository:
+      owner: __OWNER__
+      name: homebrew-tap
+      branch: main
+      git:
+        url: git@github.com:__OWNER__/homebrew-tap.git
+        private_key: "{{ .Env.HOMEBREW_TAP_DEPLOY_KEY_PATH }}"
+    commit_author:
+      name: __OWNER__
+      email: __MAINTAINER_EMAIL__
+    commit_msg_template: "🔖 __TOOL__ {{ .Tag }}"
+    # Formulae the tool needs at runtime; delete the block if none.
+    dependencies:
+      - __BREW_DEPENDENCY__
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/__TOOL__ __VERSION_CMD__")
+    # Optional; delete if there is nothing to tell the user.
+    caveats: |
+      __CAVEATS__

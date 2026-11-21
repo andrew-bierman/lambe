@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- `docs/release-template/`: reusable release setup (goreleaser, workflow, scripts) for other Go tools.
+
 ## [0.10.1] - 2026-11-21
 
 ### Added
