@@ -46,6 +46,19 @@ const (
 
 // Styles.
 var (
+	accentColor = lipgloss.AdaptiveColor{Light: "#6941A5", Dark: "#C5A7FF"}
+
+	activeTabStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Background(lipgloss.AdaptiveColor{Light: "#6236A1", Dark: "#654399"}).
+			Padding(0, 1)
+
+	inactiveTabStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.AdaptiveColor{Light: "#504365", Dark: "#C7BFD1"}).
+				Background(lipgloss.AdaptiveColor{Light: "#EBE1FF", Dark: "#29203A"}).
+				Padding(0, 1)
+
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.AdaptiveColor{Light: "#241447", Dark: "#F4EBFF"}).
@@ -75,11 +88,11 @@ var (
 
 	runningStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#00FF7F"))
+			Foreground(lipgloss.AdaptiveColor{Light: "#126447", Dark: "#8DE0BC"})
 
 	gatingStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#00BFFF"))
+			Foreground(lipgloss.AdaptiveColor{Light: "#245C82", Dark: "#9FCAEF"})
 
 	greenStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#00AA00"))
@@ -88,7 +101,7 @@ var (
 			Foreground(lipgloss.Color("#FF5555"))
 
 	retryStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFAA00"))
+			Foreground(lipgloss.AdaptiveColor{Light: "#805000", Dark: "#F3C582"})
 
 	neutralStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#AAAAAA"))
@@ -109,11 +122,11 @@ func (i runItem) Title() string {
 			phase = "stopped"
 		}
 	}
-	title := i.run.IssueID + " · " + icon + " " + phase
+	title := icon + " " + i.run.IssueID
 	if i.run.Title != "" {
-		title += " · " + i.run.Title
+		title += "  " + i.run.Title
 	}
-	return title
+	return title + " · " + phase
 }
 
 func (i runItem) Description() string { return "" }
@@ -308,12 +321,11 @@ func New(path string) *Model {
 	delegate.ShowDescription = false
 	delegate.SetHeight(1)
 	delegate.SetSpacing(0)
-	accent := lipgloss.AdaptiveColor{Light: "#6941A5", Dark: "#C5A7FF"}
 	selection := lipgloss.AdaptiveColor{Light: "#EBE1FF", Dark: "#29203A"}
 	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
-		Bold(true).Foreground(accent).Background(selection).BorderForeground(accent)
+		Bold(true).Foreground(accentColor).Background(selection).BorderForeground(accentColor)
 	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.
-		Foreground(accent).Background(selection).BorderForeground(accent)
+		Foreground(accentColor).Background(selection).BorderForeground(accentColor)
 	m.list = list.New(nil, delegate, 0, 0)
 	m.list.SetShowHelp(false)
 	m.list.SetShowTitle(false)
@@ -892,7 +904,7 @@ func (m *Model) renderHeader() string {
 			}
 		}
 	}
-	text := fmt.Sprintf("lambe  %s   %d active / %d waiting", stateStyle.Render(state), active, waiting)
+	text := fmt.Sprintf("lambe  %s   %d active · %d waiting", stateStyle.Render("● "+state), active, waiting)
 	if m.width < 44 {
 		text = "lambe  ·  " + stateStyle.Render(state)
 		if m.alive {
@@ -932,13 +944,13 @@ func (m *Model) renderQueueTabs() string {
 		active = 2
 	}
 	for i, title := range tabs {
-		style := labelStyle
+		style := inactiveTabStyle
 		if i == active {
-			style = valueStyle.Bold(true).Underline(true)
+			style = activeTabStyle
 		}
 		tabs[i] = style.Render(title)
 	}
-	return strings.Join(tabs, "   ")
+	return strings.Join(tabs, " ")
 }
 
 func (m *Model) renderBody() string {
@@ -1024,7 +1036,7 @@ func (m *Model) framePanel(content string, pane focusArea) string {
 	}
 	color := lipgloss.AdaptiveColor{Light: "#80748D", Dark: "#574A68"}
 	if m.focus == pane {
-		color = lipgloss.AdaptiveColor{Light: "#6941A5", Dark: "#C5A7FF"}
+		color = accentColor
 	}
 	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(color).Padding(0, 1).Render(content)
 }
