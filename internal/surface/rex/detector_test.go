@@ -126,3 +126,21 @@ func TestDetectTimesOutHungProbe(t *testing.T) {
 		})
 	}
 }
+
+func TestDetectProbeNeverAutostartsAServer(t *testing.T) {
+	var got []string
+	d := Detector{Runner: func(_ context.Context, name string, args ...string) (string, int, error) {
+		got = append([]string{name}, args...)
+		return "", 0, nil
+	}}
+	d.Detect(context.Background())
+	want := []string{"rex", "--autostart=false", "ls", "--json"}
+	if len(got) != len(want) {
+		t.Fatalf("probe argv = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("probe argv = %q, want %q", got, want)
+		}
+	}
+}

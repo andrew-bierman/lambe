@@ -133,6 +133,18 @@ func runLive(args []string, useTUI bool, _ io.Reader, out io.Writer) error {
 	return runLogsFollow(path, issue, follow, asJSON, out)
 }
 
+// liveJSON is the `lambe logs -json` document: the shared snapshot plus the
+// facts a remote viewer such as the Rex palette cannot derive itself. Alive
+// reports whether the daemon that wrote the snapshot is still running, so a
+// viewer can tell live rows from a stopped daemon's last state. Machine
+// names the host that read the snapshot, so a picker can show where a run's
+// output opens.
+type liveJSON struct {
+	daemon.LiveSnapshot
+	Alive   bool
+	Machine string
+}
+
 func runLogsFollow(path, issue string, follow, asJSON bool, out io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -145,7 +157,7 @@ func runLogsFollow(path, issue string, follow, asJSON bool, out io.Writer) error
 			return fmt.Errorf("read live output: %w; start `lambe run` with the same configuration first", err)
 		}
 		if asJSON {
-			return json.NewEncoder(out).Encode(snapshot)
+			return json.NewEncoder(out).Encode(liveJSON{LiveSnapshot: snapshot, Alive: alive, Machine: daemon.DefaultMachine()})
 		}
 		if !alive && len(previous) == 0 {
 			if _, err := fmt.Fprintln(out, "Daemon stopped; showing historical output."); err != nil {
