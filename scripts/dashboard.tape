@@ -2,9 +2,13 @@
 Require .dev/bin/lambe-dev
 Set Shell "bash"
 Set FontSize 16
-Set Width 1280
-Set Height 460
+Set Width 1320
+Set Height 500
 Set Padding 18
+Set Margin 12
+Set MarginFill "#34304A"
+Set BorderRadius 12
+Set WindowBar Colorful
 Set Theme "Catppuccin Mocha"
 Env COLORTERM "truecolor"
 Type "env -u NO_COLOR .dev/bin/lambe-dev tui -demo"
