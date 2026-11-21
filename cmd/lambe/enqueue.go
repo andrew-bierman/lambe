@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/andrew-bierman/lambe/internal/config"
-	"github.com/andrew-bierman/lambe/internal/daemon"
 	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
@@ -59,7 +58,8 @@ func runEnqueue(args []string, out io.Writer) error {
 		return fmt.Errorf("no configured workflow named %q", *name)
 	}
 	dir := cfg.Trackers[0].Path
-	local, err := tracker.NewLocal("", dir, "lambe@"+daemon.DefaultMachine())
+	_, actor := hostIdentity(cfg)
+	local, err := tracker.NewLocal("", dir, actor)
 	if err != nil {
 		return err
 	}
