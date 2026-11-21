@@ -2,10 +2,12 @@
 
 Native macOS SwiftUI app for the lambe daemon. It attaches to a running
 daemon over the daemon's authenticated local HTTP state API and renders
-Queue, Attention, History, and run detail. The app never changes a run: it
-polls with GET requests, and needs-human items are resolved in Beads or the
-tracker. What it does offer is navigation (below): jump to a run in Rex, or
-fall back to Terminal, a copied command, or Finder.
+Queue, Attention, History, run detail, and live output. The app never changes
+a run: it polls with GET requests, and needs-human items are resolved in Beads
+or the tracker. What it does offer is navigation (below): hand a run to Rex,
+or fall back to Terminal, a copied command, or Finder.
+
+![LambeDash showing a queue with a stalled run and live output](../../docs/assets/dashboard-app-light.png)
 
 The project is a single committed `.xcodeproj` with no third-party
 dependencies and no code-generation step.
@@ -27,9 +29,52 @@ Press Cmd+R to run: the `LambeDash` scheme builds the app and shows its
 window. The project uses file-synchronized groups, so files added under
 `Sources/` or `Tests/` are picked up without editing the project file.
 
+## First run
+
+With no daemon attached the window shows a setup guide instead of empty
+columns. It scans the default state directory and the instances you have
+added for running daemons and offers **Connect** for each. If none is
+running it walks the four steps with the exact commands to copy:
+
+1. install `lambe` (it checks `PATH`, `~/.local/bin`, `~/go/bin`, Homebrew),
+2. `lambe init` to write the config,
+3. turn on the state API (`stateapi:` / `enable: true`, or
+   `LAMBE_STATEAPI_ENABLE=true` for one run),
+4. `lambe run`.
+
+**Start in Terminal** opens Terminal running the command shown (the app
+starts nothing itself), **Choose Folder…** adds another state directory, and
+**Explore Demo Data** opens sample data. The guide rechecks every two seconds
+and steps aside when a daemon attaches. Reopen it any time from
+**Dashboard → Setup Guide…** (⇧⌘G) or Settings → General.
+
+## Menus, shortcuts, and preferences
+
+| Shortcut | Action |
+| --- | --- |
+| ⌘1 / ⌘2 / ⌘3 | Show Queue / Attention / History |
+| ⌘R | Refresh state |
+| ⇧⌘D | Switch between demo data and the daemon |
+| ⇧⌘G | Setup guide |
+| ⌥⌘R | Open the selected run in Rex |
+| ⌥⌘T | Open the selected run in Terminal |
+| ⌥⌘C / ⌥⌘B | Copy the logs command / `bd show` |
+| ⌥⌘F | Reveal the run's workspace in Finder |
+| ⌥⎋ | Clear the selection |
+
+Right-click a run for the same actions. Settings (⌘,) has **General** (where
+Open prefers to send runs, start with demo data), **Instances**, and **Tools**
+(where `lambe` and `rex` were found, with a path override for each).
+
+Selection is dropped whenever the connection context changes (another
+instance, demo/live switch, or a daemon with a different config or machine),
+so one daemon's issue IDs never linger over another daemon's data.
+
 ## Demo mode
 
-The window toolbar has a segmented Live/Demo picker. Choose **Demo** to
+Launch with `--demo` (or turn on Settings → General → Start with demo
+data) to open straight into it. The window toolbar has a segmented Live/Demo
+picker. Choose **Demo** to
 browse all four views with bundled sample data — no daemon, tracker, or
 state API needed. The **Dashboard** menu offers the same switch ("Show Demo
 Data" / "Connect to Daemon"), and the window subtitle reads "Demo data"
@@ -75,11 +120,16 @@ The run detail column opens with a LIVE / QUEUED / ARCHIVED badge, then an
 **Open** row. Only buttons that can work are shown:
 
 - **Open in Rex** (only when the `rex` CLI is found on `PATH`, `~/.local/bin`,
-  `/opt/homebrew/bin`, or `/usr/local/bin`): focuses the Rex window labelled
-  `Lambe · <issue>` if it exists (`rex window focus`), otherwise opens one
-  running `lambe logs -issue <issue> -follow` (`rex window new`). The label
-  matches the `lambe_open_run` action in `contrib/rex/lambe.lua`, so both
-  paths share one window per run. It targets Rex's default session and server.
+  `/opt/homebrew/bin`, or `/usr/local/bin`, or at the Settings override):
+  focuses the Rex window labelled `Lambe · <issue>` if it exists
+  (`rex window focus`), otherwise opens one running
+  `lambe logs -issue <issue> -follow` (`rex window new`). The label matches
+  the `lambe_open_run` action in `contrib/rex/lambe.lua`, so both paths share
+  one window per run. A run whose `machine` is not this Mac's daemon is opened
+  on that machine with `rex -S <machine> …` (the machine name must be a Rex
+  host label; see `rex hosts`), and the Terminal and Finder actions are not
+  offered for it because they would act on the wrong computer. Without Rex
+  the app says so and falls back; a failing Rex reports why.
 - **Open in Terminal**: runs the same logs command in Terminal.app.
 - **Copy logs command** / **Copy bd show**: the exact command, config pinned
   with `-config` to the daemon the app is attached to.
@@ -98,6 +148,25 @@ state and stalled count; the others show what their live descriptor says
 the network. Click an instance to switch to it. The content column's header
 names the attached instance, machine, and config file.
 
+## Launch flags
+
+For demos, screenshots, and isolated runs (never needed in normal use):
+
+| Flag | Effect |
+| --- | --- |
+| `--demo` | start with the sample data |
+| `-LambeScenario <name>` | render a network-free fixture scenario |
+| `-LambeSection queue\|attention\|history`, `-LambeIssue <id>` | initial view |
+| `-LambeStateDir <path>` | default state directory (instead of `LAMBE_STATE_DIR` / `~/.local/state/lambe`) |
+| `-LambeDefaultsSuite <name>` | keep preferences and instances in that defaults domain |
+| `-LambeWindowSize WxH`, `-LambeAppearance light\|dark` | window size and appearance |
+| `-LambeHeadless` | accessory activation policy; the window is sent behind others and never made key, so automation never takes focus |
+
+To try the app without touching a production daemon, point it at an isolated
+one: run a throwaway daemon with its own `HOME`, `LAMBE_STATE_DIR`, config
+and Beads database, then launch the app with
+`-LambeStateDir <that state dir> -LambeDefaultsSuite lambe.scratch`.
+
 ## SwiftUI previews and screenshots
 
 `Sources/Views/Previews.swift` has previews for the whole window (live,
@@ -114,11 +183,13 @@ The same scenarios render in the real app:
 LambeDash.app/Contents/MacOS/LambeDash -LambeScenario stalled -LambeIssue lam-103
 ```
 
-`apps/dashboard/scripts/screenshots.sh [OUT_DIR] [scenario...]` builds into a
-temp DerivedData directory, launches each scenario for about two seconds,
-and writes one PNG per scenario (default `apps/dashboard/.build/screenshots/`).
-It needs a logged-in GUI session and Screen Recording permission for the
-terminal.
+`apps/dashboard/scripts/screenshots.sh [OUT_DIR] [name=args...]` builds into
+a temp DerivedData directory and captures the real window of the demo data
+(light and dark by default, 1200x780) with `screencapture -l`. It launches
+with `open -g` and `-LambeHeadless`, so it never activates the app or raises a
+window while you work, and it quits only the instance it started. It needs
+Screen Recording permission for the terminal. The README screenshots are
+`docs/assets/dashboard-app-light.png` and `dashboard-app-dark.png`.
 
 ## Attaching to a daemon
 
@@ -143,13 +214,15 @@ fixtures the Swift tests decode live in `testdata/contract/v1/`.
 
 ## Distribution
 
-Download the [private macOS preview](https://github.com/andrew-bierman/lambe/releases/tag/dashboard-v1.0)
-with repository access. The preview requires a running Lambe v0.9.0 or later
-daemon with the local state API enabled for live data.
+Each release attaches `LambeDash.zip` and `LambeDash.zip.sha256` to the
+matching `vX.Y.Z` [release](https://github.com/andrew-bierman/lambe/releases).
+Live data needs a running Lambe v0.9.0 or later daemon with the local state API
+enabled; the setup guide in the app shows how.
 
 `mise dashboard:package` builds the ZIP locally. The script builds the app natively with Xcode
-(`-configuration Release`, universal arm64 + x86_64), signs it with the
-project's own ad-hoc identity, verifies the signature with `codesign --verify`,
+(`-configuration Release`, universal arm64 + x86_64), checks the mascot app
+icon is in the compiled catalog, signs it ad hoc with the hardened runtime
+(or with Developer ID, below), verifies the signature with `codesign --verify`,
 and packs `LambeDash.app` into `apps/dashboard/.build/package/`:
 
 - `LambeDash.zip` — the app, packed with `ditto` so the signature and
@@ -169,27 +242,41 @@ timestamps differ per run, so the checksum identifies each build.
 - No Xcode, command-line tools, or third-party dependencies: the ZIP contains
   one self-contained `.app` bundle.
 
-### Ad-hoc signing vs Developer ID
+### Signing, and opening it the first time
 
-The app is ad-hoc signed ("Sign to Run Locally"), matching the project's
-committed signing settings: it builds and runs with no developer certificate
-and no Apple Developer account. An ad-hoc signature proves the bundle was not
-modified after signing, but it carries no verified developer identity, so the
-app is not notarized and Gatekeeper treats it as coming from an unknown
-developer:
+The release ZIP is universal (arm64 + x86_64) and **ad-hoc signed** with the
+hardened runtime (`codesign -s - --options runtime`). That proves the bundle
+was not modified after signing but carries no developer identity, and it is
+not notarized, so Gatekeeper blocks a downloaded copy on first launch with
+"LambeDash can't be opened". Pick one:
 
-- On the machine that built it, the app just opens.
-- Copied to another Mac, macOS quarantines the ZIP and asks for confirmation
-  on first launch (System Settings → Privacy & Security → "Open Anyway").
-  That prompt is expected for ad-hoc builds, not a malfunction. Do not
-  disable Gatekeeper or strip quarantine attributes; the confirmation dialog
-  is the supported flow.
+1. **Right-click Open.** Unzip, move `LambeDash.app` to Applications,
+   right-click it, choose **Open**, then **Open** again. macOS remembers the
+   choice. (On macOS 15 and later the first plain double-click shows a dialog
+   with only Done; open **System Settings → Privacy & Security** and press
+   **Open Anyway** next to the LambeDash notice, then confirm.)
+2. **Remove the quarantine flag** if you downloaded it from this repository's
+   releases and have checked the checksum:
+   ```sh
+   shasum -a 256 -c LambeDash.zip.sha256
+   xattr -dr com.apple.quarantine /Applications/LambeDash.app
+   ```
 
-For distribution beyond trusted colleagues — verified identity, no
-confirmation prompt — sign with a Developer ID certificate and notarize the
-ZIP (`notarytool`). That is out of scope here on purpose: it requires a paid
-Apple Developer account and adds signing infrastructure this repo does not
-want. Nothing in the project prevents adding it later.
+An app built on your own Mac is not quarantined and just opens.
+
+### Developer ID and notarization (drop-in)
+
+`scripts/package-dashboard.sh` reads these environment variables when set and
+otherwise stays ad hoc:
+
+| Variable | Effect |
+| --- | --- |
+| `APPLE_SIGNING_IDENTITY` | sign with this Developer ID Application identity (hardened runtime, secure timestamp) instead of ad hoc |
+| `APPLE_NOTARY_PROFILE` | notarize with this `notarytool` keychain profile, staple, and re-pack |
+| `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_SPECIFIC_PASSWORD` | notarize with these credentials instead of a profile |
+
+Notarization requires the Developer ID identity. A notarized, stapled build
+opens with no Gatekeeper prompt; nothing else in the project changes.
 
 ### Connecting to a daemon
 
@@ -215,8 +302,9 @@ exercises the daemon's Go API client: descriptor discovery, an authenticated
 state read, uniform 401s without the token, a 202 refresh, and descriptor
 cleanup after a graceful stop. It covers the daemon and its client only.
 
-The app itself is verified manually: run it with Cmd+R, select an enabled
-instance in Settings, and compare the four views against `lambe status`.
+The app itself is verified manually against an isolated daemon (never a
+production one): run it, connect, and compare the views against
+`lambe status`.
 Demo mode (above) covers the sample-data path.
 
 ## Layout
@@ -224,10 +312,11 @@ Demo mode (above) covers the sample-data path.
 - `Sources/LambeDashApp.swift` — `@main` with `WindowGroup` + `Settings`.
 - `Sources/Api/` — contract client: wire DTOs, the `DaemonClient` protocol,
   HTTP transport, descriptor decode.
-- `Sources/Models/` — connection and feed models, sample data, and the
-  instance store behind Settings.
-- `Sources/Views/` — shell, section and status views, run detail, and the
-  Settings instance picker.
+- `Sources/Models/` — connection and feed models, sample data, the instance
+  store, setup/discovery, tool lookup and preferences, and run actions.
+- `Sources/Views/` — shell, section and status views, run detail with live
+  output, the setup guide, menu commands, and Settings (General, Instances,
+  Tools).
 - `Tests/ApiTests/` — Swift Testing decode, store, and transport tests over
   the committed contract fixtures.
 - `Tests/ModelsTests/` — Swift Testing model state tests.

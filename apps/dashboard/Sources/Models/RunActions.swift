@@ -32,12 +32,22 @@ nonisolated struct RunActionContext: Equatable, Sendable {
     /// Run working directory, only when it exists on this Mac.
     var localWorkspace: String?
     var rexPath: String?
+    /// The machine that runs the agent when it is not this Mac. Rex opens
+    /// the run there (`rex -S <host>`); local-only actions are not offered.
+    var remoteHost: String?
 
     /// `lambe logs -issue ID -follow [-config X]`.
     var logsArgv: [String] {
         var argv = ["lambe", "logs", "-issue", issue, "-follow"]
-        if let configPath, !configPath.isEmpty { argv += ["-config", configPath] }
+        // A config path on this Mac means nothing on another machine.
+        if remoteHost == nil, let configPath, !configPath.isEmpty { argv += ["-config", configPath] }
         return argv
+    }
+
+    /// `rex -S <host>` arguments, empty for a run on this Mac.
+    var rexHostArgs: [String] {
+        guard let remoteHost, !remoteHost.isEmpty else { return [] }
+        return ["-S", remoteHost]
     }
 
     var logsCommand: String { Self.shellLine(logsArgv) }
@@ -56,18 +66,24 @@ nonisolated struct RunActionContext: Equatable, Sendable {
         return "'" + word.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
-    /// Rex first, then the always-available fallbacks.
-    var actions: [RunAction] {
+    /// Rex first (or Terminal first when the operator prefers it), then the
+    /// fallbacks that can work for this run.
+    func actions(preferring handoff: Prefs.Handoff = .rex) -> [RunAction] {
+        let rex = RunAction(kind: .openInRex, title: "Open in Rex", systemImage: "rectangle.on.rectangle")
+        let terminal = RunAction(kind: .openInTerminal, title: "Open in Terminal", systemImage: "terminal")
         var list: [RunAction] = []
-        if rexPath != nil {
-            list.append(RunAction(kind: .openInRex, title: "Open in Rex", systemImage: "rectangle.on.rectangle"))
-        }
-        list.append(RunAction(kind: .openInTerminal, title: "Open in Terminal", systemImage: "terminal"))
+        var openers: [RunAction] = []
+        if rexPath != nil { openers.append(rex) }
+        if remoteHost == nil { openers.append(terminal) }
+        if handoff == .terminal { openers.reverse() }
+        list += openers
         list.append(RunAction(kind: .copyLogsCommand, title: "Copy logs command", systemImage: "doc.on.doc"))
         list.append(RunAction(kind: .copyTrackerCommand, title: "Copy bd show", systemImage: "doc.on.doc"))
-        if localWorkspace != nil {
+        if localWorkspace != nil, remoteHost == nil {
             list.append(RunAction(kind: .revealWorkspace, title: "Reveal workspace", systemImage: "folder"))
         }
         return list
     }
+
+    var actions: [RunAction] { actions() }
 }

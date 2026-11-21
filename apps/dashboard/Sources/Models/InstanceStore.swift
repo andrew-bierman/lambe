@@ -65,7 +65,12 @@ nonisolated extension InstanceRecord {
 /// `~/.local/state/lambe`. Read once per launch; a running daemon's env is
 /// its own business.
 nonisolated enum DefaultInstance {
+    /// `-LambeStateDir <path>` at launch: an isolated default for dev and
+    /// screenshots, so a first launch never resolves the production daemon.
+    nonisolated(unsafe) static var launchOverride: String?
+
     static func stateDirectory() -> String {
+        if let launchOverride, !launchOverride.isEmpty { return launchOverride }
         if let dir = ProcessInfo.processInfo.environment["LAMBE_STATE_DIR"],
            !dir.isEmpty
         {

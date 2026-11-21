@@ -15,10 +15,12 @@
 //  swallowed (R11).
 //
 
+import AppKit
 import SwiftUI
 
 struct RunDetailView: View {
     @Environment(ConnectionModel.self) private var connection
+    @Environment(ShellModel.self) private var shell
     let selectedIssue: String?
     let seed: RunSeed?
 
@@ -43,11 +45,7 @@ struct RunDetailView: View {
             VStack(alignment: .leading, spacing: 16) {
                 header(seed)
                 liveness(seed)
-                RunActionsSection(
-                    issue: seed.issue,
-                    configPath: connection.daemon?.configPath,
-                    workspace: connection.detail.issue?.workspace
-                )
+                RunActionsSection(context: shell.context(for: seed.issue, connection: connection))
                 statusBlock(seed)
                 seedFacts(seed)
                 if let issue = connection.detail.issue {
@@ -56,7 +54,11 @@ struct RunDetailView: View {
                         gatePreview(lastGate)
                     }
                     if let tail = issue.tail, !tail.isEmpty {
-                        outputTail(tail, truncated: issue.tailTruncated)
+                        LiveOutputView(
+                            tail: tail,
+                            truncated: issue.tailTruncated,
+                            following: connection.mode == .live && QueueComposition.isActive(issue.state)
+                        )
                     }
                 }
             }
@@ -70,6 +72,17 @@ struct RunDetailView: View {
                 id: seed.issue,
                 fetch: connection.detailFetch(id: seed.issue)
             )
+            // Follow a live run: re-read its detail in place every 2 s so
+            // the output tail moves without a loading flash.
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard connection.mode == .live, connection.isConnectionActive,
+                      let state = connection.detail.issue?.state, QueueComposition.isActive(state)
+                else { continue }
+                await connection.detail.refresh(
+                    id: seed.issue, fetch: connection.detailFetch(id: seed.issue)
+                )
+            }
         }
     }
 
@@ -88,6 +101,19 @@ struct RunDetailView: View {
                 Text(title)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+            }
+            let context = shell.context(for: seed.issue, connection: connection)
+            let issue = connection.detail.loadedID == seed.issue ? connection.detail.issue : nil
+            let run = connection.snapshotFeed.payload?.runs.first { $0.issue == seed.issue }
+            let workflow = issue?.workflow ?? run?.workflow
+            let machine = issue?.machine ?? run?.machine
+            if workflow != nil || machine != nil {
+                HStack(spacing: 6) {
+                    if let workflow { MetaChip(text: workflow, systemImage: "arrow.triangle.branch") }
+                    if let machine {
+                        MetaChip(text: machine, systemImage: "desktopcomputer", emphasized: context.remoteHost != nil)
+                    }
+                }
             }
         }
     }
@@ -274,13 +300,6 @@ struct RunDetailView: View {
         boundedBlock(title: "Last gate output", body: gate)
     }
 
-    private func outputTail(_ tail: String, truncated: Bool) -> some View {
-        boundedBlock(
-            title: truncated ? "Output tail (truncated at 4 KB)" : "Output tail",
-            body: tail
-        )
-    }
-
     private func boundedBlock(title: String, body: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
@@ -304,5 +323,78 @@ struct RunDetailView: View {
         guard let iso, !iso.isEmpty else { return nil }
         guard let date = RFC3339.date(iso) else { return iso }
         return date.formatted(date: .abbreviated, time: .standard)
+    }
+}
+
+
+/// A small label for a run's workflow or machine.
+struct MetaChip: View {
+    let text: String
+    let systemImage: String
+    var emphasized = false
+
+    var body: some View {
+        Label(text, systemImage: systemImage)
+            .font(.caption)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(emphasized ? Color.accentColor.opacity(0.16) : Color.secondary.opacity(0.12), in: Capsule())
+            .foregroundStyle(emphasized ? Color.accentColor : Color.secondary)
+            .lineLimit(1)
+            .accessibilityElement(children: .combine)
+    }
+}
+
+/// The run's recent output in a terminal-style panel that follows the end
+/// while the run is live. The daemon serves at most 4 KB of tail.
+struct LiveOutputView: View {
+    let tail: String
+    let truncated: Bool
+    let following: Bool
+    private let endID = "output-end"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(truncated ? "Output (last 4 KB)" : "Output")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if following {
+                    Label("live", systemImage: "circle.fill")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.green)
+                        .symbolEffect(.pulse)
+                        .accessibilityLabel("Following live output")
+                }
+                Spacer()
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(tail, forType: .string)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                .buttonStyle(.borderless)
+                .help("Copy output")
+                .accessibilityLabel("Copy output")
+            }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(tail)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(Color(white: 0.88))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Color.clear.frame(height: 1).id(endID)
+                    }
+                    .padding(10)
+                }
+                .frame(minHeight: 110, maxHeight: 320)
+                .background(Color(white: 0.09), in: RoundedRectangle(cornerRadius: 8))
+                .onAppear { proxy.scrollTo(endID, anchor: .bottom) }
+                .onChange(of: tail) { proxy.scrollTo(endID, anchor: .bottom) }
+            }
+            .accessibilityLabel("Run output: \(tail)")
+        }
     }
 }

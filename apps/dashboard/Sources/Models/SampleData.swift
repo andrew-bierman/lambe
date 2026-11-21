@@ -36,11 +36,14 @@ nonisolated enum SampleData {
                      "version": "demo", "config_path": "~/work/lambe.yaml"},
           "runs": [
             {"issue": "demo-hk4", "session": "sess-demo-a", "attempt": 2, "state": "running",
-             "last_event_age": "12s", "last_event_at": "\(ago(12))", "phase": "gating"},
+             "last_event_age": "12s", "last_event_at": "\(ago(12))", "phase": "gating",
+             "workflow": "ship-pr", "machine": "workbench"},
             {"issue": "demo-pm7", "attempt": 1, "state": "deferred",
-             "last_event_age": "4m", "last_event_at": "\(ago(240))", "phase": "retry"},
+             "last_event_age": "4m", "last_event_at": "\(ago(240))", "phase": "retry",
+             "workflow": "ship-pr", "machine": "workbench"},
             {"issue": "demo-zq2", "session": "sess-demo-b", "attempt": 1, "state": "running",
-             "last_event_age": "9m", "last_event_at": "\(ago(540))", "phase": "running"}
+             "last_event_age": "9m", "last_event_at": "\(ago(540))", "phase": "running",
+             "workflow": "docs-refresh", "machine": "mac-mini"}
           ],
           "deferred_until": "\(ago(-120))",
           "wake_at": "\(ago(-120))",
@@ -73,6 +76,7 @@ nonisolated enum SampleData {
           "as_of": "\(ago(5))",
           "rows": [
             {"id": "demo-hk4", "title": "Wire the retry backoff", "reason": "ready: no open blockers"},
+            {"id": "demo-zq2", "title": "Refresh the operations docs", "reason": "ready: no open blockers"},
             {"id": "demo-fs2", "title": "Document the smoke suite", "reason": "ready: no open blockers"},
             {"id": "demo-jq9", "title": "Extract the gate parser", "reason": "blocked by 2 issues",
              "blocked": true,
@@ -103,11 +107,44 @@ nonisolated enum SampleData {
              "updated_at": "\(ago(4100))"},
             {"issue": "demo-ce1", "title": "Archive old attempts", "phase": "interrupted",
              "state": "interrupted", "attempt": 2,
-             "updated_at": "\(ago(6600))"}
+             "updated_at": "\(ago(6600))"},
+            {"issue": "demo-aw5", "title": "Add the doctor preflight", "phase": "stopped: gate green",
+             "state": "settled", "attempt": 1, "outcome": "settled",
+             "updated_at": "\(ago(9800))"},
+            {"issue": "demo-xl0", "title": "Pin the contract fixtures", "phase": "stopped: gate green",
+             "state": "settled", "attempt": 2, "outcome": "settled",
+             "updated_at": "\(ago(15000))"},
+            {"issue": "demo-ob2", "title": "Rotate the stateapi token on restart", "phase": "stopped: gate red",
+             "state": "failed", "attempt": 2, "outcome": "failed",
+             "updated_at": "\(ago(21000))"}
           ]
         }
         """
     )
+
+    /// Live detail for the demo runs, so output and facts render in demo mode.
+    static func issue(_ id: String) -> WireIssue? {
+        let facts: [String: (state: String, phase: String, age: TimeInterval, turn: Int, workflow: String, machine: String, summary: String, tail: String)] = [
+            "demo-hk4": ("running", "gating", 12, 9, "ship-pr", "workbench", "Waiting on the pull request checks",
+                         "$ go test ./internal/supervisor/...\\nok  \\tsupervisor\\t3.402s\\n$ gofumpt -l .\\n$ gh pr checks 142 --watch\\n  build     pass   1m02s\\n  test      pass   2m11s\\n  lint      pending\\ngate gh:pr: 2 of 3 checks green, waiting\\n"),
+            "demo-zq2": ("running", "running", 540, 4, "docs-refresh", "mac-mini", "Rewriting the restart-semantics section",
+                         "Reading docs/OPERATIONS.md\\nPlan: split restart semantics into daemon, run, and gate\\nEditing docs/OPERATIONS.md (+38 -12)\\n"),
+            "demo-pm7": ("deferred", "retry", 240, 2, "ship-pr", "workbench", "Backing off after a transient tracker error",
+                         "tracker: dolt connection reset, retrying in 2m\\n"),
+        ]
+        guard let f = facts[id] else { return nil }
+        let wake = f.state == "deferred" ? #","wake_at": "\#(ago(-120))""# : ""
+        return decode(
+            """
+            {"schema_version": 1,
+             "daemon": {"pid": 4242, "identity": "demo:incarnation:1", "machine": "workbench", "version": "demo"},
+             "issue": "\(id)", "state": "\(f.state)", "attempt": 1, "session": "sess-\(id)",
+             "last_event_age": "\(Int(f.age))s", "last_event_at": "\(ago(f.age))",
+             "phase": "\(f.phase)", "turn": \(f.turn), "thread": "thr-\(id)", "workflow": "\(f.workflow)",
+             "machine": "\(f.machine)", "summary": "\(f.summary)", "tail": "\(f.tail)"\(wake)}
+            """
+        )
+    }
 
     /// Decodes one canonical body; the demo payloads are written once and
     /// pinned by the decode tests.

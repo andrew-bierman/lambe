@@ -14,12 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable machine/actor identity, `stall_after`, `probe_window`, and `gate.check_timeout`.
 - `lambe doctor` preflight checks and `lambe service install|status|uninstall` for launchd/systemd units.
 - Optional per-workflow `harness:` (pi, codex, or acp) for named workflows.
-
-### Fixed
-
-- A tool call that is quiet for longer than `silence_timeout` is no longer killed as a stall (Pi and ACP); `turn_timeout` still bounds it.
-- ACP no longer closes its event stream under an in-flight emit (data race, possible send-on-closed-channel panic).
-- Sessions recovered after a daemon restart no longer fail every gate with "no gate formulas configured" when no gate snapshot was taken at claim time.
+- Mac app: first-run setup guide (finds running daemons, shows the exact `lambe` commands, starts a daemon in Terminal), live output that follows a running run, Rex handoff on the machine that owns the run (`rex -S`), workflow and machine on runs, run actions in a context menu and the menu bar with keyboard shortcuts, Settings (General, Instances, Tools), and `--demo` with richer sample data.
+- Mac app packaging: universal, ad-hoc signed with the hardened runtime, with app-icon checks; Developer ID signing and notarization are a drop-in through `APPLE_*` environment variables. First-launch steps for Gatekeeper are documented.
 
 ### Changed
 
@@ -28,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Redesign the Mac dashboard as a tabbed table with a preview pane.
 - Releases now use a single `vX.Y.Z` tag for the CLI and the Mac app; see `docs/RELEASING.md`.
 - `scripts/install.sh` installs the latest release by default (checksum still verified) and prints next steps.
+
+### Fixed
+
+- A tool call that is quiet for longer than `silence_timeout` is no longer killed as a stall (Pi and ACP); `turn_timeout` still bounds it.
+- ACP no longer closes its event stream under an in-flight emit (data race, possible send-on-closed-channel panic).
+- Sessions recovered after a daemon restart no longer fail every gate with "no gate formulas configured" when no gate snapshot was taken at claim time.
+- Mac app: selection no longer survives a change of daemon, so another daemon's issue IDs never show over the current one's data; the daemon version no longer renders as "vv0.9.3".
+- Mac app screenshots run in the background without activating the app or raising a window.
 
 ## [0.9.2] - 2026-11-20
 

@@ -125,11 +125,15 @@ struct QueueView: View {
                 StalledBanner(runs: QueueComposition.activeRuns(in: connection.snapshotFeed.payload))
                 List(selection: $selectedIssue) {
                     let active = QueueComposition.activeRuns(in: connection.snapshotFeed.payload)
+                    let titles = QueueComposition.titles(
+                        queue: connection.queueFeed.payload, history: connection.historyFeed.payload
+                    )
                     if !active.isEmpty {
                         Section("Active runs") {
                             ForEach(active) { run in
-                                ActiveRunRow(run: run)
+                                ActiveRunRow(run: run, title: titles[run.issue])
                                     .tag(run.issue)
+                                    .runContextMenu(run.issue)
                             }
                         }
                     }
@@ -142,6 +146,7 @@ struct QueueView: View {
                             ForEach(readiness) { row in
                                 QueueRowView(row: row)
                                     .tag(row.id)
+                                    .runContextMenu(row.id)
                             }
                         }
                     }
@@ -158,6 +163,8 @@ struct QueueView: View {
 /// even when the poll payload is unchanged.
 struct ActiveRunRow: View {
     let run: WireRun
+    /// The issue's title, when a payload carries one.
+    var title: String?
     /// Test/preview seam; live rows use the wall clock.
     var fixedNow: Date?
 
@@ -179,15 +186,21 @@ struct ActiveRunRow: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(run.issue)
+                    Text(title ?? run.issue)
                         .font(.body.weight(.medium))
-                        .monospacedDigit()
-                        .lineLimit(1)
+                        .lineLimit(2)
                         .truncationMode(.middle)
                     Spacer(minLength: 4)
                     LivenessBadge(liveness: liveness, silence: silence)
                 }
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    if title != nil {
+                        Text(run.issue)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                     StateBadge(state: run.state, phase: run.phase)
                     Text("attempt \(run.attempt)")
                         .font(.caption)
@@ -198,6 +211,12 @@ struct ActiveRunRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+                if run.workflow != nil || run.machine != nil {
+                    HStack(spacing: 6) {
+                        if let workflow = run.workflow { MetaChip(text: workflow, systemImage: "arrow.triangle.branch") }
+                        if let machine = run.machine { MetaChip(text: machine, systemImage: "desktopcomputer") }
+                    }
+                }
             }
         }
         .padding(.vertical, 3)
@@ -205,7 +224,7 @@ struct ActiveRunRow: View {
         .background(liveness == .stalled ? Color.red.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 6))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
-            "\(liveness == .stalled ? "Stalled run" : "Run") \(run.issue), \(run.phase ?? run.state), attempt \(run.attempt), last event \(run.lastEventAge)"
+            "\(liveness == .stalled ? "Stalled run" : "Run") \(title.map { "\($0), " } ?? "")\(run.issue), \(run.phase ?? run.state), attempt \(run.attempt), last event \(run.lastEventAge)\(run.machine.map { ", on \($0)" } ?? "")"
         )
     }
 }
@@ -275,6 +294,7 @@ struct AttentionView: View {
                             ForEach(snapshot.needsHuman) { item in
                                 NeedsHumanRow(item: item)
                                     .tag(item.issue)
+                                    .runContextMenu(item.issue)
                             }
                         }
                     }
@@ -283,6 +303,7 @@ struct AttentionView: View {
                             ForEach(Array(snapshot.gateRejections.enumerated()), id: \.offset) { _, rejection in
                                 GateRejectionRow(rejection: rejection)
                                     .tag(rejection.issue)
+                                    .runContextMenu(rejection.issue)
                             }
                         }
                     }
@@ -391,6 +412,7 @@ struct HistoryView: View {
                         ForEach(history.runs) { run in
                             HistoryRow(run: run)
                                 .tag(run.issue)
+                                .runContextMenu(run.issue)
                         }
                     }
                 }

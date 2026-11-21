@@ -174,12 +174,15 @@ struct FixtureScenarioTests {
         await #expect(throws: APIError.self) { _ = try await other() }
     }
 
-    @Test("Launch arguments select a scenario, section, and issue")
+    @Test("Launch arguments select a scenario, section, issue, demo, and isolation")
     func launchArguments() {
-        let s = LaunchScenario.fromArguments(["app", "-LambeScenario", "stalled", "-LambeSection", "history", "-LambeIssue", "lam-1"])
-        #expect(s?.fixture == .stalled && s?.section == .history && s?.issue == "lam-1")
-        #expect(LaunchScenario.fromArguments(["app"]) == nil)
-        #expect(LaunchScenario.fromArguments(["app", "-LambeScenario", "nope"]) == nil)
+        let s = LaunchOptions.fromArguments(["app", "-LambeScenario", "stalled", "-LambeSection", "history", "-LambeIssue", "lam-1"])
+        #expect(s.scenario == .stalled && s.section == .history && s.issue == "lam-1" && !s.demo)
+        #expect(LaunchOptions.fromArguments(["app"]) == LaunchOptions())
+        #expect(LaunchOptions.fromArguments(["app", "-LambeScenario", "nope"]).scenario == nil)
+        let iso = LaunchOptions.fromArguments(["app", "--demo", "-LambeStateDir", "/x/state", "-LambeDefaultsSuite", "t.suite"])
+        #expect(iso.demo && iso.stateDirectory == "/x/state" && iso.defaultsSuite == "t.suite")
+        #expect(LaunchOptions.fromArguments(["app", "-LambeDemo"]).demo)
     }
 
     @Test("A directory with no descriptors reads as offline")

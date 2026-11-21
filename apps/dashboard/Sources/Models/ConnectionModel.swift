@@ -118,6 +118,12 @@ final class ConnectionModel {
     /// Live daemon polling or bundled sample data.
     var mode: Mode = .live
 
+    /// Bumped whenever what the window shows stops being the same daemon:
+    /// a target or mode switch, or a reattach to a different config or
+    /// machine. Views drop selection tied to the old context when it changes
+    /// so one daemon's issue IDs never linger over another's data.
+    private(set) var contextID = 0
+
     private(set) var state: ConnectionState = .loading
     /// The attached daemon's identity facts — rendered in the window
     /// footer so the operator always knows which daemon they see (R9, R14).
@@ -378,6 +384,7 @@ final class ConnectionModel {
     /// daemon's data, and connect immediately.
     func connectionTargetChanged() {
         connectionRevision += 1
+        contextID += 1
         client = nil
         attachedIdentity = nil
         hasEverAttached = false
@@ -403,6 +410,7 @@ final class ConnectionModel {
         guard mode != newMode else { return }
         mode = newMode
         connectionRevision += 1
+        contextID += 1
         if newMode == .demo {
             applyDemo()
         } else {
@@ -424,6 +432,9 @@ final class ConnectionModel {
             return fixtureIssue.issue == id
                 ? { fixtureIssue }
                 : { throw APIError.status(code: 404) }
+        }
+        if mode == .demo {
+            return SampleData.issue(id).map { demo in { demo } }
         }
         guard mode == .live, let client else { return nil }
         return { try await client.issue(id) }
@@ -480,6 +491,12 @@ final class ConnectionModel {
     /// polls — the launchd-restart case — and forces re-resolution so the
     /// app reattaches to the new process with its new token (R11).
     private func adoptIdentityIfNeeded(_ newIdentity: WireDaemonIdentity) {
+        // A different config or machine is a different daemon, not a restart.
+        if let previous = daemon,
+           previous.configPath != newIdentity.configPath || previous.machine != newIdentity.machine
+        {
+            contextID += 1
+        }
         daemon = newIdentity
         if let previous = attachedIdentity, previous != newIdentity {
             attachedIdentity = newIdentity
@@ -602,6 +619,16 @@ final class DetailModel {
             // Queued and parked tasks can have useful tracker facts without a run.
             phase = apiError == .status(code: 404) ? .seedOnly : .failed(apiError.displayText)
         }
+    }
+
+    /// Re-reads the live detail in place (the output tail follows the
+    /// run): no loading flash, and a failed refresh keeps what is shown.
+    func refresh(id: String, fetch: (() async throws -> WireIssue)?) async {
+        guard let fetch, loadedID == id, issue != nil else { return }
+        let startRevision = revision
+        guard let detail = try? await fetch() else { return }
+        guard !Task.isCancelled, loadedID == id, revision == startRevision else { return }
+        issue = detail
     }
 
     /// Drops state when the connection target or mode changes.

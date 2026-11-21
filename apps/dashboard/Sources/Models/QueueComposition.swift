@@ -50,4 +50,13 @@ nonisolated enum QueueComposition {
     static func renderedRowCount(snapshot: WireSnapshot?, queue: WireQueue?) -> Int {
         activeRuns(in: snapshot).count + readinessRows(queue: queue, snapshot: snapshot).count
     }
+
+    /// Issue titles known from the readiness and history payloads, so an
+    /// active run can read as words rather than an ID.
+    static func titles(queue: WireQueue?, history: WireHistory?) -> [String: String] {
+        var titles: [String: String] = [:]
+        for run in history?.runs ?? [] { if let t = run.title, !t.isEmpty { titles[run.issue] = t } }
+        for row in queue?.rows ?? [] { if let t = row.title, !t.isEmpty { titles[row.id] = t } }
+        return titles
+    }
 }

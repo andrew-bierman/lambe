@@ -37,16 +37,12 @@ nonisolated struct ProcessRunner: CommandRunning {
 }
 
 nonisolated enum RexLocator {
-    /// A GUI app's PATH is minimal, so search the usual install homes too.
+    /// A GUI app's PATH is minimal, so the usual install homes are searched too.
     static func locate(
         env: [String: String] = ProcessInfo.processInfo.environment,
         isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
     ) -> String? {
-        let home = NSHomeDirectory()
-        let dirs = (env["PATH"] ?? "").split(separator: ":").map(String.init)
-            + ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"]
-        for dir in dirs where isExecutable("\(dir)/rex") { return "\(dir)/rex" }
-        return nil
+        ToolLocator.locate("rex", env: env, isExecutable: isExecutable)
     }
 }
 
@@ -59,15 +55,17 @@ nonisolated enum RunActionRunner {
         guard let rex = ctx.rexPath else {
             return ActionOutcome(ok: false, message: "Rex was not found on this Mac.")
         }
-        if await runner.run(rex, ["window", "focus", ctx.rexLabel]) == 0 {
+        let host = ctx.rexHostArgs
+        if await runner.run(rex, host + ["window", "focus", ctx.rexLabel]) == 0 {
             return ActionOutcome(ok: true, message: "Focused \(ctx.rexLabel) in Rex.")
         }
         let status = await runner.run(
-            rex, ["window", "new", ctx.rexLabel, "--"] + ctx.logsArgv
+            rex, host + ["window", "new", ctx.rexLabel, "--"] + ctx.logsArgv
         )
         return status == 0
-            ? ActionOutcome(ok: true, message: "Opened \(ctx.rexLabel) in Rex.")
-            : ActionOutcome(ok: false, message: "Rex could not open a window (is the Rex server running?). Use Open in Terminal instead.")
+            ? ActionOutcome(ok: true, message: "Opened \(ctx.rexLabel) in Rex\(ctx.remoteHost.map { " on \($0)" } ?? "").")
+            : ActionOutcome(ok: false, message: ctx.remoteHost.map { "Rex could not reach \($0). Check `rex hosts`, or run the logs command on that machine." }
+                ?? "Rex could not open a window (is the Rex server running?). Use Open in Terminal instead.")
     }
 
     /// Opens Terminal.app on a throwaway `.command` file that runs `command`.

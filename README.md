@@ -97,8 +97,15 @@ badge. See [Lambe in Rex](contrib/rex/README.md).
 
 `apps/dashboard` is a native SwiftUI app that attaches to a running daemon
 over its local, token-guarded state API and shows the same Queue, Attention,
-and History views. It is read-only. Build instructions and demo mode are in
-[apps/dashboard/README.md](apps/dashboard/README.md).
+and History views, live run output, and stall warnings. It is read-only, and
+hands a run to Rex (on the machine running the agent) or Terminal. Its run controls are read-only by design until the state API gets mutating actions. A setup
+guide finds your daemon or shows the commands to start one, and a demo mode
+needs no daemon. Build instructions, first-launch steps for the ad-hoc-signed
+download, and shortcuts are in [apps/dashboard/README.md](apps/dashboard/README.md).
+
+<p align="center">
+  <img src="docs/assets/dashboard-app-light.png" alt="The LambeDash Mac app showing a queue with one stalled run and live agent output" width="900">
+</p>
 
 ## Supported agents
 

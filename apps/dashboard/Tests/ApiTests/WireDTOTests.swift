@@ -242,9 +242,9 @@ struct WireDTOTests {
         #expect(SampleData.snapshot.needsHuman.count == 2)
         #expect(SampleData.snapshot.gateRejections.count == 2)
         #expect(SampleData.snapshot.daemon.version == "demo")
-        #expect(SampleData.queue.rows.count == 4)
+        #expect(SampleData.queue.rows.count == 5)
         #expect(SampleData.queue.rows.filter(\.blocked).count == 2)
-        #expect(SampleData.history.runs.count == 3)
+        #expect(SampleData.history.runs.count == 6)
         #expect(!SampleData.snapshot.isNewerThanSupported)
     }
 }

@@ -13,54 +13,52 @@ import SwiftUI
 // MARK: - Whole window
 
 #Preview("Live", traits: .fixedLayout(width: 1080, height: 700)) {
-    ShellView().environment(ConnectionModel.fixture(.live))
+    ShellView().previewEnvironment(.live)
 }
 
 #Preview("Stalled", traits: .fixedLayout(width: 1080, height: 700)) {
-    ShellView(initialIssue: "lam-103").environment(ConnectionModel.fixture(.stalled))
+    ShellView().previewEnvironment(.stalled, issue: "lam-103")
 }
 
 #Preview("Stalled · dark", traits: .fixedLayout(width: 1080, height: 700)) {
-    ShellView(initialIssue: "lam-103").environment(ConnectionModel.fixture(.stalled))
+    ShellView().previewEnvironment(.stalled, issue: "lam-103")
         .preferredColorScheme(.dark)
 }
 
 #Preview("Archive", traits: .fixedLayout(width: 1080, height: 700)) {
-    ShellView(initialSection: .history, initialIssue: "lam-090")
-        .environment(ConnectionModel.fixture(.archive))
+    ShellView().previewEnvironment(.archive, section: .history, issue: "lam-090")
 }
 
 #Preview("Empty", traits: .fixedLayout(width: 1080, height: 700)) {
-    ShellView().environment(ConnectionModel.fixture(.empty))
+    ShellView().previewEnvironment(.empty)
 }
 
 #Preview("Disconnected", traits: .fixedLayout(width: 1080, height: 700)) {
-    ShellView().environment(ConnectionModel.fixture(.disconnected))
+    ShellView().previewEnvironment(.disconnected)
 }
 
 #Preview("Never connected", traits: .fixedLayout(width: 1080, height: 700)) {
-    ShellView().environment(ConnectionModel.fixture(.neverConnected))
+    ShellView().previewEnvironment(.neverConnected)
 }
 
 #Preview("Long text", traits: .fixedLayout(width: 1080, height: 700)) {
-    ShellView(initialIssue: "lambe-with-an-extraordinarily-long-issue-identifier-0042")
-        .environment(ConnectionModel.fixture(.longText))
+    ShellView().previewEnvironment(.longText, issue: "lambe-with-an-extraordinarily-long-issue-identifier-0042")
 }
 
 #Preview("Multiple machines", traits: .fixedLayout(width: 1080, height: 700)) {
-    ShellView(initialIssue: "lam-103").environment(ConnectionModel.fixture(.multiMachine))
+    ShellView().previewEnvironment(.multiMachine, issue: "lam-103")
 }
 
 // MARK: - Columns and rows
 
 #Preview("Queue · narrow (320pt)", traits: .fixedLayout(width: 320, height: 520)) {
     QueueView(selectedIssue: .constant(nil))
-        .environment(ConnectionModel.fixture(.stalled))
+        .previewEnvironment(.stalled)
 }
 
 #Preview("Queue · narrow long text", traits: .fixedLayout(width: 320, height: 420)) {
     QueueView(selectedIssue: .constant(nil))
-        .environment(ConnectionModel.fixture(.longText))
+        .previewEnvironment(.longText)
 }
 
 #Preview("Run rows by liveness") {
@@ -119,28 +117,53 @@ import SwiftUI
 
 #Preview("Detail · stalled live run", traits: .fixedLayout(width: 440, height: 700)) {
     RunDetailView(selectedIssue: "lam-103", seed: previewSeed("lam-103", .stalled))
-        .environment(ConnectionModel.fixture(.stalled))
+        .previewEnvironment(.stalled)
 }
 
 #Preview("Detail · archived", traits: .fixedLayout(width: 440, height: 520)) {
     RunDetailView(selectedIssue: "lam-090", seed: previewSeed("lam-090", .archive))
-        .environment(ConnectionModel.fixture(.archive))
+        .previewEnvironment(.archive)
 }
 
 #Preview("Detail · nothing selected", traits: .fixedLayout(width: 440, height: 300)) {
     RunDetailView(selectedIssue: nil, seed: nil)
-        .environment(ConnectionModel.fixture(.empty))
+        .previewEnvironment(.empty)
 }
 
 #Preview("Actions · Rex installed") {
-    RunActionsSection(issue: "lam-103", configPath: "/Users/me/work/lambe.yaml", workspace: "/tmp",
-                      rexPath: "/usr/local/bin/rex")
+    RunActionsSection(context: RunActionContext(
+        issue: "lam-103", configPath: "/Users/me/work/lambe.yaml", localWorkspace: "/tmp",
+        rexPath: "/usr/local/bin/rex"))
+        .previewEnvironment(.live)
+        .padding().frame(width: 420)
+}
+
+#Preview("Actions · run on another machine") {
+    RunActionsSection(context: RunActionContext(
+        issue: "lam-103", rexPath: "/usr/local/bin/rex", remoteHost: "mac-mini"))
+        .previewEnvironment(.live)
         .padding().frame(width: 420)
 }
 
 #Preview("Actions · no Rex (fallback)") {
-    RunActionsSection(issue: "lam-103", configPath: nil, workspace: nil, rexPath: nil)
+    RunActionsSection(context: RunActionContext(issue: "lam-103"))
+        .previewEnvironment(.live)
         .padding().frame(width: 420)
+}
+
+#Preview("Setup guide", traits: .fixedLayout(width: 760, height: 700)) {
+    OnboardingView().previewEnvironment(.neverConnected)
+}
+
+extension View {
+    /// A fixture connection plus a shell model, for previews.
+    @MainActor
+    func previewEnvironment(
+        _ scenario: FixtureScenario, section: SidebarSection = .queue, issue: String? = nil
+    ) -> some View {
+        environment(ConnectionModel.fixture(scenario))
+            .environment(ShellModel(section: section, issue: issue))
+    }
 }
 
 @MainActor
