@@ -67,7 +67,7 @@ var (
 
 	errorStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.AdaptiveColor{Light: "#C0262D", Dark: "#FF6B6B"})
+			Foreground(lipgloss.AdaptiveColor{Light: "#B6242B", Dark: "#FF6B6B"})
 
 	runningStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -81,7 +81,7 @@ var (
 			Foreground(lipgloss.AdaptiveColor{Light: "#1B7F3B", Dark: "#5FD38D"})
 
 	redStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#C0262D", Dark: "#FF6B6B"})
+			Foreground(lipgloss.AdaptiveColor{Light: "#B6242B", Dark: "#FF6B6B"})
 
 	retryStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#805000", Dark: "#F3C582"})
