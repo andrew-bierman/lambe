@@ -5,7 +5,7 @@
 [![CI](https://github.com/andrew-bierman/lambe/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/andrew-bierman/lambe/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/andrew-bierman/lambe.svg)](https://pkg.go.dev/github.com/andrew-bierman/lambe)
 [![Go Report Card](https://goreportcard.com/badge/github.com/andrew-bierman/lambe)](https://goreportcard.com/report/github.com/andrew-bierman/lambe)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: GPL v3+](https://img.shields.io/badge/License-GPLv3+-blue.svg)](LICENSE)
 
 **Keep your agents working while you sleep. Follow their work in Rex.**
 
@@ -479,5 +479,5 @@ Restarting alone does not discard that safety record.
 
 ## License
 
-MIT. The OpenAI Symphony specification (Apache-2.0) is attributed in a
+GPL-3.0-or-later. The OpenAI Symphony specification (Apache-2.0) is attributed in a
 NOTICE-style comment in source; lambe is not affiliated with OpenAI.

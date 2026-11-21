@@ -37,5 +37,5 @@ Commit messages follow the repo's gitmoji + imperative summary convention
 
 ## Licensing
 
-By contributing you agree your contributions are licensed under the MIT
-license in [LICENSE](LICENSE).
+By contributing you agree your contributions are licensed under the GNU GPL v3.0 or
+later, as in [LICENSE](LICENSE).
