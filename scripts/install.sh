@@ -72,6 +72,25 @@ else
   curl -fsSL "$base/checksums.txt" -o "$tmp_dir/checksums.txt"
 fi
 
+# Optional: verify the signed checksums when cosign is installed. Releases
+# before v0.10.1 carry no bundle; that is not an error.
+if command -v cosign >/dev/null 2>&1; then
+  if [ "${LAMBE_PRIVATE_RELEASE:-0}" = 1 ]; then
+    gh release download "v$version" --repo andrew-bierman/lambe \
+      --dir "$tmp_dir" --pattern checksums.txt.sigstore.json 2>/dev/null || true
+  else
+    curl -fsSL "$base/checksums.txt.sigstore.json" -o "$tmp_dir/checksums.txt.sigstore.json" 2>/dev/null || true
+  fi
+  if [ -s "$tmp_dir/checksums.txt.sigstore.json" ]; then
+    cosign verify-blob "$tmp_dir/checksums.txt" \
+      --bundle "$tmp_dir/checksums.txt.sigstore.json" \
+      --certificate-identity "https://github.com/andrew-bierman/lambe/.github/workflows/release.yml@refs/tags/v$version" \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+  else
+    printf 'install.sh: no cosign bundle for v%s; skipping signature check\n' "$version"
+  fi
+fi
+
 # Verify the archive against the release checksums before extracting it.
 (
   cd "$tmp_dir"

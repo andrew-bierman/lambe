@@ -30,3 +30,63 @@ checksum:
 
 changelog:
   disable: true
+
+# Keyless (OIDC) signature over the checksums; verify with
+# `cosign verify-blob` as documented in docs/RELEASING.md.
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    output: true
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--yes"
+      - "--bundle=${signature}"
+      - "${artifact}"
+
+sboms:
+  - artifacts: archive
+
+nfpms:
+  - id: lambe
+    ids: [lambe]
+    package_name: lambe
+    file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    homepage: https://github.com/andrew-bierman/lambe
+    maintainer: Andrew Bierman <94939237+andrew-bierman@users.noreply.github.com>
+    description: Supervisor that runs coding agents against a Beads tracker and verifies completion.
+    license: GPL-3.0-or-later
+    formats: [deb, rpm, apk]
+    bindir: /usr/bin
+    contents:
+      # An example only: the package never installs or enables a service.
+      - src: examples/services/lambe.service
+        dst: /usr/share/doc/lambe/examples/lambe.service
+      - src: LICENSE
+        dst: /usr/share/doc/lambe/LICENSE
+
+# Needs the HOMEBREW_TAP_DEPLOY_KEY secret (write deploy key on the tap).
+brews:
+  - name: lambe
+    ids: [lambe]
+    homepage: https://github.com/andrew-bierman/lambe
+    description: Supervisor that runs coding agents against a Beads tracker and verifies completion
+    license: GPL-3.0-or-later
+    repository:
+      owner: andrew-bierman
+      name: homebrew-tap
+      branch: main
+      git:
+        url: git@github.com:andrew-bierman/homebrew-tap.git
+        private_key: "{{ .Env.HOMEBREW_TAP_DEPLOY_KEY_PATH }}"
+    commit_author:
+      name: andrew-bierman
+      email: 94939237+andrew-bierman@users.noreply.github.com
+    commit_msg_template: "🔖 lambe {{ .Tag }}"
+    dependencies:
+      - beads
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/lambe version")
+    caveats: |
+      lambe drives the Beads tracker through its `bd` binary (formula: beads).
+      Next: lambe init && lambe doctor && lambe service install

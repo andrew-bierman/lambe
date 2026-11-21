@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-21
+
+### Added
+
+- Homebrew formula: `brew install andrew-bierman/tap/lambe`.
+- `.deb`, `.rpm`, and `.apk` packages (amd64, arm64) with an example systemd unit under `/usr/share/doc/lambe/examples/`.
+- Keyless cosign signature for `checksums.txt`, an SBOM per archive, and GitHub build-provenance attestations; `scripts/install.sh` verifies the signature when `cosign` is installed.
+
+### Changed
+
+- Release workflow actions are pinned to commit SHAs.
+
 ## [0.10.0] - 2026-11-20
 
 ### Added
@@ -189,7 +201,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exposed via the `lambe` binary (`run`, `status`, `version`).
 - Documentation and CI.
 
-[Unreleased]: https://github.com/andrew-bierman/lambe/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/andrew-bierman/lambe/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/andrew-bierman/lambe/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/andrew-bierman/lambe/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/andrew-bierman/lambe/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/andrew-bierman/lambe/compare/v0.9.0...v0.9.1

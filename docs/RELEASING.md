@@ -69,9 +69,17 @@ remove in a later minor release and list it under "Removed".
    `scripts/release.sh` is a convenience; the checks that matter also run in
    CI. A `v*` tag whose CHANGELOG section is missing fails `ci` and `release`.
 3. **CLI release.** Pushing the tag runs `.github/workflows/release.yml`:
-   goreleaser builds linux/darwin x amd64/arm64 archives plus
-   `checksums.txt`, and publishes the GitHub release using the CHANGELOG
-   section as notes.
+   goreleaser builds linux/darwin x amd64/arm64 archives, `.deb`/`.rpm`/`.apk`
+   packages (nfpms), an SBOM per archive (syft), `checksums.txt` with a keyless
+   cosign bundle (`checksums.txt.sigstore.json`), pushes the Homebrew formula
+   to `andrew-bierman/homebrew-tap`, and publishes the GitHub release using the
+   CHANGELOG section as notes. The workflow then attests build provenance for
+   everything in `checksums.txt`.
+
+   Requirements: the `HOMEBREW_TAP_DEPLOY_KEY` Actions secret (private half of a
+   write deploy key on `andrew-bierman/homebrew-tap`; rotate by generating a new
+   ed25519 pair, replacing the deploy key and the secret). Third-party actions
+   are pinned to commit SHAs with the tag in a comment.
 4. **Mac app.** On a Mac with Xcode, from the tagged commit:
    ```sh
    git checkout vX.Y.Z
@@ -113,10 +121,40 @@ remove in a later minor release and list it under "Removed".
    cd /tmp/lambe-verify && shasum -a 256 -c checksums.txt --ignore-missing
    shasum -a 256 -c LambeDash.zip.sha256
    ```
+   See [Verifying a release](#verifying-a-release) for signatures and attestations.
 6. **Install check.** Unpack the archive for your platform and confirm
    `./lambe version --json` reports `"version": "vX.Y.Z"` and the expected
    `api_version`; open `LambeDash.app` (right-click Open for an ad-hoc build) and confirm About
    shows `X.Y.Z`.
+
+## Verifying a release
+
+From a directory holding `checksums.txt`, `checksums.txt.sigstore.json`, and the
+assets (v0.10.1 and later):
+
+```sh
+cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/andrew-bierman/lambe/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+shasum -a 256 -c checksums.txt --ignore-missing
+gh attestation verify lambe_X.Y.Z_linux_amd64.tar.gz --repo andrew-bierman/lambe
+```
+
+Each archive has an SBOM (`*.sbom.json`) alongside it.
+
+## Homebrew
+
+`brew install andrew-bierman/tap/lambe` installs the formula that goreleaser
+pushes to `andrew-bierman/homebrew-tap` on every release (it depends on the
+`beads` formula for `bd`). goreleaser marks `brews` deprecated in favor of
+`homebrew_casks`, but a cask would drop Linux support and, for an unsigned
+binary, need a quarantine-stripping hook; the formula stays until that breaks.
+
+**No LambeDash cask.** `LambeDash.app` is ad-hoc signed and not notarized.
+Homebrew rejects casks that fail Gatekeeper, so a cask would be broken or need
+a quarantine workaround. Revisit once a Developer ID and notarization are in
+place (`scripts/package-dashboard.sh` already supports them); until then the
+Mac app stays a manual release asset.
 
 ## Legacy
 
