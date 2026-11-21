@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-20
+
 ### Added
 
 - `lambe version --json` and a `state API` line in `lambe version`; development builds report `vX.Y.Z-dev+<shortsha>`.
@@ -14,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable machine/actor identity, `stall_after`, `probe_window`, and `gate.check_timeout`.
 - `lambe doctor` preflight checks and `lambe service install|status|uninstall` for launchd/systemd units.
 - Optional per-workflow `harness:` (pi, codex, or acp) for named workflows.
+- Rex: **Open Run by Workflow…**, **Switch Host…** and **Check Setup** palette actions, live and archived runs with the owning machine, and a headless `contrib/rex/check.lua`.
 - Mac app: first-run setup guide (finds running daemons, shows the exact `lambe` commands, starts a daemon in Terminal), live output that follows a running run, Rex handoff on the machine that owns the run (`rex -S`), workflow and machine on runs, run actions in a context menu and the menu bar with keyboard shortcuts, Settings (General, Instances, Tools), and `--demo` with richer sample data.
 - Mac app packaging: universal, ad-hoc signed with the hardened runtime, with app-icon checks; Developer ID signing and notarization are a drop-in through `APPLE_*` environment variables. First-launch steps for Gatekeeper are documented.
 
@@ -21,7 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Mac dashboard: run actions, stall display, and instance views; Rex action wiring.
 - Expand `docs/OPERATIONS.md` with the harness, workflow, dashboard, tuning, and restart-semantics reference.
-- Redesign the Mac dashboard as a tabbed table with a preview pane.
+- Redesign the terminal dashboard (`lambe tui`): header with daemon health and counts, Queue / Attention / History tabs, an aligned status table, a preview pane (side by side when wide, stacked or drill-in when narrow), and a contextual key-hint footer; it works down to a 40-column Rex split.
+- **License:** lambe is now GPL-3.0-or-later (was MIT). Earlier releases remain under MIT.
 - Releases now use a single `vX.Y.Z` tag for the CLI and the Mac app; see `docs/RELEASING.md`.
 - `scripts/install.sh` installs the latest release by default (checksum still verified) and prints next steps.
 
@@ -185,7 +189,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exposed via the `lambe` binary (`run`, `status`, `version`).
 - Documentation and CI.
 
-[Unreleased]: https://github.com/andrew-bierman/lambe/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/andrew-bierman/lambe/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/andrew-bierman/lambe/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/andrew-bierman/lambe/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/andrew-bierman/lambe/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/andrew-bierman/lambe/compare/v0.8.4...v0.9.0
