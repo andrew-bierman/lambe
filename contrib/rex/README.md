@@ -29,6 +29,21 @@ configuration, Beads tracker, and daemon state. See the
 [Rex custom UI docs](https://www.superlogical.com/rex/docs/customize/custom-ui)
 for the picker requirements.
 
+## Use Lambe across machines
+
+Run Lambe on each machine that should supervise work. Install the Rex actions
+on each host, and connect Rex to the host you want to monitor. From a shell,
+list configured Rex hosts and open that host's dashboard:
+
+```sh
+rex hosts
+rex -S my-host do lambe_dashboard
+```
+
+Each dashboard shows the selected host's daemon, workflows, and run history.
+Rex can connect to multiple hosts. Lambe currently has a separate dashboard
+for each host.
+
 ## One configuration for every live path
 
 Each Lambe configuration has its own daemon state, so every live action must

@@ -9,10 +9,9 @@
 
 **Keep your agents working while you sleep. Follow their work in Rex.**
 
-lambe is an MIT-licensed Go supervisor daemon for autonomous coding agents. It
-implements the OpenAI Symphony specification (§18.1, pinned to commit
-`8001b52`) and is Beads-native: it works against a Beads hub clone, a standalone
-repo, or an in-repo `.beads` directory.
+Lambe runs coding agents from your Beads queue, retries stalled runs, and
+checks that the work is done before moving on. Follow agent output and run
+history in Rex, or open the terminal dashboard from your shell.
 
 ![Lambe demo dashboard showing active, ready, and blocked work](docs/assets/dashboard.png)
 
