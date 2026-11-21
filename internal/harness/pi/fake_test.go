@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -32,7 +33,12 @@ const (
 	scriptSettleExit = "settle-exit"
 	scriptGrandkid   = "grandchild"
 	scriptGrandSleep = "grandchild-sleep"
+	// scriptProbeThenChatter is silent after the prompt ack, then emits
+	// events forever (never settling) once the steer probe arrives.
+	scriptProbeThenChatter = "probe-then-chatter"
 )
+
+var scriptCalls atomic.Int32
 
 // TestMain re-execs as the fake Pi when the behavior env var is set.
 func TestMain(m *testing.M) {
@@ -214,6 +220,14 @@ func scriptEvents(script string) {
 			})
 		}
 		blockForever()
+	case scriptProbeThenChatter:
+		if scriptCalls.Add(1) == 1 {
+			blockForever()
+		}
+		for {
+			event("agent_start", nil)
+			time.Sleep(40 * time.Millisecond)
+		}
 	case scriptSilentAck:
 		// Acked the prompt above, then goes silent forever.
 		blockForever()

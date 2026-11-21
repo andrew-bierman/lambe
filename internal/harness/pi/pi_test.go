@@ -330,6 +330,29 @@ func TestSilentChildSteerProbeThenLadder(t *testing.T) {
 	waitGroupGone(t, pgid, 5*time.Second)
 }
 
+// TestMaxRunSurvivesSteerProbe pins that the per-turn deadline still bounds a
+// run after a silence expiry sent the steer probe: an agent that answers the
+// probe with endless chatter and never settles must be killed at MaxRun, not
+// run forever.
+func TestMaxRunSurvivesSteerProbe(t *testing.T) {
+	opts, _ := testEnv(t, scriptProbeThenChatter, func(o *pi.Options) {
+		o.SilenceAfter = 150 * time.Millisecond
+		o.ProbeWindow = 200 * time.Millisecond
+		o.MaxRun = 1500 * time.Millisecond
+		o.TerminateGrace = 300 * time.Millisecond
+	})
+	d := pi.New(opts)
+	defer func() { _ = d.Close(t.Context()) }()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 6*time.Second)
+	defer cancel()
+	start := time.Now()
+	out, _ := d.Run(ctx, "go")
+	if out.Kind != harness.OutcomeWatchdogKilled {
+		t.Fatalf("outcome = %v after %s, want watchdog_killed at MaxRun", out.Kind, time.Since(start))
+	}
+}
+
 // TestLimitErrorStreamSuspected covers the heuristic limit classifier: a
 // stream of rate-limit error events yields a LimitSuspected outcome with a
 // wake-at time that does not consume an attempt.
