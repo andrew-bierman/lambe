@@ -3,7 +3,6 @@ package tracker
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -19,12 +18,7 @@ func TestShellTransportHungCommandTimesOut(t *testing.T) {
 	}
 	dir := t.TempDir()
 	script := filepath.Join(dir, "hung-bd")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 30\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(script, 0o755); err != nil { //nolint:gosec // an executable test fixture in a throwaway temp dir
-		t.Fatal(err)
-	}
+	writeExecutable(t, script, "#!/bin/sh\nsleep 30\n")
 	tr := NewShellTransport(script, dir, "lambe@test")
 	tr.CommandTimeout = 250 * time.Millisecond
 

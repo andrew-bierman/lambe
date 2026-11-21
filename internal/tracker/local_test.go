@@ -16,17 +16,12 @@ func TestLocalInitDoesNotInitializeAfterStatusTimeout(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "bd")
-	if err := os.WriteFile(bin, []byte(`#!/bin/sh
+	writeExecutable(t, bin, `#!/bin/sh
 case "$1" in
   status) printf started > status-started; exec sleep 10 ;;
   init) printf unexpected > init-started ;;
 esac
-`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(bin, 0o700); err != nil { // #nosec G302 -- private executable test fixture.
-		t.Fatal(err)
-	}
+`)
 	l, err := NewLocal(bin, dir, "test")
 	if err != nil {
 		t.Fatal(err)
