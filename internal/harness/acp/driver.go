@@ -550,11 +550,18 @@ func (d *Driver) submitTurn(_ context.Context, client *client, sessionID string,
 	return nil
 }
 
+// backstopSlack is how long the prompt context outlives MaxRun.
+const backstopSlack = time.Minute
+
 // turnDeadline bounds one submitted turn when no MaxRun is configured, so a
 // prompt can never wait forever independent of the watchdog.
 func (d *Driver) turnDeadline() time.Duration {
 	if d.opts.MaxRun > 0 {
-		return d.opts.MaxRun
+		// The watchdog owns the MaxRun deadline and reports it as a retryable
+		// watchdog kill. This context is only a backstop, so it must outlive
+		// the watchdog: with an equal deadline both fired together and the
+		// prompt's "context deadline exceeded" raced the kill outcome.
+		return d.opts.MaxRun + backstopSlack
 	}
 	if d.opts.SilenceAfter > 0 {
 		return 10 * d.opts.SilenceAfter
@@ -574,7 +581,9 @@ func (d *Driver) onStop(turn chan harness.Outcome, resp acpsdk.PromptResponse, e
 	d.mu.Unlock()
 	aborted := resp.StopReason == acpsdk.StopReasonCancelled || (abortRequested && isPromptCancellation(err))
 	if err != nil && !aborted {
-		if _, found := d.takeResult(0); !found {
+		// Peek, never take: consuming a watchdog kill outcome here would drop
+		// it and leave Run without a result.
+		if !d.resultPending() {
 			d.setStreaming(false)
 			d.emit(harness.AgentEndedEvent{})
 			d.deliverResult(harness.Outcome{
@@ -720,6 +729,15 @@ func (d *Driver) takeResult(window time.Duration) (harness.Outcome, bool) {
 	case <-timer.C:
 		return harness.Outcome{}, false
 	}
+}
+
+// resultPending reports whether an outcome is already queued for the active
+// run, without consuming it.
+func (d *Driver) resultPending() bool {
+	d.mu.Lock()
+	ch := d.result
+	d.mu.Unlock()
+	return ch != nil && len(ch) > 0
 }
 
 // deliverResult hands one outcome to the active Run, if any.
