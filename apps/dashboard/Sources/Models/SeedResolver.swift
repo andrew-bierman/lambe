@@ -41,6 +41,20 @@ nonisolated struct RunSeed: Equatable, Sendable {
     var gate: String?
     var gateReason: String?
     var gateAt: String?
+    /// Which payload resolved the row: drives the live/archived/queued
+    /// badge so the operator never mistakes history for a running agent.
+    var source: Source = .unknown
+
+    enum Source: Equatable, Sendable {
+        /// A snapshot run: supervised by the daemon right now.
+        case live
+        /// A readiness row with no run yet.
+        case queued
+        /// A finished attempt from history.
+        case archived
+        /// No payload mentions the issue.
+        case unknown
+    }
 }
 
 /// Resolves the seed for an issue ID across payloads. Lookup is by ID —
@@ -89,7 +103,8 @@ nonisolated enum SeedResolver {
                 state: run.state,
                 attempt: run.attempt,
                 updatedAt: run.lastEventAt,
-                blocked: false
+                blocked: false,
+                source: .live
             )
         }
         if let row = queue?.rows.first(where: { $0.id == issue }) {
@@ -101,7 +116,8 @@ nonisolated enum SeedResolver {
                 attempt: 0,
                 updatedAt: nil,
                 blocked: row.blocked,
-                queueReason: row.reason
+                queueReason: row.reason,
+                source: .queued
             )
         }
         if let run = history?.runs.first(where: { $0.issue == issue }) {
@@ -112,12 +128,22 @@ nonisolated enum SeedResolver {
                 state: run.state,
                 attempt: run.attempt,
                 updatedAt: run.updatedAt,
-                blocked: false
+                blocked: false,
+                source: .archived
             )
         }
         return RunSeed(
             issue: issue, title: nil, phase: nil, state: nil,
             attempt: 0, updatedAt: nil, blocked: false
         )
+    }
+}
+
+extension RunSeed {
+    /// Live only when the daemon still supervises a non-terminal run; a
+    /// terminal snapshot row is archived history.
+    var standing: Source {
+        if source == .live, !QueueComposition.isActive(state ?? "") { return .archived }
+        return source
     }
 }

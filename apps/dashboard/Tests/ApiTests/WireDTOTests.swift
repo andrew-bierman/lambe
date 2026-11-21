@@ -238,7 +238,7 @@ struct WireDTOTests {
 
     @Test("Sample demo payloads decode through the same contract path")
     func sampleData() {
-        #expect(SampleData.snapshot.runs.count == 2)
+        #expect(SampleData.snapshot.runs.count == 3)
         #expect(SampleData.snapshot.needsHuman.count == 2)
         #expect(SampleData.snapshot.gateRejections.count == 2)
         #expect(SampleData.snapshot.daemon.version == "demo")

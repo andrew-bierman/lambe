@@ -20,6 +20,14 @@ nonisolated enum SampleData {
     /// construction path, shared with the contract tests. The daemon
     /// identity inside is labeled `version: "demo"` so the footer can
     /// never pass demo data off as an attached daemon.
+    /// An RFC 3339 time `seconds` before first use, so demo ages (and the
+    /// stall classification) read the same whenever the app is opened.
+    static func ago(_ seconds: TimeInterval) -> String {
+        ISO8601DateFormatter().string(from: launch.addingTimeInterval(-seconds))
+    }
+
+    private static let launch = Date()
+
     static let snapshot: WireSnapshot = decode(
         """
         {
@@ -28,26 +36,28 @@ nonisolated enum SampleData {
                      "version": "demo", "config_path": "~/work/lambe.yaml"},
           "runs": [
             {"issue": "demo-hk4", "session": "sess-demo-a", "attempt": 2, "state": "running",
-             "last_event_age": "12s", "last_event_at": "2026-11-19T09:30:12Z", "phase": "gating"},
+             "last_event_age": "12s", "last_event_at": "\(ago(12))", "phase": "gating"},
             {"issue": "demo-pm7", "attempt": 1, "state": "deferred",
-             "last_event_age": "4m", "last_event_at": "2026-11-19T09:26:00Z", "phase": "retry"}
+             "last_event_age": "4m", "last_event_at": "\(ago(240))", "phase": "retry"},
+            {"issue": "demo-zq2", "session": "sess-demo-b", "attempt": 1, "state": "running",
+             "last_event_age": "9m", "last_event_at": "\(ago(540))", "phase": "running"}
           ],
-          "deferred_until": "2026-11-19T09:32:00Z",
-          "wake_at": "2026-11-19T09:32:00Z",
+          "deferred_until": "\(ago(-120))",
+          "wake_at": "\(ago(-120))",
           "needs_human": [
             {"issue": "demo-kd8", "reason": "gate rejected: pr checks red after two retries",
              "detail": "The verified-completion gate rejected the attempt twice.",
-             "since": "2026-11-19T09:02:00Z"},
+             "since": "\(ago(1700))"},
             {"issue": "demo-tw1", "reason": "agent exited without a verdict"}
           ],
           "gate_rejections": [
             {"issue": "demo-kd8", "gate": "gh:pr", "reason": "2 checks failing",
-             "at": "2026-11-19T09:02:00Z"},
+             "at": "\(ago(1700))"},
             {"issue": "demo-tw1", "reason": "gate output did not name a check"}
           ],
-          "runs_as_of": "2026-11-19T09:30:15Z",
-          "needs_human_as_of": "2026-11-19T09:30:02Z",
-          "gate_rejections_as_of": "2026-11-19T09:30:02Z"
+          "runs_as_of": "\(ago(5))",
+          "needs_human_as_of": "\(ago(5))",
+          "gate_rejections_as_of": "\(ago(5))"
         }
         """
     )
@@ -60,7 +70,7 @@ nonisolated enum SampleData {
           "schema_version": 1,
           "daemon": {"pid": 4242, "identity": "demo:incarnation:1", "machine": "workbench",
                      "version": "demo"},
-          "as_of": "2026-11-19T09:30:10Z",
+          "as_of": "\(ago(5))",
           "rows": [
             {"id": "demo-hk4", "title": "Wire the retry backoff", "reason": "ready: no open blockers"},
             {"id": "demo-fs2", "title": "Document the smoke suite", "reason": "ready: no open blockers"},
@@ -83,17 +93,17 @@ nonisolated enum SampleData {
           "schema_version": 1,
           "daemon": {"pid": 4242, "identity": "demo:incarnation:1", "machine": "workbench",
                      "version": "demo"},
-          "as_of": "2026-11-19T09:30:11Z",
+          "as_of": "\(ago(5))",
           "runs": [
             {"issue": "demo-rv3", "title": "Trim the config surface", "phase": "stopped: gate green",
              "state": "settled", "attempt": 1, "outcome": "settled",
-             "updated_at": "2026-11-19T08:54:00Z"},
+             "updated_at": "\(ago(2200))"},
             {"issue": "demo-bn6", "title": "Fix the launchd flake", "phase": "stopped: gate red",
              "state": "failed", "attempt": 3, "outcome": "failed",
-             "updated_at": "2026-11-19T08:21:30Z"},
+             "updated_at": "\(ago(4100))"},
             {"issue": "demo-ce1", "title": "Archive old attempts", "phase": "interrupted",
              "state": "interrupted", "attempt": 2,
-             "updated_at": "2026-11-19T07:40:00Z"}
+             "updated_at": "\(ago(6600))"}
           ]
         }
         """

@@ -94,6 +94,8 @@ local function open_demo()
   }
 end
 
+-- The window label `Lambe · <issue>` is a contract: the LambeDash app
+-- focuses an existing window with this label before opening a new one.
 local function open_run(issue, config)
   local command = { "lambe", "logs", "-issue", issue, "-follow" }
   for _, arg in ipairs(live_args(config)) do command[#command + 1] = arg end

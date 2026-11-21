@@ -2,9 +2,10 @@
 
 Native macOS SwiftUI app for the lambe daemon. It attaches to a running
 daemon over the daemon's authenticated local HTTP state API and renders
-Queue, Attention, History, and run detail. The app is read-only: it polls
-with GET requests and changes nothing — needs-human items are resolved in
-Beads or the tracker, not here.
+Queue, Attention, History, and run detail. The app never changes a run: it
+polls with GET requests, and needs-human items are resolved in Beads or the
+tracker. What it does offer is navigation (below): jump to a run in Rex, or
+fall back to Terminal, a copied command, or Finder.
 
 The project is a single committed `.xcodeproj` with no third-party
 dependencies and no code-generation step.
@@ -56,6 +57,68 @@ xcodebuild -project apps/dashboard/LambeDash.xcodeproj \
 
 `DerivedData/` and `.build/` under `apps/dashboard/` are git-ignored; keep
 build artifacts out of tracked source.
+
+## Stalled runs
+
+Silent stalling is the failure the app is built to surface. A running run
+whose last event is older than 2 minutes reads **quiet**; older than 5
+minutes it is **STALLED**: a red row with a "STALLED 9m" badge, a red banner
+above the queue naming every stalled run, a "N STALLED" window subtitle, and
+a red count on the instance in the sidebar. Deferred runs are never flagged
+(silence is expected while they back off), and a run with no observed event
+time reads "no events yet" rather than stalled. The thresholds live in
+`Sources/Models/StallPolicy.swift`; the daemon reports only the event time.
+
+## Run actions: Rex first, fallbacks always
+
+The run detail column opens with a LIVE / QUEUED / ARCHIVED badge, then an
+**Open** row. Only buttons that can work are shown:
+
+- **Open in Rex** (only when the `rex` CLI is found on `PATH`, `~/.local/bin`,
+  `/opt/homebrew/bin`, or `/usr/local/bin`): focuses the Rex window labelled
+  `Lambe · <issue>` if it exists (`rex window focus`), otherwise opens one
+  running `lambe logs -issue <issue> -follow` (`rex window new`). The label
+  matches the `lambe_open_run` action in `contrib/rex/lambe.lua`, so both
+  paths share one window per run. It targets Rex's default session and server.
+- **Open in Terminal**: runs the same logs command in Terminal.app.
+- **Copy logs command** / **Copy bd show**: the exact command, config pinned
+  with `-config` to the daemon the app is attached to.
+- **Reveal workspace**: the run's working directory in Finder, only when it
+  exists on this Mac.
+
+There is no retry, cancel, or nudge: the daemon's state API is read-only and
+its control surface (`internal/daemon/control.go`) is MCP-only.
+
+## Instances and machines
+
+The sidebar lists every configured instance (one per machine or workflow
+config) with its own status dot. The selected one shows its live connection
+state and stalled count; the others show what their live descriptor says
+(daemon up with pid and version, offline, or ambiguous), read from disk, not
+the network. Click an instance to switch to it. The content column's header
+names the attached instance, machine, and config file.
+
+## SwiftUI previews and screenshots
+
+`Sources/Views/Previews.swift` has previews for the whole window (live,
+stalled, stalled in dark mode, archive, empty, disconnected, never
+connected, long text, multiple machines) and for the queue at 320 pt, run
+rows by liveness, badges, instance rows, the detail column, and the action
+row with and without Rex. All of them use `ConnectionModel.fixture(_:)`
+(`Sources/Models/FixtureScenario.swift`): fixtures never poll, never read
+descriptors, and never touch the network.
+
+The same scenarios render in the real app:
+
+```
+LambeDash.app/Contents/MacOS/LambeDash -LambeScenario stalled -LambeIssue lam-103
+```
+
+`apps/dashboard/scripts/screenshots.sh [OUT_DIR] [scenario...]` builds into a
+temp DerivedData directory, launches each scenario for about two seconds,
+and writes one PNG per scenario (default `apps/dashboard/.build/screenshots/`).
+It needs a logged-in GUI session and Screen Recording permission for the
+terminal.
 
 ## Attaching to a daemon
 
@@ -168,6 +231,8 @@ Demo mode (above) covers the sample-data path.
 - `Tests/ApiTests/` — Swift Testing decode, store, and transport tests over
   the committed contract fixtures.
 - `Tests/ModelsTests/` — Swift Testing model state tests.
+- `Tests/ModelsTests/RunActionTests.swift` — stall policy, run actions,
+  standing, and fixture scenarios.
 - `Tests/AppSmokeTests.swift` — Swift Testing smoke suite proving the test
   harness runs; hosted in the app process.
 
