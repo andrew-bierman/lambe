@@ -68,6 +68,7 @@ nfpms:
 # Needs the HOMEBREW_TAP_DEPLOY_KEY secret (write deploy key on the tap).
 brews:
   - name: lambe
+    directory: Formula
     ids: [lambe]
     homepage: https://github.com/andrew-bierman/lambe
     description: Supervisor that runs coding agents against a Beads tracker and verifies completion
