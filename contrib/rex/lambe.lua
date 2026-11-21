@@ -333,3 +333,22 @@ rex.action{
   keywords = "lambe host machine remote mini switch server",
   run = function() rex.client.queue("client.host.switch") end,
 }
+
+-- Runs `lambe doctor` the way every other action runs lambe (login-shell
+-- PATH, same config and state directory) and returns its report. `rex do
+-- lambe_check` prints it; when an action cannot find lambe, this is the
+-- fastest way to see why.
+rex.action{
+  name = "lambe_check",
+  title = "Lambe: Check Setup",
+  category = "Lambe",
+  description = "Run lambe doctor with the same binary, config, and state the actions use",
+  keywords = "lambe doctor check setup troubleshoot path",
+  args = { config = "string?" },
+  run = function(_, args)
+    local r = exec_lambe(lambe_argv({ "doctor" }, args.config, true), 30)
+    if not r then return "could not start `" .. lambe_bin() .. "`; set LAMBE_REX_BIN or bin_override" end
+    rex.log(r.ok and "info" or "warn", "Lambe doctor exit " .. tostring(r.code))
+    return r.stdout .. r.stderr
+  end,
+}

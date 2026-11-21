@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Rex palette: `lambe.lua` now finds `lambe` through the login shell (Rex's `rex.exec` PATH omits `~/.local/bin`, so **Open Run…** failed), honors `LAMBE_REX_BIN` and `LAMBE_REX_STATE_DIR`, marks a stopped daemon's rows, shows each run's workflow and host, reuses an already-open run window, and adds **Open Run by Workflow…** and **Switch Host…**. `lambe logs -json` reports `Alive` and `Machine`, and Rex detection no longer autostarts a Rex server.
 - A tool call that is quiet for longer than `silence_timeout` is no longer killed as a stall (Pi and ACP); `turn_timeout` still bounds it.
 - ACP no longer closes its event stream under an in-flight emit (data race, possible send-on-closed-channel panic).
 - Sessions recovered after a daemon restart no longer fail every gate with "no gate formulas configured" when no gate snapshot was taken at claim time.

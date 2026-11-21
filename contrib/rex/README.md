@@ -1,64 +1,80 @@
 # Lambe in Rex
 
-Open the Lambe dashboard from the Rex command palette and keep run history,
-agent output, and Beads blockers one action away. The dashboard can reconnect
-to an existing Lambe daemon on the host where Rex opens the tab.
+Open the Lambe dashboard from the Rex command palette, find any live or
+archived run, and open its output on the machine that is running the agent.
+Lambe works the same without Rex; this directory only adds palette actions.
 
-## Add the actions
+Type **Lambe** in the Rex command palette:
 
-Copy [lambe.lua](lambe.lua) next to your Rex `init.lua`. Load it from
-`init.lua` with `dofile("/absolute/path/to/lambe.lua")`. Run
-`rex config check` and `rex config reload`, then search for **Lambe** in
-the command palette.
+| Action | What it does |
+| --- | --- |
+| **Lambe: Open Dashboard** | Opens `lambe tui` for this host's daemon. |
+| **Lambe: Open Demo** | Opens the dashboard with sample runs. |
+| **Lambe: Choose Dashboard…** | Native picker for the two above. |
+| **Lambe: Open Run…** | Native picker over current and archived runs. Each row shows the title, workflow, phase, attempt, and turn; archived runs are marked, and a stopped daemon's last rows say `daemon stopped`. The picker title names the machine whose runs it lists. Choosing a run opens `lambe logs -issue ID -follow` in a tab labeled `Lambe · ID`, or focuses that tab if it is already open. |
+| **Lambe: Open Run by Workflow…** | Pick a workflow, then one of its runs. Skips the first step when only one workflow has runs. |
+| **Lambe: Switch Host…** | Opens Rex's host picker. Rex runs the actions on the host the app is connected to, so switch to the machine running your agents, then use **Open Run…**. |
+| **Lambe: Check Setup** | Runs `lambe doctor` exactly as the other actions run `lambe`. |
 
-- **Lambe: Open Dashboard** opens `lambe tui` using Lambe's default config on
-  the Rex host. Use the TUI command palette (`:`) to pick a configured workflow.
-- **Lambe: Open Demo** opens an interactive dashboard with sample runs.
-- **Lambe: Choose Dashboard…** uses a native Rex picker to offer those two
-  destinations. It requires custom UI support on the connected server and
-  client. The direct actions are available on older Rex versions.
-- **Lambe: Open Run…** lists current and archived runs with a native Rex
-  picker and opens `lambe logs -issue ID -follow` for the chosen one in a new
-  tab. Run titles, phase, attempt, and turn appear in each row; archived runs
-  are marked. Cancel the picker to open nothing. On Rex versions without
-  custom UI, the action opens the terminal dashboard. For scripting, `rex do lambe_open_run issue=ac-123` skips the
-  picker entirely.
+On Rex servers without custom UI (see [Troubleshooting](#troubleshooting)),
+the picker actions open the dashboard instead. For scripts,
+`rex do lambe_open_run issue=ac-123` skips the picker.
 
-The Rex host needs `lambe` on its PATH. The live dashboard uses that host's
-configuration, Beads tracker, and daemon state. See the
-[Rex custom UI docs](https://www.superlogical.com/rex/docs/customize/custom-ui)
-for the picker requirements.
+## Install
+
+Do this on every machine whose Rex server should offer the actions. The
+actions run on the Rex **server**, so the file goes on the host that runs the
+server, not on the machine whose app you are looking at.
+
+1. Put `lambe` where a login shell finds it (`zsh -l -c 'command -v lambe'`),
+   or pin its path in step 3.
+2. Copy `lambe.lua` next to Rex's `init.lua` (`~/.config/rex/` on macOS and
+   Linux) and load it from `init.lua`:
+
+   ```lua
+   dofile(os.getenv("HOME") .. "/.config/rex/lambe.lua")
+   ```
+
+3. Optional: pin the binary, config, and state directory. Set
+   `LAMBE_REX_BIN`, `LAMBE_REX_CONFIG`, and `LAMBE_REX_STATE_DIR` in the Rex
+   server's environment, or edit `bin_override`, `override`, and
+   `state_dir_override` at the top of `lambe.lua`. Use them when the daemon
+   runs from a service unit with its own `LAMBE_STATE_DIR` or config. Every
+   action then reads the same daemon, so the picker never disagrees with the
+   dashboard.
+4. Load it. Reload on the machine that runs the server; a remote reload is
+   refused (`server.config_reload requires the local Unix socket`):
+
+   ```sh
+   rex config check
+   rex config reload            # on the server's own machine
+   rex actions | grep lambe     # seven lambe_* actions
+   ```
+
+5. Verify the setup in the server's own environment, then in a headless
+   stand-in for the palette (no app, no focus change):
+
+   ```sh
+   rex do lambe_check                                   # lambe doctor, via the actions' PATH
+   LAMBE_REX_LUA=~/.config/rex/lambe.lua rex do contrib/rex/check.lua
+   ```
+
+   `check.lua` loads `lambe.lua` with a stubbed `rex`, answers each picker
+   with its first row, and prints `PASS` plus the rows. For a remote host,
+   run `lambe_check` with `rex -S HOST do lambe_check`.
 
 ## Use Lambe across machines
 
-Run Lambe on each machine that should supervise work. Install the Rex actions
-on each host, and connect Rex to the host you want to monitor. From a shell,
-list configured Rex hosts and open that host's dashboard:
+Run Lambe on each machine that supervises work, install the actions on each
+Rex host, and connect the Rex app to the host you want. Switching hosts
+(**Lambe: Switch Host…** or Rex's own host switcher) changes which machine's
+runs the picker lists and where the output tab opens. From a shell:
 
 ```sh
 rex hosts
 rex -S my-host do lambe_dashboard
+rex -S my-host do lambe_open_run issue=ac-123
 ```
-
-Each dashboard shows the selected host's daemon, workflows, and run history.
-Rex can connect to multiple hosts. Lambe currently has a separate dashboard
-for each host.
-
-## One configuration for every live path
-
-Each Lambe configuration has its own daemon state, so every live action must
-read the same one or the picker shows a different daemon than the dashboard
-opens. By default the actions use Lambe's default config. To pin all of them
-(dashboard, run list, and run follow) to one explicit file, set
-`LAMBE_REX_CONFIG` to that config's path in the Rex server's environment, or
-set the `override` variable at the top of `lambe.lua`:
-
-```lua
-local override = "/absolute/path/to/lambe.yaml"
-```
-
-`lambe tui -demo` never takes `-config`, so the demo always uses the host's
-default configuration.
 
 ## From the LambeDash app
 
@@ -71,5 +87,43 @@ app does not need `lambe.lua` installed.
 ## Daemon status
 
 When the daemon runs inside a Rex terminal, it can publish an OSC program
-status badge to that pane. A daemon running under launchd or systemd keeps
-supervising when Rex closes. Open a dashboard tab to follow that daemon.
+status badge to that pane. Rex detection only observes: Lambe never starts a
+Rex server to look for one. A daemon under launchd or systemd keeps
+supervising when Rex closes; open a dashboard tab to follow it.
+
+## Troubleshooting
+
+**The picker shows nothing, or the log says `could not start lambe` / exit
+127.** Rex starts programs with a minimal `PATH` (`/usr/bin:/bin:...`), so a
+`lambe` in `~/.local/bin` is invisible unless run through your login shell,
+which `lambe.lua` now does. If your login shell still cannot find it, set
+`LAMBE_REX_BIN` or `bin_override` to an absolute path. `rex do lambe_check`
+shows what the actions see.
+
+**Open Run… opens the dashboard instead of a picker.** The Rex server has no
+custom UI (`rex.ui`). Check `rex whoami --json | grep rex_version`; custom UI
+is absent in `0.1.0-preview.19` and present in `0.1.0-preview.21`, and the app
+must be new enough to show prompts. Restart the server after updating Rex.
+
+**`rex config reload` fails for a remote host.** Run it on that machine, for
+example in a terminal tab on the host.
+
+**The picker lists different runs than the dashboard.** The two read
+different daemons. Pin `LAMBE_REX_CONFIG` and `LAMBE_REX_STATE_DIR` (or
+`override` and `state_dir_override`) to the daemon's own values; the
+dashboard and the picker then agree.
+
+**Rows say `daemon stopped`.** The daemon that wrote the snapshot is gone, so
+those rows are its last state. Start it (`lambe run` or `lambe service
+install`); history stays readable meanwhile.
+
+**The output opened on the wrong machine.** The action ran on the host your
+app is connected to. Use **Lambe: Switch Host…**, then pick the run again; the
+picker title says `on <machine>`.
+
+**Nothing named Lambe in the palette.** Run `rex config check` (it reports a
+Lua error) and `rex actions | grep lambe`. Rex loads one `init.lua`; make sure
+it calls `dofile` on `lambe.lua`.
+
+**`lambe tui -demo` rejects `-config`.** The demo never takes a config; it
+uses sample data.
