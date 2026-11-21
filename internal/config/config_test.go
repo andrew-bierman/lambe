@@ -542,6 +542,9 @@ func TestStallAndTimeoutKnobs(t *testing.T) {
 		if _, err := Load(Options{File: writeTemp(t, section+":\n  "+name+": "+val+"\n"), Env: []string{}}); err == nil {
 			t.Errorf("%s accepted, want a validation error", bad)
 		}
+	}
+}
+
 func TestAutoReclaimDefaultsOffAndValidatesGrace(t *testing.T) {
 	cfg, err := Load(Options{Env: []string{}})
 	if err != nil {
