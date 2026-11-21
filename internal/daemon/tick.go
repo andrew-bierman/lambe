@@ -273,6 +273,33 @@ func HeartbeatLoop(ctx context.Context, tr tracker.Tracker, actor string, interv
 	}
 }
 
+// ReclaimLoop reverts stale-lease claims (dead-worker recovery) every
+// interval: in_progress issues whose lease expired more than grace ago go
+// back to open so a live host can claim them. It is opt-in
+// (supervisor.auto_reclaim) because a reaper on a shared tracker can
+// revert a live-but-partitioned worker's unit; the ownership fences (guarded
+// close, heartbeat ErrNotOwner) make that safe, not free. Errors are logged
+// and retried on the next beat.
+func ReclaimLoop(ctx context.Context, tr tracker.Tracker, interval, grace time.Duration, log *slog.Logger) {
+	if log == nil {
+		log = slog.Default()
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			roundCtx, cancel := context.WithTimeout(ctx, heartbeatRoundBound)
+			if err := tr.Reclaim(roundCtx, grace, nil); err != nil {
+				log.Warn("reclaim failed", "category", ErrorCategory(err), "error", err)
+			}
+			cancel()
+		}
+	}
+}
+
 // ChildSet tracks the live supervised children so shutdown can run the
 // bounded kill ladder against every process group.
 type ChildSet struct {

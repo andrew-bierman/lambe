@@ -33,6 +33,7 @@ const (
 	defaultHeartbeatInterval  = 150 * time.Second
 	defaultHeartbeatTTLSecond = 450
 	defaultStallAfter         = DefaultStallAfter
+	defaultReclaimGrace       = 10 * time.Minute
 	defaultStateAPIAddr       = "127.0.0.1:0"
 )
 
@@ -44,6 +45,12 @@ type Supervisor struct {
 	TurnTimeout        time.Duration
 	HeartbeatInterval  time.Duration
 	HeartbeatTTLSecond int
+	// AutoReclaim makes the daemon run `bd reclaim` every tick, reverting
+	// in_progress issues whose lease expired more than ReclaimGrace ago back
+	// to open. Default off: enable it only for a multi-host deployment
+	// sharing one Dolt server (see docs/MULTI-MACHINE.md).
+	AutoReclaim  bool
+	ReclaimGrace time.Duration
 	// StallAfter is the single stall threshold: a running run with no agent
 	// activity for this long is "stalled" to the state API, dashboard,
 	// TUI, and doctor. It is observation only; the watchdog still acts at
@@ -201,6 +208,8 @@ func Load(opts Options) (*Config, error) {
 			HeartbeatTTLSecond: k.Int("supervisor.heartbeat_ttl_second"),
 			StallAfter:         k.Duration("supervisor.stall_after"),
 			ProbeWindow:        k.Duration("supervisor.probe_window"),
+			AutoReclaim:        k.Bool("supervisor.auto_reclaim"),
+			ReclaimGrace:       k.Duration("supervisor.reclaim_grace"),
 		},
 		Gate:          Gate{CheckTimeout: k.Duration("gate.check_timeout")},
 		Machine:       strings.TrimSpace(k.String("machine")),
@@ -342,6 +351,8 @@ func defaultsProvider() *confmap.Confmap {
 			"heartbeat_interval":   defaultHeartbeatInterval.String(),
 			"heartbeat_ttl_second": defaultHeartbeatTTLSecond,
 			"stall_after":          defaultStallAfter.String(),
+			"auto_reclaim":         false,
+			"reclaim_grace":        defaultReclaimGrace.String(),
 		},
 	}, ".")
 }
@@ -505,6 +516,9 @@ func validate(cfg *Config) []error {
 	if s.HeartbeatInterval <= 0 {
 		errs = append(errs, fmt.Errorf("supervisor.heartbeat_interval must be positive, got %s", s.HeartbeatInterval))
 	}
+	if s.AutoReclaim && s.ReclaimGrace <= time.Duration(s.TickSeconds)*time.Second {
+		errs = append(errs, fmt.Errorf("supervisor.reclaim_grace (%s) must exceed the tick interval (%ds): a slow sync must not read as a dead worker", s.ReclaimGrace, s.TickSeconds))
+	}
 
 	if cfg.StateAPI.Enable {
 		if err := validateLoopbackAddr(cfg.StateAPI.Addr); err != nil {
@@ -557,6 +571,7 @@ func (c *Config) Summary() string {
 	b.WriteString(" turn_timeout=" + c.Supervisor.TurnTimeout.String())
 	b.WriteString(" heartbeat_interval=" + c.Supervisor.HeartbeatInterval.String())
 	b.WriteString(" stall_after=" + c.Supervisor.StallAfter.String())
+	b.WriteString(" auto_reclaim=" + strconv.FormatBool(c.Supervisor.AutoReclaim))
 	b.WriteString(" trackers=" + strconv.Itoa(len(c.Trackers)))
 	if c.StateAPI.Enable {
 		b.WriteString(" stateapi=on addr=" + c.StateAPI.Addr)

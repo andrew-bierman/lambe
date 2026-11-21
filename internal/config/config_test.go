@@ -544,3 +544,30 @@ func TestStallAndTimeoutKnobs(t *testing.T) {
 		}
 	}
 }
+
+func TestAutoReclaimDefaultsOffAndValidatesGrace(t *testing.T) {
+	cfg, err := Load(Options{Env: []string{}})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Supervisor.AutoReclaim {
+		t.Error("auto_reclaim must default to false")
+	}
+	if cfg.Supervisor.ReclaimGrace != 10*time.Minute {
+		t.Errorf("reclaim_grace: got %s, want 10m", cfg.Supervisor.ReclaimGrace)
+	}
+
+	on, err := Load(Options{File: writeTemp(t, "supervisor:\n  auto_reclaim: true\n"), Env: []string{}})
+	if err != nil || !on.Supervisor.AutoReclaim {
+		t.Fatalf("auto_reclaim: true: got %+v, %v", on, err)
+	}
+
+	_, err = Load(Options{File: writeTemp(t, "supervisor:\n  auto_reclaim: true\n  reclaim_grace: 5s\n"), Env: []string{}})
+	if err == nil || !strings.Contains(err.Error(), "reclaim_grace") {
+		t.Errorf("grace below tick interval with auto_reclaim: got %v, want reclaim_grace error", err)
+	}
+	// A short grace is only a problem when the reaper is on.
+	if _, err := Load(Options{File: writeTemp(t, "supervisor:\n  reclaim_grace: 5s\n"), Env: []string{}}); err != nil {
+		t.Errorf("short grace with auto_reclaim off: %v", err)
+	}
+}
