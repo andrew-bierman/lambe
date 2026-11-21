@@ -1,0 +1,24 @@
+ Demo ⚠1 · 2 active · 1 waiting
+╭──────────────────────────────────────╮
+│  Run queue  ·  7                     │
+│                                      │
+│ │ ▶ demo-42  Verify the release bui… │
+│   ⚠ demo-43  Recheck the artifact c… │
+│   ↻ demo-44  Retry the install smok… │
+│   ✘ demo-45  Validate the migration… │
+│   ✔ demo-46  Check upgrade instruct… │
+│   ◇ demo-47  Document the recovery … │
+│   ! demo-48  Publish migration note… │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+╰──────────────────────────────────────╯
+ enter details : cmd h hist ?

@@ -1,0 +1,12 @@
+ lambe   ●  demo  ⚠1  2▶ 1↻
+ 1 Queue 7 │ 2 Attn 3 │ 3 Hist 3
+ demo-42  ▶ running  output 8s ago
+ Verify the release build
+ Build event 29: verifying release
+ artifacts
+ Build event 30: verifying release
+ artifacts
+ ✓ Linux amd64 and arm64 checks passed
+ ✓ Release archives match the manifest
+ … Waiting for the macOS smoke test
+ esc back  G latest  : cmd    following

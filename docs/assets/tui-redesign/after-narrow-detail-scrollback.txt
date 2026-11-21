@@ -1,0 +1,24 @@
+ lambe   ●  demo  ⚠1  2▶ 1↻
+ 1 Queue 7 │ 2 Attn 3 │ 3 Hist 3
+━━━━━━━━━━━─────────────────────────────
+   ID      TITLE                     AGE
+▌▶ demo-42 Verify the release bu…    24s
+ ⚠ demo-43 Recheck the artifact …     4m
+ ↻ demo-44 Retry the install smo… in 43s
+ ✘ demo-45 Validate the migration     2m
+ ✔ demo-46 Check upgrade instruc…     5m
+ ◇ demo-47 Document the recovery…
+ ! demo-48 Publish migration not…
+
+
+
+
+ demo-42  ▶ running  output 24s ago
+ Build event 26: verifying release
+ artifacts
+ Build event 27: verifying release
+ artifacts
+ Build event 28: verifying release
+ artifacts
+ Build event 29: verifying release
+ esc back  G latest  : cmd   scroll 90%

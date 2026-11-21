@@ -1,0 +1,24 @@
+ lambe   ● running  demo  ⚠ 1 stalled  2 active · 1 waiting
+ 1 Queue 7 │ 2 Attention 3 │ 3 History 3
+━━━━━━━━━━━─────────────────────────────────────────────────
+   ID      TITLE                            PHASE        AGE
+▌▶ demo-42 Verify the release build         running      35s
+ ⚠ demo-43 Recheck the artifact checksum    stalled       4m
+ ↻ demo-44 Retry the install smoke test     retry     in 32s
+ ✘ demo-45 Validate the migration           escalated     2m
+ ✔ demo-46 Check upgrade instructions       passed        5m
+ ◇ demo-47 Document the recovery workflow   ready
+ ! demo-48 Publish migration notes          blocked
+
+
+
+
+ demo-42  ▶ running  output 35s ago
+ Build event 27: verifying release artifacts
+ Build event 28: verifying release artifacts
+ Build event 29: verifying release artifacts
+ Build event 30: verifying release artifacts
+ ✓ Linux amd64 and arm64 checks passed
+ ✓ Release archives match the manifest
+ … Waiting for the macOS smoke test
+ enter open  : cmd  ? help  q quit  1-3 views           1/7

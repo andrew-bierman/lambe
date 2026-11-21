@@ -1,0 +1,24 @@
+ Demo ⚠1 · 2 active · 1 waiting
+╭──────────────────────────────────────╮
+│  demo-42  ·  ▶ running  ·  54s ago   │
+│ Build event 24: verifying release    │
+│ artifacts                            │
+│ Build event 25: verifying release    │
+│ artifacts                            │
+│ Build event 26: verifying release    │
+│ artifacts                            │
+│ Build event 27: verifying release    │
+│ artifacts                            │
+│ Build event 28: verifying release    │
+│ artifacts                            │
+│ Build event 29: verifying release    │
+│ artifacts                            │
+│ Build event 30: verifying release    │
+│ artifacts                            │
+│ ✓ Linux amd64 and arm64 checks       │
+│ passed                               │
+│ ✓ Release archives match the         │
+│ manifest                             │
+│ … Waiting for the macOS smoke test   │
+╰──────────────────────────────────────╯
+ esc runs G end : cmd ?

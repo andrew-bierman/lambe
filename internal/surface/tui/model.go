@@ -39,25 +39,11 @@ import (
 	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
-const (
-	tickInterval = 250 * time.Millisecond
-	splitWidth   = 72
-)
+const tickInterval = 250 * time.Millisecond
 
 // Styles.
 var (
 	accentColor = lipgloss.AdaptiveColor{Light: "#6941A5", Dark: "#C5A7FF"}
-
-	activeTabStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#FFFFFF")).
-			Background(lipgloss.AdaptiveColor{Light: "#6236A1", Dark: "#654399"}).
-			Padding(0, 1)
-
-	inactiveTabStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.AdaptiveColor{Light: "#504365", Dark: "#C7BFD1"}).
-				Background(lipgloss.AdaptiveColor{Light: "#EBE1FF", Dark: "#29203A"}).
-				Padding(0, 1)
 
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -70,21 +56,18 @@ var (
 			Background(lipgloss.AdaptiveColor{Light: "#F3EFF7", Dark: "#211B2A"}).
 			Padding(0, 1)
 
-	separatorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#3A3A4A"))
-
 	labelStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#A0A0A0"))
+			Foreground(colFaint)
 
 	valueStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#21182B", Dark: "#FAFAFA"})
 
 	dimStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#808080"))
+			Foreground(colFaint)
 
 	errorStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#FF5555"))
+			Foreground(lipgloss.AdaptiveColor{Light: "#C0262D", Dark: "#FF6B6B"})
 
 	runningStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -95,16 +78,16 @@ var (
 			Foreground(lipgloss.AdaptiveColor{Light: "#245C82", Dark: "#9FCAEF"})
 
 	greenStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#00AA00"))
+			Foreground(lipgloss.AdaptiveColor{Light: "#1B7F3B", Dark: "#5FD38D"})
 
 	redStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FF5555"))
+			Foreground(lipgloss.AdaptiveColor{Light: "#C0262D", Dark: "#FF6B6B"})
 
 	retryStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#805000", Dark: "#F3C582"})
 
 	neutralStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#AAAAAA"))
+			Foreground(lipgloss.AdaptiveColor{Light: "#6B6378", Dark: "#AAA3B5"})
 )
 
 // runItem adapts a live run to the bubbles/list Item interface.
@@ -138,32 +121,6 @@ func stalledFor(run daemon.LiveRun, live bool, now time.Time) time.Duration {
 	}
 	return 0
 }
-
-func (i runItem) Title() string {
-	icon, _ := phasePresentation(i.run.Phase)
-	stalled := stalledFor(i.run, i.live, time.Now())
-	if stalled > 0 {
-		icon = "⚠"
-	}
-	phase := strings.SplitN(i.run.Phase, ":", 2)[0]
-	if stalled > 0 {
-		phase = "stalled " + shortAge(stalled)
-	}
-	if phase == "stopped" {
-		if i.run.Phase == "stopped: gate green" {
-			phase = "passed"
-		} else {
-			phase = "stopped"
-		}
-	}
-	title := icon + " " + i.run.IssueID
-	if i.run.Title != "" {
-		title += "  " + i.run.Title
-	}
-	return title + " · " + phase
-}
-
-func (i runItem) Description() string { return "" }
 
 func (i runItem) FilterValue() string {
 	return strings.Join([]string{i.run.IssueID, i.run.Title, i.run.Phase}, " ")
@@ -313,9 +270,15 @@ type Model struct {
 	showHistory     bool
 	showAttention   bool
 	loading         bool
-	paneHeaders     bool
-	panelInset      int
 	stacked         bool
+	split           bool
+	colHeader       bool
+	previewHeader   bool
+	tabsH           int
+	bodyH           int
+	pins            int
+	tableWidth      int
+	previewWidth    int
 }
 
 // snapshotMsg carries a freshly read live snapshot.
@@ -351,19 +314,13 @@ func New(path string) *Model {
 		loading: true,
 	}
 	m.keys = defaultKeyMap(&m.focus)
-	delegate := list.NewDefaultDelegate()
-	delegate.ShowDescription = false
-	delegate.SetHeight(1)
-	delegate.SetSpacing(0)
-	selection := lipgloss.AdaptiveColor{Light: "#EBE1FF", Dark: "#29203A"}
-	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
-		Bold(true).Foreground(accentColor).Background(selection).BorderForeground(accentColor)
-	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.
-		Foreground(accentColor).Background(selection).BorderForeground(accentColor)
-	m.list = list.New(nil, delegate, 0, 0)
+	m.list = list.New(nil, rowDelegate{}, 0, 0)
 	m.list.SetShowHelp(false)
 	m.list.SetShowTitle(false)
 	m.list.SetShowStatusBar(false)
+	m.list.SetShowPagination(false)
+	m.list.SetShowFilter(false) // the table draws its own filter prompt
+	m.list.FilterInput.Prompt = "/ "
 	m.list.DisableQuitKeybindings()
 
 	m.detail = viewport.New(0, 0)
@@ -655,46 +612,6 @@ func (m *Model) scrollDetail(msg tea.KeyMsg) (tea.Cmd, bool) {
 	return nil, false
 }
 
-func (m *Model) scrollMouse(msg tea.MouseMsg) {
-	firstRow := 1 + m.panelInset
-	if m.paneHeaders {
-		firstRow++
-	}
-	pane := m.focus
-	height := m.list.Height()
-	switch {
-	case m.stacked:
-		pane = focusList
-		if msg.Y >= firstRow+m.list.Height() {
-			firstRow += m.list.Height() + 2*m.panelInset + 1
-			pane = focusDetail
-			height = m.detail.Height
-		}
-	case m.width >= splitWidth:
-		switch {
-		case msg.X < m.list.Width()+4*m.panelInset:
-			pane = focusList
-		case msg.X >= m.list.Width()+3+4*m.panelInset:
-			pane = focusDetail
-		default:
-			return
-		}
-	}
-	if msg.Y < firstRow || msg.Y >= firstRow+height {
-		return
-	}
-	if pane == focusDetail {
-		m.detail, _ = m.detail.Update(msg)
-		return
-	}
-	if msg.Button == tea.MouseButtonWheelUp {
-		m.list.CursorUp()
-	} else {
-		m.list.CursorDown()
-	}
-	m.syncSelection()
-}
-
 func (m *Model) updateFocused(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	if m.focus == focusDetail {
@@ -703,42 +620,6 @@ func (m *Model) updateFocused(msg tea.Msg) tea.Cmd {
 		m.list, cmd = m.list.Update(msg)
 	}
 	return cmd
-}
-
-// layout sizes the panes from the current window and help state.
-func (m *Model) layout() {
-	if m.width <= 0 || m.height <= 0 {
-		return
-	}
-	bodyHeight := max(1, m.height-1-lipgloss.Height(m.renderFooter()))
-	listWidth, detailWidth := m.width, m.width
-	if m.width >= splitWidth {
-		availableWidth := m.width - 3
-		detailWidth = max(36, availableWidth*2/5)
-		listWidth = availableWidth - detailWidth
-	}
-
-	m.paneHeaders = bodyHeight > 1
-	if m.paneHeaders {
-		bodyHeight--
-	}
-	m.panelInset = 0
-	if m.width >= 28 && bodyHeight >= 5 {
-		m.panelInset = 1
-		bodyHeight -= 2
-		listWidth -= 4
-		detailWidth -= 4
-	}
-	m.stacked = m.width >= 44 && m.width < splitWidth && bodyHeight >= 13
-	listHeight, detailHeight := bodyHeight, bodyHeight
-	if m.stacked {
-		availableHeight := bodyHeight - 1 - 2*m.panelInset
-		detailHeight = availableHeight * 2 / 5
-		listHeight = availableHeight - detailHeight
-	}
-	m.list.SetSize(listWidth, listHeight)
-	m.detail.Width = detailWidth
-	m.detail.Height = detailHeight
 }
 
 func (m *Model) setHistory(show bool) {
@@ -772,20 +653,25 @@ func (m *Model) setQueueView(history, attention bool) {
 }
 
 func (m *Model) visibleRuns() []daemon.LiveRun {
-	if !m.showHistory {
-		if !m.showAttention && len(m.upcoming) == 0 {
+	return m.runsFor(m.showHistory, m.showAttention)
+}
+
+// runsFor returns the runs of one dashboard view (queue, attention or history).
+func (m *Model) runsFor(showHistory, showAttention bool) []daemon.LiveRun {
+	if !showHistory {
+		if !showAttention && len(m.upcoming) == 0 {
 			return m.snapshot.Runs
 		}
 		runs := make([]daemon.LiveRun, 0, len(m.snapshot.Runs)+len(m.upcoming))
 		seen := make(map[string]bool, len(m.snapshot.Runs))
 		for _, run := range m.snapshot.Runs {
 			seen[run.IssueID] = true
-			if !m.showAttention || needsAttention(run.Phase) {
+			if !showAttention || needsAttention(run.Phase) {
 				runs = append(runs, run)
 			}
 		}
 		for _, run := range m.upcoming {
-			if !seen[run.IssueID] && (!m.showAttention || run.Phase == "blocked") {
+			if !seen[run.IssueID] && (!showAttention || run.Phase == "blocked") {
 				runs = append(runs, run)
 			}
 		}
@@ -873,7 +759,7 @@ func (m *Model) refreshDetail(follow bool) {
 		m.detail.SetContent(dimStyle.Render("No active run. Output appears here when a run starts."))
 		return
 	}
-	content := detailContent(run, m.detail.Width)
+	content := detailBody(run, m.detail.Width, m.pins)
 	if run.Thread != "" && run.Thread == m.agentSession.thread {
 		info := m.agentSession.details
 		if m.agentSession.err != nil {
@@ -913,272 +799,10 @@ func (m *Model) View() string {
 	if m.height == 2 {
 		return lipgloss.JoinVertical(lipgloss.Left, header, footer)
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, header, m.renderBody(), footer)
-}
-
-func (m *Model) renderHeader() string {
-	state := "stopped"
-	stateStyle := redStyle
-	if m.alive {
-		state = "running"
-		stateStyle = runningStyle
+	if m.tabsH == 0 {
+		return lipgloss.JoinVertical(lipgloss.Left, header, m.renderBody(), footer)
 	}
-	updated := "never"
-	if !m.snapshot.UpdatedAt.IsZero() {
-		updated = m.snapshot.UpdatedAt.Format("15:04:05")
-	}
-	active, waiting, stalled := 0, 0, 0
-	if m.alive {
-		now := time.Now()
-		for _, run := range m.snapshot.Runs {
-			if stalledFor(run, true, now) > 0 {
-				stalled++
-			}
-			switch run.Phase {
-			case "running", "claiming", "preparing", "gating":
-				active++
-			case "queued", "retry", "deferred", "interrupted":
-				waiting++
-			}
-		}
-	}
-	text := fmt.Sprintf("lambe  %s   %d active · %d waiting", stateStyle.Render("● "+state), active, waiting)
-	if stalled > 0 {
-		text += " · " + redStyle.Bold(true).Render(fmt.Sprintf("⚠ %d stalled", stalled))
-	}
-	if m.width < 44 {
-		text = "lambe  ·  " + stateStyle.Render(state)
-		if m.alive {
-			text = fmt.Sprintf("lambe %d active · %d waiting", active, waiting)
-			if stalled > 0 { // lead with the warning so truncation never hides it
-				text = redStyle.Bold(true).Render(fmt.Sprintf("⚠%d", stalled)) + " · " + strings.TrimPrefix(text, "lambe ")
-			}
-		}
-	}
-	if m.commandErr != nil {
-		text = "lambe  ·  " + errorStyle.Render(strings.Join(strings.Fields(ansi.Strip(m.commandErr.Error())), " "))
-	} else if m.commandStatus != "" {
-		text = "lambe  ·  " + m.commandStatus
-	} else if m.err != nil {
-		text += " · " + errorStyle.Render("read error: "+truncate(m.err.Error(), 60))
-	}
-	if m.readinessErr != nil && !m.showHistory {
-		text += " · Beads unavailable"
-	}
-	if m.path == "" {
-		if strings.HasPrefix(text, "lambe") {
-			text = "Demo" + strings.TrimPrefix(text, "lambe")
-		} else {
-			text = "Demo " + text
-		}
-	} else if m.width >= splitWidth {
-		text += "  ·  Updated " + updated
-	}
-	width := max(1, m.width-2)
-	if m.width >= 88 && m.commandErr == nil && m.commandStatus == "" && m.err == nil {
-		tabs := m.renderQueueTabs()
-		left := ansi.Truncate(text, width-lipgloss.Width(tabs)-2, "…")
-		text = left + strings.Repeat(" ", width-lipgloss.Width(left)-lipgloss.Width(tabs)) + tabs
-	}
-	return headerStyle.Width(m.width).MaxWidth(m.width).Render(ansi.Truncate(text, width, "…"))
-}
-
-func (m *Model) renderQueueTabs() string {
-	tabs := []string{"1 Queue", "2 Attention", "3 History"}
-	active := 0
-	if m.showAttention {
-		active = 1
-	} else if m.showHistory {
-		active = 2
-	}
-	for i, title := range tabs {
-		style := inactiveTabStyle
-		if i == active {
-			style = activeTabStyle
-		}
-		tabs[i] = style.Render(title)
-	}
-	return strings.Join(tabs, " ")
-}
-
-func (m *Model) renderBody() string {
-	if m.width < splitWidth && !m.stacked && m.focus == focusDetail {
-		return m.renderInspector()
-	}
-	queueContent := m.list.View()
-	if len(m.list.Items()) == 0 {
-		empty := "No runs yet."
-		if m.showHistory {
-			empty = "No past attempts yet."
-		} else if m.showAttention {
-			empty = "Nothing needs attention."
-		}
-		queueContent = labelStyle.Padding(1, 1).Render(empty)
-	}
-	listView := lipgloss.NewStyle().
-		Width(m.list.Width()).
-		MaxWidth(m.list.Width()).
-		Height(m.list.Height()).
-		MaxHeight(m.list.Height()).
-		Render(queueContent)
-	if m.paneHeaders {
-		name := "Run queue"
-		if m.showHistory {
-			name = "History"
-		} else if m.showAttention {
-			name = "Attention"
-		}
-		queue := fmt.Sprintf("%s  ·  %d", name, len(m.list.VisibleItems()))
-		listView = lipgloss.JoinVertical(lipgloss.Left, m.paneHeader(queue, m.list.Width(), focusList), listView)
-	}
-	listView = m.framePanel(listView, focusList)
-	if m.stacked {
-		return lipgloss.JoinVertical(lipgloss.Left, listView, m.renderInspector())
-	}
-	if m.width < splitWidth {
-		return listView
-	}
-	separator := "   "
-	if m.panelInset == 0 {
-		separator = lipgloss.JoinHorizontal(lipgloss.Top, " ", separatorStyle.Render(strings.Repeat("│\n", lipgloss.Height(listView)-1)+"│"), " ")
-	}
-	return lipgloss.JoinHorizontal(lipgloss.Top,
-		listView,
-		separator,
-		m.renderInspector(),
-	)
-}
-
-func (m *Model) renderInspector() string {
-	if !m.paneHeaders {
-		return m.detail.View()
-	}
-	label := "Inspector"
-	if run, ok := m.selectedRun(); ok {
-		label = run.IssueID + "  ·  " + phaseLabel(run.Phase)
-		if !m.showHistory {
-			now := time.Now()
-			timing := ""
-			switch {
-			case !run.WakeAt.IsZero():
-				timing = "retry in " + max(0, run.WakeAt.Sub(now)).Round(time.Second).String()
-			case stalledFor(run, m.alive, now) > 0:
-				timing = redStyle.Bold(true).Render("⚠ stalled " + shortAge(stalledFor(run, m.alive, now)))
-			case !run.LastOutputAt.IsZero() && run.Phase == "running":
-				timing = max(0, now.Sub(run.LastOutputAt)).Round(time.Second).String() + " ago"
-				if m.detail.Width >= 44 {
-					timing = "output " + timing
-				}
-			}
-			if timing != "" && lipgloss.Width(label)+lipgloss.Width(timing)+5 <= m.detail.Width-2 {
-				label += "  ·  " + timing
-			}
-		}
-	}
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		m.paneHeader(label, m.detail.Width, focusDetail), m.detail.View())
-	return m.framePanel(content, focusDetail)
-}
-
-func (m *Model) framePanel(content string, pane focusArea) string {
-	if m.panelInset == 0 {
-		return content
-	}
-	color := lipgloss.AdaptiveColor{Light: "#80748D", Dark: "#574A68"}
-	if m.focus == pane {
-		color = accentColor
-	}
-	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(color).Padding(0, 1).Render(content)
-}
-
-func (m *Model) paneHeader(label string, width int, pane focusArea) string {
-	style := footerStyle.Bold(true)
-	if m.focus == pane {
-		style = headerStyle
-	}
-	return style.Width(width).MaxWidth(width).
-		Render(ansi.Truncate(label, max(1, width-2), "…"))
-}
-
-func (m *Model) renderFooter() string {
-	style := footerStyle.Width(m.width).MaxWidth(m.width).MaxHeight(max(1, m.height-2))
-	if m.width < splitWidth {
-		switchPane := m.keys.OpenRun
-		if m.focus == focusDetail {
-			switchPane = m.keys.Back
-		}
-		compactHelp := m.help
-		compactHelp.Width = max(1, m.width-2)
-		compactHelp.ShortSeparator = " "
-		shortcuts := []key.Binding{switchPane, m.keys.Commands, m.keys.Attention, m.keys.History, m.keys.Filter, m.keys.Help, m.keys.Quit}
-		if m.focus == focusDetail {
-			shortcuts = []key.Binding{switchPane, m.keys.GoBottom, m.keys.Commands, m.keys.History, m.keys.Help, m.keys.Quit}
-		}
-		if m.width < 44 {
-			commands := m.keys.Commands
-			commands.SetHelp(":", "cmd")
-			history := m.keys.History
-			if !m.showHistory {
-				history.SetHelp("h", "hist")
-			}
-			helpKey := m.keys.Help
-			helpKey.SetHelp("?", "")
-			if m.focus == focusDetail {
-				latest := m.keys.GoBottom
-				latest.SetHelp("G", "end")
-				shortcuts = []key.Binding{switchPane, latest, commands, helpKey}
-			} else {
-				if m.width < 34 {
-					switchPane.SetHelp("enter", "view")
-				}
-				shortcuts = []key.Binding{switchPane, commands, history, helpKey}
-			}
-		}
-		lines := []string{compactHelp.ShortHelpView(shortcuts)}
-		if m.help.ShowAll {
-			for _, group := range m.keys.FullHelp() {
-				lines = append(lines, compactHelp.ShortHelpView(group))
-			}
-		}
-		for i, line := range lines {
-			lines[i] = ansi.Truncate(line, compactHelp.Width, "…")
-		}
-		return style.Render(strings.Join(lines, "\n"))
-	}
-
-	left := m.help.View(m.keys)
-	status := "Run queue"
-	if m.showHistory {
-		status = "History"
-	} else if m.showAttention {
-		status = "Attention"
-	}
-	if m.focus == focusDetail {
-		status = "Following output"
-		if m.showHistory {
-			status = "Archived output"
-		}
-		if !m.detail.AtBottom() && !m.showHistory {
-			status = fmt.Sprintf("Scrollback %d%%", int(m.detail.ScrollPercent()*100))
-		}
-	}
-	right := valueStyle.Render(status)
-	contentWidth := m.width - 2
-	leftWidth := lipgloss.Width(left)
-	rightWidth := lipgloss.Width(right)
-	if leftWidth+rightWidth+1 > contentWidth {
-		avail := contentWidth - rightWidth - 1
-		if avail < 0 {
-			avail = 0
-		}
-		left = ansi.Truncate(left, avail, "…")
-		leftWidth = lipgloss.Width(left)
-	}
-	space := contentWidth - leftWidth - rightWidth
-	if space < 1 {
-		space = 1
-	}
-	return style.Render(left + strings.Repeat(" ", space) + right)
+	return lipgloss.JoinVertical(lipgloss.Left, header, m.renderTabs(), m.renderBody(), footer)
 }
 
 // detailContent formats one run for the detail viewport.
@@ -1192,20 +816,32 @@ func cleanTaskText(s string) string {
 }
 
 func detailContent(run daemon.LiveRun, width int) string {
+	return detailBody(run, width, 0)
+}
+
+// detailBody formats a run for the preview. The pane pins the title (pins >= 1)
+// and an attempt/turn/workflow line (pins >= 2), so the body leaves those out.
+func detailBody(run daemon.LiveRun, width, pins int) string {
 	if width < 1 {
 		width = 80
 	}
 	if run.Phase == "ready" || run.Phase == "blocked" {
-		return ansi.Wrap(strings.TrimSpace(cleanTaskText(run.Title)+"\n\n"+cleanTaskText(run.Tail)), width, "")
+		text := cleanTaskText(run.Tail)
+		if pins == 0 {
+			text = cleanTaskText(run.Title) + "\n\n" + text
+		}
+		return ansi.Wrap(strings.TrimSpace(text), width, "")
 	}
 	var sections []string
 
-	title := run.Title
-	if title == "" {
-		title = "(untitled)"
+	if pins == 0 {
+		title := run.Title
+		if title == "" {
+			title = "(untitled)"
+		}
+		sections = append(sections, lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#21182B", Dark: "#FAFAFA"}).
+			Render(ansi.Truncate(title, width, "…")))
 	}
-	sections = append(sections, lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#21182B", Dark: "#FAFAFA"}).
-		Render(ansi.Truncate(title, width, "…")))
 
 	if gate := strings.TrimSpace(ansi.Strip(run.LastGate)); gate != "" {
 		sections = append(sections, retryStyle.Bold(true).Render("Last gate rejection")+"\n"+gate)
@@ -1217,16 +853,19 @@ func detailContent(run daemon.LiveRun, width int) string {
 			valueStyle.Render(v))
 	}
 
-	left := []string{
-		row("Issue:", run.IssueID),
-		row("Phase:", phaseLabel(run.Phase)),
-		row("Attempt:", fmt.Sprintf("%d", run.Attempt)),
-		row("Turn:", fmt.Sprintf("%d", run.Turn)),
+	var left []string
+	if pins < 2 {
+		left = []string{
+			row("Issue:", run.IssueID),
+			row("Phase:", phaseLabel(run.Phase)),
+			row("Attempt:", fmt.Sprintf("%d", run.Attempt)),
+			row("Turn:", fmt.Sprintf("%d", run.Turn)),
+		}
+		if run.Workflow != "" {
+			left = append(left, row("Workflow:", run.Workflow))
+		}
 	}
-	if run.Workflow != "" {
-		left = append(left, row("Workflow:", run.Workflow))
-	}
-	if run.Thread != "" {
+	if run.Thread != "" && pins < 2 {
 		left = append(left, row("Thread:", run.Thread))
 	}
 
@@ -1240,17 +879,25 @@ func detailContent(run daemon.LiveRun, width int) string {
 
 	meta := lipgloss.JoinVertical(lipgloss.Left, left...)
 	if len(right) > 0 {
-		if width >= 70 {
+		if width >= 70 && len(left) > 0 {
 			meta = lipgloss.JoinHorizontal(lipgloss.Top, meta, "    ",
 				lipgloss.JoinVertical(lipgloss.Left, right...))
 		} else {
 			meta = lipgloss.JoinVertical(lipgloss.Left, append(left, right...)...)
 		}
 	}
-	sections = append(sections, meta)
+	if len(left)+len(right) > 0 {
+		sections = append(sections, meta)
+	}
 
-	sections = append(sections, valueStyle.Bold(true).Render("Agent output")+"\n"+formatTranscript(run.Tail))
+	sections = append(sections, sectionRule("Agent output", width)+"\n"+formatTranscript(run.Tail))
 	return ansi.Wrap(strings.Join(sections, "\n\n"), width, "")
+}
+
+// sectionRule is a labelled divider such as "── Agent output ────".
+func sectionRule(label string, width int) string {
+	head := "── " + label + " "
+	return dimStyle.Render(ansi.Truncate(head+strings.Repeat("─", max(0, width-lipgloss.Width(head))), width, ""))
 }
 
 func formatTranscript(tail string) string {
