@@ -100,6 +100,7 @@ type Driver struct {
 	wdMu       sync.Mutex // guards watchdog
 	watchdog   *proc.Watchdog
 	escalation atomic.Int32 // 0 armed, 1 probe sent, 2 killing
+	runStart   time.Time    // guarded by wdMu; start of the armed run
 	killed     atomic.Bool
 
 	events    chan harness.Event
@@ -642,7 +643,17 @@ func (d *Driver) armWatchdog() {
 	d.wdMu.Lock()
 	defer d.wdMu.Unlock()
 	d.escalation.Store(0)
+	d.runStart = time.Now()
 	d.watchdog = proc.NewWatchdog(maxRun, silence, d.onExpiry)
+}
+
+// remainingRun returns what is left of MaxRun for the current run, so a
+// re-armed watchdog keeps the original deadline. Caller holds wdMu.
+func (d *Driver) remainingRun() time.Duration {
+	if d.opts.MaxRun <= 0 {
+		return 0
+	}
+	return max(time.Millisecond, d.opts.MaxRun-time.Since(d.runStart))
 }
 
 // stopWatchdog disarms the watchdog, if armed.
@@ -691,7 +702,7 @@ func (d *Driver) onExpiry(reason proc.ExpiryReason) {
 		d.log.Warn("steer probe failed", "err", err)
 	}
 	d.wdMu.Lock()
-	d.watchdog = proc.NewWatchdog(0, d.opts.ProbeWindow, d.onExpiry)
+	d.watchdog = proc.NewWatchdog(d.remainingRun(), d.opts.ProbeWindow, d.onExpiry)
 	d.wdMu.Unlock()
 }
 

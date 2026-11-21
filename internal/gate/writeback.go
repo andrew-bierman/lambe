@@ -90,6 +90,7 @@ func NewBdHub(bin, dir, actor string) (*BdHub, error) {
 func (h *BdHub) run(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, h.bin, args...) // #nosec G204 -- fixed argv over the configured bd binary
 	cmd.Dir = h.dir
+	cmd.WaitDelay = time.Second // a descendant holding the pipe must not outlive ctx
 	if h.actor != "" {
 		cmd.Env = append(cmd.Environ(), "BEADS_ACTOR="+h.actor)
 	}

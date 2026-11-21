@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Syncer synchronizes the local Beads database with its hub remote. It is a
@@ -59,6 +60,9 @@ var ErrNonFastForward = errors.New("non-fast-forward push rejected")
 func (s *BdSyncer) run(ctx context.Context, verb string) error {
 	cmd := exec.CommandContext(ctx, s.Bin, "dolt", verb) // #nosec G204 -- fixed argv over a configured binary
 	cmd.Dir = s.Dir
+	// A descendant (e.g. a dolt server) may hold the pipes open; without a
+	// bound Wait outlives ctx and wedges the whole tick cycle.
+	cmd.WaitDelay = time.Second
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
