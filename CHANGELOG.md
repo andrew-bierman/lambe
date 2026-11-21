@@ -11,11 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `lambe version --json` and a `state API` line in `lambe version`; development builds report `vX.Y.Z-dev+<shortsha>`.
 - Configurable machine/actor identity, `stall_after`, `probe_window`, and `gate.check_timeout`.
+- `lambe doctor` preflight checks and `lambe service install|status|uninstall` for launchd/systemd units.
 
 ### Changed
 
 - Redesign the Mac dashboard as a tabbed table with a preview pane.
 - Releases now use a single `vX.Y.Z` tag for the CLI and the Mac app; see `docs/RELEASING.md`.
+- `scripts/install.sh` installs the latest release by default (checksum still verified) and prints next steps.
 
 ## [0.9.2] - 2026-11-20
 

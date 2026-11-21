@@ -6,7 +6,7 @@
 #
 # Environment:
 #   LAMBE_VERSION          release version, with or without the leading "v"
-#                          (default: 0.9.1)
+#                          (default: the latest GitHub release)
 #   LAMBE_INSTALL_DIR      directory to install the binary into
 #                          (default: ~/.local/bin)
 #   LAMBE_PRIVATE_RELEASE  set to 1 to download through `gh` instead of curl;
@@ -15,8 +15,22 @@
 set -eu
 
 (
-version=${LAMBE_VERSION:-0.9.1}
 install_dir=${LAMBE_INSTALL_DIR:-$HOME/.local/bin}
+
+version=${LAMBE_VERSION:-}
+if [ -z "$version" ]; then
+  # Resolve the latest release tag; the archive is still checksum-verified below.
+  if [ "${LAMBE_PRIVATE_RELEASE:-0}" = 1 ]; then
+    version=$(gh release view --repo andrew-bierman/lambe --json tagName --jq .tagName)
+  else
+    version=$(curl -fsSL https://api.github.com/repos/andrew-bierman/lambe/releases/latest |
+      sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+  fi
+  if [ -z "$version" ]; then
+    printf 'install.sh: could not resolve the latest release; set LAMBE_VERSION\n' >&2
+    exit 1
+  fi
+fi
 
 version=${version#v}
 if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || [ "$(printf %s "$version" | tr -d '0123456789.')" != "" ]; then
