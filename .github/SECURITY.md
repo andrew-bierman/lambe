@@ -7,8 +7,9 @@ fixes land on `master` and are included in the next release.
 
 ## Reporting a vulnerability
 
-Report privately via a GitHub security advisory
-(Security → Report a vulnerability). For non-sensitive bugs, open a regular
+Report privately through a [GitHub security advisory](https://github.com/andrew-bierman/lambe/security/advisories/new)
+(Security → Report a vulnerability). You can expect an acknowledgement within a
+few days. For non-sensitive bugs, open a regular
 GitHub issue. Please do not open public issues with exploit details, tokens,
 or paths into your trackers.
 

@@ -22,7 +22,7 @@ mise exec go -- go tool staticcheck ./...
 
 ## Code conventions
 
-- Go 1.26 language floor; formatting via gofumpt.
+- Go 1.26 language floor (the toolchain is pinned in `mise.toml`); formatting via gofumpt.
 - Configuration is koanf-based (`internal/config`): defaults < file < env <
   flags. See the package comment for the env flattening rule
   (`LAMBE_SUPERVISOR_TICK_SECONDS` ← `supervisor.tick_seconds`).
@@ -32,10 +32,11 @@ mise exec go -- go tool staticcheck ./...
 
 ## Commits
 
-Commit messages follow the repo's gitmoji + imperative summary convention
-(see `git log`). Keep commits focused; one logical change per commit.
+Commit messages use gitmoji with a conventional prefix, for example
+`✨ feat: add X`, `🐛 fix: handle Y`, `📝 docs: explain Z` (see `git log`). Keep commits focused; one logical change per commit.
 
 ## Licensing
 
-By contributing you agree your contributions are licensed under the GNU GPL v3.0 or
-later, as in [LICENSE](LICENSE).
+By contributing you agree your contributions are licensed under the
+GNU General Public License, version 3 or later (GPL-3.0-or-later), as in
+[LICENSE](LICENSE).

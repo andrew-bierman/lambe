@@ -71,8 +71,8 @@ easy to tell apart from a production daemon, and the window subtitle names
 the daemon — identity and version — it is attached to. Attaching is
 read-only: the app never starts, stops, or restarts a daemon. Production
 lifecycle stays with the terminal running `lambe run` or the launchd/systemd
-units in the root README's
-[OS-level restart](../../README.md#os-level-restart-production) section.
+units in the reference's
+[Keeping the daemon running](../../docs/REFERENCE.md#keeping-the-daemon-running) section.
 
 The wire contract — routes, DTO fields, discovery, and auth posture — is
 specified in [docs/api/state-api.md](../../docs/api/state-api.md); the
