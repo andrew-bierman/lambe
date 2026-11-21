@@ -18,9 +18,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.27.x"
+      - name: Release notes from CHANGELOG.md
+        run: scripts/changelog-section.sh "${GITHUB_REF_NAME}" > "${RUNNER_TEMP}/notes.md"
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: "v2.20.2"
-          args: release --clean
+          args: release --clean --release-notes=${{ runner.temp }}/notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

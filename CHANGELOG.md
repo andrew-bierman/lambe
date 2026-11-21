@@ -7,17 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Serve the local HTTP state API on loopback when `stateapi.enable` is set: opt-in, bearer-guarded on every route (refresh included), with per-instance endpoint descriptors, queue and history reads, and daemon identity plus per-section timestamps in every response.
-- Document the versioned wire contract in `docs/api/state-api.md` and pin it with Go-generated fixtures in `testdata/contract/v1/` that drift-checked tests and the Swift dashboard decode.
-- Mark `POST /api/v1/refresh` as a mutating operator action — it triggers a full supervision cycle and can write to the hub — so read-only clients stay GET-only.
-- Add the read-only native macOS dashboard under `apps/dashboard`, which attaches to a daemon through its opt-in (`stateapi.enable`, default off) bearer-authenticated local state API to show queue, attention, history, and run detail.
-- Add an Attention view for retries and failed gates, with the latest rejection visible in the inspector.
-- Make agent output easier to scan with tool-result markers and fewer repeated tool-start lines.
-- Add optional Rex actions for opening the dashboard and demo, including a native picker on supported versions.
+### Added
 
-- Adapt the terminal dashboard to narrow screens and keep filtered selection and follow mode stable across refreshes and resizes.
-- Expose the current issue ID to shell gates, bound optional Rex detection, and retry timed-out process-binding reads and writes once.
-- Make the release install and first-run walkthrough work from a fresh setup.
+- `lambe version --json` and a `state API` line in `lambe version`; development builds report `vX.Y.Z-dev+<shortsha>`.
+- Configurable machine/actor identity, `stall_after`, `probe_window`, and `gate.check_timeout`.
+
+### Changed
+
+- Redesign the Mac dashboard as a tabbed table with a preview pane.
+- Releases now use a single `vX.Y.Z` tag for the CLI and the Mac app; see `docs/RELEASING.md`.
+
+## [0.9.2] - 2026-11-20
+
+### Added
+
+- Package the Mac dashboard as a universal (arm64 + x86_64) app ZIP with a checksum.
+- Explain Lambe and Rex host support in the docs.
+
+### Changed
+
+- Surface stalled runs in the dashboard and polish narrow layouts, tabs, and run rows.
+
+### Fixed
+
+- Bound stalled Pi runs and Beads subprocesses so a hung child no longer blocks the loop.
+- Bundle the mascot icon in the macOS app.
+
+## [0.9.1] - 2026-11-20
+
+### Added
+
+- Open Lambe run output from the Rex palette.
+
+## [0.9.0] - 2026-11-20
+
+### Added
+
+- Add the read-only native macOS dashboard under `apps/dashboard`. It attaches to a daemon through the opt-in (`stateapi.enable`, default off), bearer-authenticated local state API and shows queue, attention, history, and run detail.
+- Serve the local HTTP state API on loopback with per-instance endpoint descriptors, queue and history reads, and daemon identity plus per-section timestamps in every response.
+- Document the versioned wire contract in `docs/api/state-api.md` and pin it with Go-generated fixtures in `testdata/contract/v1/`.
+
+### Changed
+
+- Mark `POST /api/v1/refresh` as a mutating operator action, so read-only clients stay GET-only.
+- Simplify installation docs and point them at the dashboard release.
+
+## [0.8.4] - 2026-11-19
+
+### Added
+
+- Show Beads readiness and agent session details in the dashboard.
+
+## [0.8.3] - 2026-11-19
+
+### Changed
+
+- Show compact run rows, stack the inspector, and give run titles more space in the dashboard.
+
+## [0.8.2] - 2026-11-19
+
+### Added
+
+- Route Beads tasks to named workflows.
+
+### Changed
+
+- Make dashboard views visible in the header.
+
+## [0.8.1] - 2026-11-18
+
+### Changed
+
+- Polish release installation and CLI help; the install and first-run walkthrough now work from a fresh setup.
+
+### Fixed
+
+- Batch Beads attempt lookups during hub recovery.
+
+## [0.8.0] - 2026-11-18
+
+### Added
+
+- Add an Attention view for retries and failed gates, with the latest rejection visible in the inspector.
+- Add optional Rex actions for opening the dashboard and demo.
+- Expose the current issue ID to shell gates.
+
+### Changed
+
+- Make agent output easier to scan with tool-result markers and fewer repeated tool-start lines.
+
+### Fixed
+
+- Keep dashboard controls visible on narrow terminals and keep filtered selection and follow mode stable across refreshes and resizes.
+- Bound optional Rex detection and retry timed-out process-binding reads and writes once.
 
 ## [0.1.0] - 2026-11-16
 
@@ -85,3 +167,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Daemon lifecycle: single-instance lock, run loop, and status snapshots,
   exposed via the `lambe` binary (`run`, `status`, `version`).
 - Documentation and CI.
+
+[Unreleased]: https://github.com/andrew-bierman/lambe/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/andrew-bierman/lambe/compare/v0.9.1...v0.9.2
+[0.9.1]: https://github.com/andrew-bierman/lambe/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/andrew-bierman/lambe/compare/v0.8.4...v0.9.0
+[0.8.4]: https://github.com/andrew-bierman/lambe/compare/v0.8.3...v0.8.4
+[0.8.3]: https://github.com/andrew-bierman/lambe/compare/v0.8.2...v0.8.3
+[0.8.2]: https://github.com/andrew-bierman/lambe/compare/v0.8.1...v0.8.2
+[0.8.1]: https://github.com/andrew-bierman/lambe/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/andrew-bierman/lambe/compare/v0.7.0...v0.8.0
+[0.1.0]: https://github.com/andrew-bierman/lambe/releases/tag/v0.1.0

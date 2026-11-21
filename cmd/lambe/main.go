@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
 	"syscall"
 
@@ -41,7 +40,7 @@ usage:
   lambe logs    [-config FILE] [-issue ID] [-follow] [-json] show agent output
   lambe enqueue [-config FILE] -workflow NAME [-apply] ISSUE_ID
   lambe tui     [-config FILE | -demo]                 interactive dashboard (split panes, scrollback)
-  lambe version print build information
+  lambe version [--json] print build information
 `
 
 func main() {
@@ -52,7 +51,10 @@ func main() {
 	}
 	switch args[0] {
 	case "version":
-		fmt.Println(buildVersion())
+		if err := runVersion(args[1:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
 	case "init":
 		if err := runInit(args[1:], os.Stdin, os.Stdout); err != nil {
 			logging.Default().Error("lambe init failed", "error", err.Error())
@@ -183,7 +185,7 @@ func daemonOptions(cfg *config.Config, configPath string) daemon.Options {
 		Actor:        actor,
 		WorkflowPath: cfg.WorkflowPath,
 		LockName:     daemon.InstanceLockName(cfg),
-		Version:      version,
+		Version:      buildVersion().Version,
 		Log:          logging.Default(),
 		Wire:         daemon.DefaultWire(cfg, "", actor),
 	}
@@ -488,28 +490,6 @@ func maybeInitTracker(dir string, nonInteractive bool, in io.Reader, out io.Writ
 	}
 	say(out, "initialized tracker in %s\n", dir)
 	return dir, true, nil
-}
-
-func buildVersion() string {
-	v, c, d := version, commit, date
-	if info, ok := debug.ReadBuildInfo(); ok {
-		if v == "dev" && info.Main.Version != "" && info.Main.Version != "(devel)" {
-			v = info.Main.Version
-		}
-		for _, setting := range info.Settings {
-			switch setting.Key {
-			case "vcs.revision":
-				if c == "none" {
-					c = setting.Value
-				}
-			case "vcs.time":
-				if d == "unknown" {
-					d = setting.Value
-				}
-			}
-		}
-	}
-	return fmt.Sprintf("lambe %s (commit %s, built %s)", v, c, d)
 }
 
 func requireGates(cfg *config.Config) error {
