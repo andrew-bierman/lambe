@@ -31,13 +31,20 @@ type sysEnv struct {
 	GOOS string
 	Home string
 	UID  int
+	// Label overrides the launchd label / systemd unit name (without
+	// ".service"), so an isolated unit never collides with the real one.
+	Label string
+	// StopWait bounds how long uninstall waits for launchd to finish
+	// stopping the job (its kill ladder takes up to the unit's ExitTimeOut).
+	// Zero skips the wait.
+	StopWait time.Duration
 	// Run executes a command and returns its combined output.
 	Run func(ctx context.Context, name string, args ...string) (string, error)
 }
 
 func hostEnv() sysEnv {
 	home, _ := os.UserHomeDir()
-	return sysEnv{GOOS: runtime.GOOS, Home: home, UID: os.Getuid(), Run: runCombined}
+	return sysEnv{GOOS: runtime.GOOS, Home: home, UID: os.Getuid(), Run: runCombined, StopWait: 50 * time.Second}
 }
 
 func runCombined(ctx context.Context, name string, args ...string) (string, error) {
@@ -46,6 +53,22 @@ func runCombined(ctx context.Context, name string, args ...string) (string, erro
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	err := cmd.Run()
 	return buf.String(), err
+}
+
+var labelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// unitName is the launchd label or systemd unit name for manager.
+func (e sysEnv) unitName(manager string) string {
+	if manager == "launchd" {
+		if e.Label != "" {
+			return e.Label
+		}
+		return launchdLabel
+	}
+	if e.Label != "" {
+		return e.Label + ".service"
+	}
+	return systemdUnit
 }
 
 // managerFor picks the init system: an explicit override wins, otherwise
@@ -74,18 +97,25 @@ func (e sysEnv) unitPath(manager, root string) string {
 		root = e.Home
 	}
 	if manager == "launchd" {
-		return filepath.Join(root, "Library", "LaunchAgents", launchdLabel+".plist")
+		return filepath.Join(root, "Library", "LaunchAgents", e.unitName(manager)+".plist")
 	}
-	return filepath.Join(root, ".config", "systemd", "user", systemdUnit)
+	return filepath.Join(root, ".config", "systemd", "user", e.unitName(manager))
 }
 
 func (e sysEnv) logPath() string {
-	return filepath.Join(e.Home, "Library", "Logs", "lambe", "daemon.log")
+	name := "daemon"
+	if e.Label != "" {
+		name = e.Label
+	}
+	return filepath.Join(e.Home, "Library", "Logs", "lambe", name+".log")
 }
 
 // unitParams are the values interpolated into a generated unit.
 type unitParams struct {
-	Binary, Config, Path, Log string
+	Binary, Config, Path, Log, Label string
+	// StateDir, when set, is baked in as LAMBE_STATE_DIR so the service uses
+	// the same state directory as the shell that installed it.
+	StateDir string
 }
 
 var plistTemplate = template.Must(template.New("plist").Funcs(template.FuncMap{"xml": xmlEscape}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
@@ -95,7 +125,7 @@ var plistTemplate = template.Must(template.New("plist").Funcs(template.FuncMap{"
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>` + launchdLabel + `</string>
+    <string>{{xml .Label}}</string>
     <key>ProgramArguments</key>
     <array>
         <string>{{xml .Binary}}</string>
@@ -109,6 +139,10 @@ var plistTemplate = template.Must(template.New("plist").Funcs(template.FuncMap{"
     <dict>
         <key>PATH</key>
         <string>{{xml .Path}}</string>
+{{- if .StateDir}}
+        <key>LAMBE_STATE_DIR</key>
+        <string>{{xml .StateDir}}</string>
+{{- end}}
     </dict>
     <key>KeepAlive</key>
     <true/>
@@ -138,6 +172,9 @@ After=network-online.target
 Type=simple
 ExecStart={{.Binary}} run --config {{.Config}}
 Environment={{.Path}}
+{{- if .StateDir}}
+Environment={{.StateDir}}
+{{- end}}
 Restart=on-failure
 RestartSec=5
 # Room for the daemon's SIGTERM -> grace -> SIGKILL ladder.
@@ -181,6 +218,11 @@ func renderUnit(manager string, p unitParams) (string, error) {
 	if q.Path, err = systemdQuote("PATH=" + p.Path); err != nil {
 		return "", err
 	}
+	if p.StateDir != "" {
+		if q.StateDir, err = systemdQuote("LAMBE_STATE_DIR=" + p.StateDir); err != nil {
+			return "", err
+		}
+	}
 	if err := systemdTemplate.Execute(&buf, q); err != nil {
 		return "", err
 	}
@@ -217,7 +259,7 @@ func queryService(ctx context.Context, e sysEnv, manager, root string, query boo
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if manager == "launchd" {
-		out, err := e.Run(ctx, "launchctl", "print", fmt.Sprintf("gui/%d/%s", e.UID, launchdLabel))
+		out, err := e.Run(ctx, "launchctl", "print", fmt.Sprintf("gui/%d/%s", e.UID, e.unitName(manager)))
 		switch {
 		case err != nil:
 			st.Detail = "unit file present but not loaded in launchd"
@@ -228,7 +270,7 @@ func queryService(ctx context.Context, e sysEnv, manager, root string, query boo
 		}
 		return st
 	}
-	out, _ := e.Run(ctx, "systemctl", "--user", "is-active", systemdUnit)
+	out, _ := e.Run(ctx, "systemctl", "--user", "is-active", e.unitName(manager))
 	state := strings.TrimSpace(out)
 	st.Running = state == "active"
 	st.Detail = "systemd user unit is " + state
@@ -247,12 +289,17 @@ func runService(args []string, e sysEnv, out io.Writer) error {
 	dryRun := fs.Bool("dry-run", false, "print the unit and its destination without writing anything (install)")
 	noStart := fs.Bool("no-start", false, "write the unit but do not load/start it (install)")
 	force := fs.Bool("force", false, "replace a different existing unit (install)")
+	label := fs.String("label", "", "launchd label / systemd unit name instead of "+launchdLabel+" / lambe (isolated installs)")
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
+	if *label != "" && !labelPattern.MatchString(*label) {
+		return fmt.Errorf("invalid -label %q: use letters, digits, '.', '_' and '-'", *label)
+	}
+	e.Label = *label
 	mgr, err := e.managerFor(*manager)
 	if err != nil {
 		return err
@@ -296,7 +343,7 @@ func serviceInstall(ctx context.Context, e sysEnv, out io.Writer, mgr, root, con
 	if _, err := os.Stat(cfgPath); err != nil && !dryRun { // #nosec G703 -- operator-supplied config path
 		return fmt.Errorf("config %s: %w; run `lambe init` first (or pass -config FILE)", cfgPath, err)
 	}
-	unit, err := renderUnit(mgr, unitParams{Binary: bin, Config: cfgPath, Path: servicePATH(e.Home), Log: e.logPath()})
+	unit, err := renderUnit(mgr, unitParams{Binary: bin, Config: cfgPath, Path: servicePATH(e.Home), Log: e.logPath(), Label: e.unitName("launchd"), StateDir: os.Getenv("LAMBE_STATE_DIR")})
 	if err != nil {
 		return err
 	}
@@ -349,26 +396,34 @@ func startCommands(e sysEnv, mgr, path string, replacing bool) []serviceCmd {
 		domain := fmt.Sprintf("gui/%d", e.UID)
 		var cmds []serviceCmd
 		if replacing {
-			cmds = append(cmds, serviceCmd{[]string{"launchctl", "bootout", domain + "/" + launchdLabel}, true})
+			cmds = append(cmds, serviceCmd{[]string{"launchctl", "bootout", domain + "/" + e.unitName(mgr)}, true})
 		}
 		return append(cmds, serviceCmd{[]string{"launchctl", "bootstrap", domain, path}, false})
 	}
 	return []serviceCmd{
 		{[]string{"systemctl", "--user", "daemon-reload"}, false},
-		{[]string{"systemctl", "--user", "enable", "--now", systemdUnit}, false},
+		{[]string{"systemctl", "--user", "enable", "--now", e.unitName(mgr)}, false},
 	}
 }
 
 func serviceUninstall(ctx context.Context, e sysEnv, out io.Writer, mgr, root string, live bool) error {
 	path := e.unitPath(mgr, root)
 	if live {
-		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, time.Minute)
 		defer cancel()
 		// Best effort: the unit may never have been loaded.
 		if mgr == "launchd" {
-			_, _ = e.Run(ctx, "launchctl", "bootout", fmt.Sprintf("gui/%d/%s", e.UID, launchdLabel))
+			target := fmt.Sprintf("gui/%d/%s", e.UID, e.unitName(mgr))
+			_, _ = e.Run(ctx, "launchctl", "bootout", target)
+			// bootout returns while the daemon is still shutting down; wait so
+			// "uninstalled" means the agent is really gone.
+			for deadline := time.Now().Add(e.StopWait); time.Now().Before(deadline); time.Sleep(250 * time.Millisecond) {
+				if _, err := e.Run(ctx, "launchctl", "print", target); err != nil {
+					break
+				}
+			}
 		} else {
-			_, _ = e.Run(ctx, "systemctl", "--user", "disable", "--now", systemdUnit)
+			_, _ = e.Run(ctx, "systemctl", "--user", "disable", "--now", e.unitName(mgr))
 		}
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {

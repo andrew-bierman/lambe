@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -383,5 +384,17 @@ func TestDoctorProgressUsesConfiguredStallAfter(t *testing.T) {
 	writeLive(t, f, os.Getpid(), identity, []daemon.LiveRun{liveRun("x-1", 2*time.Minute)})
 	if got := statuses(diagnose(context.Background(), f.env, f.configPath))["progress"]; got != statusWarn {
 		t.Errorf("progress at 2m quiet with stall_after 1m = %q, want warn", got)
+	}
+}
+
+func TestDoctorStateAPIPortInUse(t *testing.T) {
+	t.Parallel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	must(t, err)
+	defer func() { _ = ln.Close() }()
+	f := newDoctorFixture(t, "stateapi:\n  enable: true\n  addr: \""+ln.Addr().String()+"\"\n")
+	got := checkStateAPI(context.Background(), f.env, f.cfg)
+	if got.Status != statusWarn || !strings.Contains(got.Detail, "already in use") {
+		t.Errorf("busy port = %+v, want warn naming the port conflict", got)
 	}
 }
