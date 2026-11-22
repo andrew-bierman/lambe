@@ -262,6 +262,9 @@ func TestBuildReportDegradesWhenAttemptReadFails(t *testing.T) {
 	if attemptReads, metadataReads := tr.readCounts(); attemptReads != 0 || metadataReads != 1 {
 		t.Errorf("reads = (attempts %d, metadata %d), want (0, 1)", attemptReads, metadataReads)
 	}
+	if !rep.AttemptsUnreadable {
+		t.Error("AttemptsUnreadable = false, want true so machine readers can refuse the zeros")
+	}
 	if len(rep.Active) != 2 {
 		t.Fatalf("active runs = %d, want 2", len(rep.Active))
 	}
@@ -461,5 +464,17 @@ func TestBuildReportBulkAttemptsAgainstBdTracker(t *testing.T) {
 		if nh.Issue == runID || nh.Issue == laterID {
 			t.Errorf("attempt record %q leaked into needs-human", nh.Issue)
 		}
+	}
+}
+
+func TestResolveStateDirReportsItsSource(t *testing.T) {
+	t.Setenv("HOME", "/home/x")
+	t.Setenv("LAMBE_STATE_DIR", "")
+	if dir, src := ResolveStateDir(); dir != "/home/x/.local/state/lambe" || src != StateDirDefault {
+		t.Errorf("default = %q, %q", dir, src)
+	}
+	t.Setenv("LAMBE_STATE_DIR", "/override")
+	if dir, src := ResolveStateDir(); dir != "/override" || src != StateDirEnv || DefaultStateDir() != "/override" {
+		t.Errorf("override = %q, %q", dir, src)
 	}
 }

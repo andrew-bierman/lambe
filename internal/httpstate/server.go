@@ -305,10 +305,17 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
-	snap := s.source.Snapshot()
+	writeJSON(w, http.StatusOK, NewSnapshotResponse(s.source.Snapshot(), s.source.Identity(), time.Now()))
+}
+
+// NewSnapshotResponse converts a state snapshot and the serving identity to
+// the GET /api/v1/state wire DTO. It is the one conversion: the daemon's
+// route and `lambe status -json` both use it, so the two shapes cannot
+// drift. now anchors the human age strings.
+func NewSnapshotResponse(snap Snapshot, id Daemon, now time.Time) SnapshotResponse {
 	resp := SnapshotResponse{
 		SchemaVersion:      SchemaVersion,
-		Daemon:             daemonDTO(s.source.Identity()),
+		Daemon:             daemonDTO(id),
 		DeferredUntil:      formatTime(snap.DeferredUntil),
 		WakeAt:             formatTime(snap.WakeAt),
 		RunsAsOf:           formatTime(snap.RunsAsOf),
@@ -323,7 +330,7 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 			Session:        run.Session,
 			Attempt:        run.Attempt,
 			State:          run.State,
-			LastEventAge:   formatAge(run.LastEvent, time.Now()),
+			LastEventAge:   formatAge(run.LastEvent, now),
 			LastEventAt:    formatTime(run.LastEvent),
 			Phase:          run.Phase,
 			Workflow:       run.Workflow,
@@ -349,7 +356,7 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 			At:     formatTime(gr.At),
 		})
 	}
-	writeJSON(w, http.StatusOK, resp)
+	return resp
 }
 
 // handleQueue serves the cached readiness projection; it never touches the

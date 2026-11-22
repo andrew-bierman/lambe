@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/andrew-bierman/lambe/internal/config"
 	"github.com/andrew-bierman/lambe/internal/gate"
+	"github.com/andrew-bierman/lambe/internal/httpstate"
+	"github.com/andrew-bierman/lambe/internal/mcp"
 	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
@@ -66,6 +69,9 @@ type Report struct {
 	// label lanes, read in the same grouped pass as every other section so
 	// the report, the queue route, and the TUI share one canonical result.
 	Queue []tracker.ReadinessRow
+	// AttemptsUnreadable is set when the attempt records could not be read, so
+	// attempt numbers and wake timers are unknown rather than zero.
+	AttemptsUnreadable bool
 }
 
 // BuildReport reads the morning report from the local tracker: active runs
@@ -86,7 +92,8 @@ func BuildReport(ctx context.Context, tr tracker.Tracker, labels, routeLabels []
 
 	// A failed attempt read degrades to "no attempts known": the sections
 	// below still render, with attempt numbers at zero and no wake timers.
-	attempts := readAttempts(ctx, tr)
+	attempts, attemptsErr := readAttempts(ctx, tr)
+	rep.AttemptsUnreadable = attemptsErr != nil
 
 	issues, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}, Labels: labels})
 	if err != nil {
@@ -166,12 +173,12 @@ func needsHumanReason(issue tracker.Issue, gateOutput string) string {
 
 // readAttempts reads lambe's whole attempt set in one query and groups it by
 // session. An unreadable tracker yields nil so the report still renders.
-func readAttempts(ctx context.Context, tr tracker.Tracker) map[string][]tracker.Attempt {
+func readAttempts(ctx context.Context, tr tracker.Tracker) (map[string][]tracker.Attempt, error) {
 	records, err := tr.ListByMetadata(ctx, tracker.MetaKind, tracker.KindAttempt)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return tracker.GroupAttempts(records)
+	return tracker.GroupAttempts(records), nil
 }
 
 // summarizeGateOutput reduces a gate output blob to its first line, capped.
@@ -283,25 +290,76 @@ func reportf(w io.Writer, format string, args ...any) error {
 	return err
 }
 
+// readReport reads the morning report from the first configured tracker.
+// No lock is taken and no daemon is contacted.
+func readReport(cfg *config.Config, machine string) (Report, error) {
+	if len(cfg.Trackers) == 0 {
+		return Report{}, errors.New("no trackers configured")
+	}
+	t := cfg.Trackers[0]
+	local, err := tracker.NewLocal("", t.Path, "lambe@"+machine)
+	if err != nil {
+		return Report{}, fmt.Errorf("open tracker %s: %w", t.Name, err)
+	}
+	labels, routeLabels := queueLanes(cfg)
+	return BuildReport(context.Background(), local, labels, routeLabels)
+}
+
 // Status reads the morning report from the configured local tracker and
 // writes it to w. It is the body of `lambe status`: no lock is taken and no
 // daemon needs to be running. Tracker open failures surface as errors so
 // the caller can report them distinctly from an empty report.
 func Status(w io.Writer, cfg *config.Config, machine string) error {
-	if len(cfg.Trackers) == 0 {
-		return errors.New("no trackers configured")
-	}
-	t := cfg.Trackers[0]
-	local, err := tracker.NewLocal("", t.Path, "lambe@"+machine)
-	if err != nil {
-		return fmt.Errorf("open tracker %s: %w", t.Name, err)
-	}
-	labels, routeLabels := queueLanes(cfg)
-	rep, err := BuildReport(context.Background(), local, labels, routeLabels)
+	rep, err := readReport(cfg, machine)
 	if err != nil {
 		return err
 	}
 	return RenderReport(w, rep)
+}
+
+// StatusJSON is `lambe status -json`: the same tracker read as Status,
+// written as a state-API snapshot (see RenderStatusJSON).
+func StatusJSON(w io.Writer, cfg *config.Config, id httpstate.Daemon, now time.Time) error {
+	rep, err := readReport(cfg, id.Machine)
+	if err != nil {
+		return err
+	}
+	if rep.AttemptsUnreadable {
+		return errors.New("read attempts: tracker attempt records unreadable, so attempt numbers would be wrong")
+	}
+	stall := config.DefaultStallAfter
+	if cfg.Supervisor.StallAfter > 0 {
+		stall = cfg.Supervisor.StallAfter
+	}
+	return RenderStatusJSON(w, rep, id, stall, now)
+}
+
+// RenderStatusJSON writes rep as a GET /api/v1/state document, built with
+// the same conversion the daemon's route uses. It is a documented subset
+// because only the tracker was read: runs are the tracker's in-progress
+// claims (state "running", no phase, no event times), and needs_human comes
+// from the tracker. Gate rejections, the loop heartbeat, and per-run
+// phases live only in a running daemon's projection, so gate_rejections is
+// empty with no gate_rejections_as_of, tick_at is absent, and the daemon
+// block carries no pid or identity: this process is not the daemon.
+func RenderStatusJSON(w io.Writer, rep Report, id httpstate.Daemon, stallAfter time.Duration, now time.Time) error {
+	reports := &ReportCache{}
+	reports.Store(rep)
+	src := NewStateSource(NewRunRegistry(nil, nil), reports, nil)
+	src.info = id
+	src.SetStallAfter(func() time.Duration { return stallAfter })
+	snap := src.Snapshot()
+	snap.RunsAsOf, snap.NeedsHumanAsOf = now, now
+	snap.GateRejectionsAsOf, snap.GateRejections = time.Time{}, nil
+	for _, a := range rep.Active {
+		snap.Runs = append(snap.Runs, httpstate.Run{
+			Issue: a.Issue, Session: a.Session, Attempt: a.Attempt,
+			State: stateName(mcp.StateRunning), Actor: a.Assignee,
+		})
+	}
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	return enc.Encode(httpstate.NewSnapshotResponse(snap, id, now))
 }
 
 // queueLanes resolves a configuration's readiness lanes: the configured

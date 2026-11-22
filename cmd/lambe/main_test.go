@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,7 +74,7 @@ func TestCommandsMissingTracker(t *testing.T) {
 		name string
 		run  func([]string) error
 		want string
-	}{{"run", runDaemon, "lambe init"}, {"status", runStatus, "bd init"}, {"mcp", runMCP, "bd init"}} {
+	}{{"run", runDaemon, "lambe init"}, {"status", func(a []string) error { return runStatus(a, io.Discard) }, "bd init"}, {"mcp", runMCP, "bd init"}} {
 		t.Run(tt.name, func(t *testing.T) {
 			isolatedConfigDir(t)
 			t.Chdir(t.TempDir())

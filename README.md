@@ -171,6 +171,9 @@ credentials. See [SECURITY.md](.github/SECURITY.md).
 **Is there a stable API?**
 An opt-in local state API serves JSON on loopback behind a per-start bearer
 token. The contract is in [docs/api/state-api.md](docs/api/state-api.md).
+Scripts that do not want the API can run `lambe status -json` (the same
+snapshot shape, read from the tracker) and `lambe state-dir -json` (where
+the state directory and descriptors are).
 
 ## How it relates to other projects
 
