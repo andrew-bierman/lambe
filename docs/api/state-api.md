@@ -95,6 +95,43 @@ Example (committed as [`descriptor.json`](../../testdata/contract/v1/descriptor.
 | `config_path` | string | optional | Configuration file the daemon loaded; absent when it ran without one. |
 | `started_at` | string | always | Daemon start time, RFC 3339 UTC. |
 
+### The `state-dir` command
+
+`lambe state-dir [-json]` prints where discovery happens, so a client need not
+re-derive the default or guess at an override:
+
+```json
+{
+  "state_dir": "/Users/operator/.local/state/lambe",
+  "source": "default",
+  "exists": true,
+  "live_dir": "/Users/operator/.local/state/lambe/live",
+  "descriptors": [
+    {
+      "path": "/Users/operator/.local/state/lambe/live/stateapi-lambe-1a2b3c4d5e6f.json",
+      "instance": "lambe-1a2b3c4d5e6f",
+      "addr": "127.0.0.1:53412",
+      "pid": 4242,
+      "version": "v0.9.0",
+      "config_path": "/Users/operator/lambe/lambe.yaml",
+      "started_at": "2026-11-19T11:30:00Z"
+    }
+  ]
+}
+```
+
+- `source` is `env` when `LAMBE_STATE_DIR` chose the directory, else `default`.
+  The command reads the environment of the process that runs it, so run it with
+  the environment you would give the daemon.
+- `exists: false` with `descriptors: []` is a normal answer (no daemon has used
+  the directory); the command never creates it. `descriptors` is `[]`, not
+  `null`.
+- Descriptors are filtered like discovery step 3-4 below: stale, malformed, or
+  non-loopback entries are omitted. **The bearer token is never printed**; read
+  the descriptor file named by `path` to get it, under the client duties.
+- Exit codes: 0 ok, 2 usage. This command is additive and does not change the
+  wire contract or `api_version`.
+
 ### Discovery algorithm
 
 1. Enumerate `stateapi-*.json` in `<state-dir>/live/`. Never rebuild the
@@ -446,6 +483,21 @@ An absent `as_of` means "not read yet", not "no data" — serve the section as
 unknown rather than empty. Clients should label stale sections (a degraded
 banner with the `as_of` value) and never silently mix sections whose
 freshness differs sharply.
+
+## Reading the same document without a daemon
+
+`lambe status -json [-config FILE]` prints a `SnapshotResponse` assembled from
+the tracker with the daemon's own conversion, so it works when `stateapi.enable`
+is off or nothing is running. It is a subset, and what it cannot know stays
+unknown: `runs` are the tracker's in-progress claims (`state` `running`,
+`last_event_age` `"n/a"`, no `phase`; `actor` is the claim holder),
+`needs_human` is read from the tracker (`needs_human_as_of` is the read time),
+and `gate_rejections` is empty with no `gate_rejections_as_of`, `tick_at` is
+absent, and `daemon.pid`/`identity` are unset because the CLI is not the
+daemon. `daemon.version` is the CLI build and `daemon.config_path` the config
+it loaded. Exit codes match `lambe doctor`: 0 ok, 1 a problem (nothing is
+printed to stdout), 2 usage. Use the HTTP route when you need live phases,
+stall verdicts, or gate history.
 
 ## Versioning and evolution
 

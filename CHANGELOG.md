@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `lambe status -json` prints the morning report as a state API snapshot (`GET /api/v1/state` shape) read from the tracker, with no daemon needed; `lambe state-dir [-json]` prints the resolved state directory and the live state API descriptors (never the token).
 - `lambe service install|status|uninstall -label NAME` and `lambe doctor -service-label NAME` run a second, isolated launchd/systemd service; `service install` bakes in `LAMBE_STATE_DIR` when set.
 
 ### Fixed
