@@ -15,10 +15,12 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/andrew-bierman/lambe/internal/config"
 	"github.com/andrew-bierman/lambe/internal/daemon"
 	"github.com/andrew-bierman/lambe/internal/gate"
+	"github.com/andrew-bierman/lambe/internal/httpstate"
 	"github.com/andrew-bierman/lambe/internal/logging"
 	"github.com/andrew-bierman/lambe/internal/mcp"
 )
@@ -35,7 +37,8 @@ const usage = `lambe is the supervisor daemon for autonomous coding agents.
 usage:
   lambe init    [-config FILE] [--non-interactive] set up config, workflow, and starter formula
   lambe run     [-config FILE] run the supervisor daemon until SIGTERM/SIGINT
-  lambe status  [-config FILE] print the morning report
+  lambe status  [-config FILE] [-json] print the morning report (-json: state API snapshot)
+  lambe state-dir [-json]      print the state directory and live state API descriptors
   lambe doctor  [-config FILE] [-json] check for anything that could stall your agents
   lambe service install|status|uninstall  keep the daemon alive under launchd/systemd
   lambe mcp     [-config FILE] serve lambe's MCP tools over stdio
@@ -90,9 +93,15 @@ func main() {
 			os.Exit(1)
 		}
 	case "status":
-		if err := runStatus(args[1:]); err != nil {
+		if err := runStatus(args[1:], os.Stdout); err != nil {
 			logging.Default().Error("lambe status failed", "error", err.Error())
-			os.Exit(1)
+			os.Exit(readExitCode(err))
+		}
+	case "state-dir":
+		dir, source := daemon.ResolveStateDir()
+		if err := runStateDir(args[1:], dir, source, os.Stdout); err != nil {
+			logging.Default().Error("lambe state-dir failed", "error", err.Error())
+			os.Exit(readExitCode(err))
 		}
 	case "mcp":
 		if err := runMCP(args[1:]); err != nil {
@@ -211,17 +220,53 @@ func hostIdentity(cfg *config.Config) (machine, actor string) {
 	return cfg.Identity(os.Hostname)
 }
 
-// runStatus prints the morning report from the local tracker.
-func runStatus(args []string) error {
-	cfg, _, err := parseCommon(args)
+// runStatus prints the morning report from the local tracker, or with -json
+// a state-API snapshot built from that same tracker read. It never contacts
+// a daemon, so it answers whether or not one is running.
+func runStatus(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("lambe status", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	configFile := fs.String("config", "", "path to a lambe config file")
+	asJSON := fs.Bool("json", false, "print a state API snapshot as JSON")
+	if err := fs.Parse(args); err != nil {
+		return usageError{err}
+	}
+	if fs.NArg() != 0 {
+		return usageError{fmt.Errorf("unexpected arguments: %v", fs.Args())}
+	}
+	cfg, path, err := parseCommon([]string{"-config", *configFile})
 	if err != nil {
 		return err
 	}
 	if err := requireLocalTracker(cfg); err != nil {
 		return err
 	}
-	machine, _ := hostIdentity(cfg)
-	return daemon.Status(os.Stdout, cfg, machine)
+	machine, actor := hostIdentity(cfg)
+	if *asJSON {
+		id := httpstate.Daemon{Machine: machine, Version: buildVersion().Version, ConfigPath: path, Actor: actor}
+		return daemon.StatusJSON(out, cfg, id, time.Now())
+	}
+	return daemon.Status(out, cfg, machine)
+}
+
+// usageError marks a command-line mistake, which exits 2 (like `lambe
+// version`) rather than the 1 of a real problem.
+type usageError struct{ error }
+
+func (e usageError) Unwrap() error { return e.error }
+
+// readExitCode maps a read command's error to its exit code: 0 ok, 1 a
+// problem (unreadable config or tracker), 2 usage.
+func readExitCode(err error) int {
+	var usage usageError
+	switch {
+	case err == nil:
+		return 0
+	case errors.As(err, &usage):
+		return 2
+	default:
+		return 1
+	}
 }
 
 // runMCP serves lambe's MCP tools over stdio: it assembles the daemon's

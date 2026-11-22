@@ -804,17 +804,33 @@ func execCommand(ctx context.Context, name string, args ...string) (string, int,
 	return "", -1, err
 }
 
-// DefaultStateDir resolves the daemon state directory: LAMBE_STATE_DIR
-// when set, otherwise ~/.local/state/lambe.
-func DefaultStateDir() string {
+// State directory sources reported by ResolveStateDir.
+const (
+	// StateDirEnv means LAMBE_STATE_DIR chose the directory.
+	StateDirEnv = "env"
+	// StateDirDefault means the built-in ~/.local/state/lambe was used.
+	StateDirDefault = "default"
+)
+
+// ResolveStateDir resolves the daemon state directory and says why:
+// LAMBE_STATE_DIR (StateDirEnv) when set, otherwise ~/.local/state/lambe
+// (StateDirDefault).
+func ResolveStateDir() (dir, source string) {
 	if dir := os.Getenv("LAMBE_STATE_DIR"); dir != "" {
-		return dir
+		return dir, StateDirEnv
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "lambe-state"
+		return "lambe-state", StateDirDefault
 	}
-	return filepath.Join(home, ".local", "state", "lambe")
+	return filepath.Join(home, ".local", "state", "lambe"), StateDirDefault
+}
+
+// DefaultStateDir resolves the daemon state directory: LAMBE_STATE_DIR
+// when set, otherwise ~/.local/state/lambe.
+func DefaultStateDir() string {
+	dir, _ := ResolveStateDir()
+	return dir
 }
 
 // DefaultMachine resolves this machine's dispatch identity: LAMBE_MACHINE

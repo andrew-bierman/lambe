@@ -463,3 +463,15 @@ func TestBuildReportBulkAttemptsAgainstBdTracker(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveStateDirReportsItsSource(t *testing.T) {
+	t.Setenv("HOME", "/home/x")
+	t.Setenv("LAMBE_STATE_DIR", "")
+	if dir, src := ResolveStateDir(); dir != "/home/x/.local/state/lambe" || src != StateDirDefault {
+		t.Errorf("default = %q, %q", dir, src)
+	}
+	t.Setenv("LAMBE_STATE_DIR", "/override")
+	if dir, src := ResolveStateDir(); dir != "/override" || src != StateDirEnv || DefaultStateDir() != "/override" {
+		t.Errorf("override = %q, %q", dir, src)
+	}
+}

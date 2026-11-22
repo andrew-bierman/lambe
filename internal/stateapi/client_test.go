@@ -596,3 +596,52 @@ func TestCacheServesWithinTTL(t *testing.T) {
 		t.Fatalf("queue transport hits with caching disabled = %d, want 3", hits)
 	}
 }
+
+// TestListReportsLiveDescriptorsWithoutTokens pins the discovery listing:
+// the same acceptance rules as Resolve (stale and invalid entries dropped),
+// files listed in a stable order with their path, and no bearer token
+// anywhere in what the listing can carry.
+func TestListReportsLiveDescriptorsWithoutTokens(t *testing.T) {
+	dir := t.TempDir()
+	writeDescriptorFile(t, dir, "stateapi-b.json", Descriptor{
+		SchemaVersion: 1, Instance: "b", Addr: "127.0.0.1:42000", BearerToken: "secret-b", PID: os.Getpid(),
+	})
+	pathA := writeDescriptorFile(t, dir, "stateapi-a.json", Descriptor{
+		SchemaVersion: 1, Instance: "a", Addr: "127.0.0.1:41999", BearerToken: "secret-a", PID: os.Getpid(),
+		Version: "v1", ConfigPath: "/cfg/lambe.yaml", StartedAt: "2026-11-19T00:00:00Z",
+	})
+	writeDescriptorFile(t, dir, "stateapi-stale.json", Descriptor{
+		SchemaVersion: 1, Instance: "stale", Addr: "127.0.0.1:41001", BearerToken: "secret-stale", PID: 1 << 28, Identity: "gone",
+	})
+	writeDescriptorFile(t, dir, "stateapi-wide.json", Descriptor{
+		SchemaVersion: 1, Instance: "wide", Addr: "127.1.2.3:41002", BearerToken: "secret-wide",
+	})
+
+	got, err := List(dir)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 2 || got[0].Instance != "a" || got[1].Instance != "b" {
+		t.Fatalf("List = %+v, want instances a,b in order", got)
+	}
+	a := got[0]
+	if a.Path != pathA || a.Addr != "127.0.0.1:41999" || a.PID != os.Getpid() ||
+		a.Version != "v1" || a.ConfigPath != "/cfg/lambe.yaml" || a.StartedAt != "2026-11-19T00:00:00Z" {
+		t.Fatalf("entry a = %+v", a)
+	}
+	wire, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(wire), "secret") || strings.Contains(string(wire), "bearer") {
+		t.Fatalf("listing leaks the token: %s", wire)
+	}
+
+	// No state dir, no live dir, no descriptors: an empty answer, not an error.
+	for _, missing := range []string{filepath.Join(dir, "nope"), t.TempDir()} {
+		entries, err := List(missing)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("List(%s) = %v, %v; want empty and no error", missing, entries, err)
+		}
+	}
+}

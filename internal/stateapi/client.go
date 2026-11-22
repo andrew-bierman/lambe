@@ -250,6 +250,46 @@ func Resolve(ctx context.Context, stateDir string, sel Selector) (Endpoint, erro
 	}
 }
 
+// Entry is one discovered descriptor as a listing shows it. It has no token
+// field by construction: a listing can name a daemon without ever being able
+// to leak its credential.
+type Entry struct {
+	// Path is the descriptor file.
+	Path string `json:"path"`
+	// Instance is the daemon instance name.
+	Instance string `json:"instance"`
+	// Addr is the validated literal-127.0.0.1 host:port.
+	Addr string `json:"addr"`
+	// PID is the daemon's process id.
+	PID int `json:"pid"`
+	// Version is the daemon build version.
+	Version string `json:"version,omitempty"`
+	// ConfigPath is the configuration file the daemon loaded.
+	ConfigPath string `json:"config_path,omitempty"`
+	// StartedAt is when the daemon started, RFC 3339 in UTC.
+	StartedAt string `json:"started_at"`
+}
+
+// List enumerates the state dir's live descriptors with Resolve's
+// acceptance rules (stale, malformed, and non-loopback entries are
+// dropped), ordered by file path. A missing state or live directory is an
+// empty list, not an error. It never returns a token.
+func List(stateDir string) ([]Entry, error) {
+	matches, err := filepath.Glob(filepath.Join(stateDir, "live", "stateapi-*.json"))
+	if err != nil {
+		return nil, fmt.Errorf("stateapi: enumerate %s: %w", stateDir, err)
+	}
+	entries := []Entry{}
+	for _, path := range matches { // Glob returns sorted names.
+		ep, ok := readDescriptor(path)
+		if !ok {
+			continue
+		}
+		entries = append(entries, Entry{Path: path, Instance: ep.Instance, Addr: ep.Addr, PID: ep.PID, Version: ep.Version, ConfigPath: ep.ConfigPath, StartedAt: ep.StartedAt})
+	}
+	return entries, nil
+}
+
 // readDescriptor decodes one descriptor file, dropping stale or malformed
 // entries: an unreadable or undecodable document, an unknown descriptor
 // schema, an address that is not the literal loopback form, or an
