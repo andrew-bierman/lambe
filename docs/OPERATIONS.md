@@ -161,6 +161,41 @@ the heartbeat proportionally.
 
 The daemon heartbeats every claim it holds each `heartbeat_interval`. Crashed-host claims are reclaimed by an external `bd reclaim --older-than 10m`; the daemon does not run a reaper.
 
+## Orphaned claims
+
+A claim this actor holds that recovery cannot resume (no durable continuation
+state, typically left by an older daemon) is kept and heartbeated, because its
+agent might still be alive. Left alone, a large pile of them used to flood the
+tracker with `bd heartbeat` calls. Now:
+
+- The heartbeat loop beats live work first, orphans second, and never runs
+  more than 4 beats at once. A round that exhausts its 30s budget means the
+  tracker is saturated, so the next rounds are skipped with backoff, and each
+  round starts after a small random delay.
+- After `supervisor.orphan_claim_ttl` (default 1h, counted from when the claim
+  first blocked and persisted across restarts) the daemon stops heartbeating
+  the claim, provided its recorded agent is provably gone. The lease then
+  expires on its own (or `auto_reclaim` / `bd reclaim` picks it up). A claim
+  whose agent may still be alive keeps heartbeating.
+- Startup recovery inspects claims 4 at a time, each time-boxed, and a pass
+  is capped at 15s per tick, so new issues dispatch while old claims are still
+  being checked. A blocked claim is re-checked every 5 minutes.
+- Checkpoints of closed issues are dropped.
+
+`lambe status` shows an "orphaned claims" section (issue, age, owner,
+workspace present, reason), and `lambe doctor` warns when any exist.
+
+```sh
+lambe claims list                    # the same table, from checkpoints
+lambe claims release ISSUE           # release one orphan back to the open pool
+lambe claims release --force ISSUE   # skip the workspace and agent checks
+```
+
+`release` is the only way lambe releases such a claim. Without `--force` it
+refuses when the claim is not a recorded orphan, its workspace still exists, or
+its recorded agent is not provably dead. The release is guarded by this
+actor's identity, so another host's claim is never touched.
+
 ## Configuration
 
 Config file keys, each overridable by `LAMBE_<SECTION>_<KEY>` (first underscore
@@ -171,6 +206,7 @@ is the section separator):
 | `machine`, `actor` | hostname first label, `lambe@<machine>` | Dispatch affinity name and the tracker identity on claims. Must be distinct per host sharing a tracker; `lambe doctor` prints the resolved actor and warns on generic hostnames. |
 | `supervisor.tick_seconds` | 10 | Loop cadence. |
 | `supervisor.heartbeat_interval` | 150s | Lease extension cadence. |
+| `supervisor.orphan_claim_ttl` | 1h | How long a recovered claim with no continuation state may stay blocked before the daemon stops heartbeating it so its lease can expire. `0` heartbeats such claims forever. The claim is never released automatically; see [Orphaned claims](#orphaned-claims). |
 | `supervisor.silence_timeout` | 10m | No agent output for this long: the watchdog probes, then kills. |
 | `supervisor.turn_timeout` | 1h | Hard cap on one agent turn. |
 | `supervisor.stall_after` | 5m | **The one stall threshold.** A running run with no agent activity or supervisor progress for this long is `stalled` in the state API (`stalled`, `stall_after_seconds`) and flagged by `lambe doctor`. Observation only; the watchdog still acts at `silence_timeout`. |

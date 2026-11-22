@@ -1,14 +1,17 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/andrew-bierman/lambe/internal/proc"
+	"github.com/andrew-bierman/lambe/internal/symphony"
 	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
@@ -209,9 +212,42 @@ func RunTicks(ctx context.Context, interval time.Duration, cycle func(context.Co
 // applies live. Lease losses downgrade the claim to standing-down state;
 // other errors are logged and retried on the next beat.
 func HeartbeatLoop(ctx context.Context, tr tracker.Tracker, actor string, interval func() time.Duration, log *slog.Logger, labels ...[]string) {
+	var l []string
+	if len(labels) > 0 {
+		l = labels[0]
+	}
+	RunHeartbeats(ctx, HeartbeatConfig{Tracker: tr, Actor: actor, Interval: interval, Log: log, Labels: l})
+}
+
+// HeartbeatConfig configures RunHeartbeats.
+type HeartbeatConfig struct {
+	Tracker  tracker.Tracker
+	Actor    string
+	Interval func() time.Duration
+	Log      *slog.Logger
+	Labels   []string
+	// Orphans lists blocked claims: live work is beaten first, orphans
+	// after it, and lapsed orphans not at all.
+	Orphans *symphony.OrphanRegistry
+	// RoundBound overrides the per-round wall-clock bound; zero uses
+	// heartbeatRoundBound.
+	RoundBound time.Duration
+}
+
+// maxBackoffRounds caps how many beats are skipped after slow rounds.
+const maxBackoffRounds = 8
+
+// RunHeartbeats is HeartbeatLoop with options. A round that hits its
+// wall-clock bound means the tracker is saturated: the next beats are
+// skipped with exponential backoff instead of piling more `bd` calls onto
+// it, and each round starts after a small random delay so several daemons
+// sharing a hub do not beat in lockstep.
+func RunHeartbeats(ctx context.Context, c HeartbeatConfig) {
+	log := c.Log
 	if log == nil {
 		log = slog.Default()
 	}
+	interval := c.Interval
 	if interval == nil {
 		d := 150 * time.Second
 		interval = func() time.Duration { return d }
@@ -219,6 +255,7 @@ func HeartbeatLoop(ctx context.Context, tr tracker.Tracker, actor string, interv
 	tick := interval()
 	ticker := time.NewTicker(tick)
 	defer ticker.Stop()
+	slow, skip := 0, 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -229,48 +266,70 @@ func HeartbeatLoop(ctx context.Context, tr tracker.Tracker, actor string, interv
 				tick = next
 				ticker.Reset(tick)
 			}
-			// One round, wall-clock bounded: a hung tracker call fails
-			// the round and the next beat retries it.
-			var queryLabels []string
-			if len(labels) > 0 {
-				queryLabels = labels[0]
-			}
-			roundCtx, roundCancel := context.WithTimeout(ctx, heartbeatRoundBound)
-			issues, err := tr.Dispatchable(roundCtx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}, Labels: queryLabels})
-			if err != nil {
-				roundCancel()
-				log.Warn("heartbeat dispatch read failed",
-					"category", ErrorCategory(err), "error", err)
+			if skip > 0 {
+				skip--
+				log.Warn("heartbeat round skipped; tracker is slow", "remaining_skips", skip)
 				continue
 			}
-			// Beats run concurrently under a bounded semaphore so a
-			// large claim set does not stretch one round across many
-			// serial shell-outs.
-			sem := make(chan struct{}, heartbeatConcurrency)
-			var wg sync.WaitGroup
-			for _, issue := range issues {
-				if issue.Assignee != actor {
-					continue
-				}
-				wg.Add(1)
-				sem <- struct{}{}
-				go func(id string) {
-					defer wg.Done()
-					defer func() { <-sem }()
-					if err := tr.Heartbeat(roundCtx, id); err != nil {
-						if errors.Is(err, tracker.ErrNotOwner) {
-							log.Info("heartbeat lost claim", "issue", id, "category", CategoryLease)
-							return
-						}
-						log.Warn("heartbeat failed", "issue", id,
-							"category", ErrorCategory(err), "error", err)
-					}
-				}(issue.ID)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(rand.N(tick/10 + 1)): // #nosec G404 -- jitter, not security
 			}
-			wg.Wait()
-			roundCancel()
+			if beatRound(ctx, c.Tracker, c.Actor, c.Labels, c.Orphans, log, cmp.Or(c.RoundBound, heartbeatRoundBound)) {
+				slow++
+				skip = min(1<<slow, maxBackoffRounds) - 1
+			} else {
+				slow = 0
+			}
 		}
 	}
+}
+
+// beatRound runs one heartbeat round and reports whether it ran out of
+// its wall-clock bound. At most heartbeatConcurrency beats are in flight.
+func beatRound(ctx context.Context, tr tracker.Tracker, actor string, labels []string, orphans *symphony.OrphanRegistry, log *slog.Logger, bound time.Duration) (slow bool) {
+	roundCtx, roundCancel := context.WithTimeout(ctx, bound)
+	defer roundCancel()
+	issues, err := tr.Dispatchable(roundCtx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}, Labels: labels})
+	if err != nil {
+		log.Warn("heartbeat dispatch read failed", "category", ErrorCategory(err), "error", err)
+		return roundCtx.Err() != nil && ctx.Err() == nil
+	}
+	var live, parked []string
+	for _, issue := range issues {
+		if issue.Assignee != actor {
+			continue
+		}
+		switch c, ok := orphans.Get(issue.ID); {
+		case !ok:
+			live = append(live, issue.ID)
+		case !c.Lapsed:
+			parked = append(parked, issue.ID)
+		}
+	}
+	sem := make(chan struct{}, heartbeatConcurrency)
+	var wg sync.WaitGroup
+	for _, id := range append(live, parked...) {
+		if roundCtx.Err() != nil {
+			break // budget spent: the rest wait for the next round
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(id string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := tr.Heartbeat(roundCtx, id); err != nil {
+				if errors.Is(err, tracker.ErrNotOwner) {
+					log.Info("heartbeat lost claim", "issue", id, "category", CategoryLease)
+					return
+				}
+				log.Warn("heartbeat failed", "issue", id, "category", ErrorCategory(err), "error", err)
+			}
+		}(id)
+	}
+	wg.Wait()
+	return roundCtx.Err() != nil && ctx.Err() == nil
 }
 
 // ReclaimLoop reverts stale-lease claims (dead-worker recovery) every

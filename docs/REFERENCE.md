@@ -234,6 +234,11 @@ lambe is built around a small set of seams. What exists today:
 | Gates | `shell`, `gh:run`, `gh:pr` | — |
 | Surfaces | terminal logs/TUI and JSON progress | MCP, optional Rex badges, opt-in local state API with the SwiftUI dashboard |
 
+Orphaned claims (see [OPERATIONS.md](OPERATIONS.md#orphaned-claims)) are
+listed by `lambe status` and managed with `lambe claims list` and
+`lambe claims release [--force] ISSUE`. `release` is the only path that frees
+one, and only on explicit operator action. Exit codes match `lambe status`.
+
 ## Configuration
 
 Precedence: defaults < config file < environment < flags. Environment variables
@@ -249,6 +254,7 @@ Key knobs and defaults:
 | Silence timeout | 10m | Agent produces no output for this long → reclaim |
 | Turn timeout | 1h | Hard cap on a single agent turn |
 | Heartbeat | 150s | Liveness interval written to the tracker |
+| `supervisor.orphan_claim_ttl` | 1h | Stop heartbeating a recovered claim with no continuation state after this long (0 = never); never releases it |
 | `labels` | (none) | Opt-in work lane: claim only issues with every listed label |
 
 On a shared tracker, set `labels` so lambe claims only issues explicitly
@@ -292,7 +298,10 @@ nothing to reap. A foreign claim or unverifiable
 process is left alone. Recovery errors are logged and retain the workspace;
 transient tracker failures are retried on subsequent ticks. Claims from older
 versions without checkpoints require inspection before releasing them for a
-fresh run. Do not release one while its old agent is still working.
+fresh run. Do not release one while its old agent is still working. Use
+`lambe claims list` and `lambe claims release ISSUE`, which checks for you; after
+`supervisor.orphan_claim_ttl` the daemon also stops heartbeating such a claim
+(only if its agent is provably gone) so its lease can expire.
 
 Checkpoints preserve Lambe's continuation state. Backend conversation resumption
 also depends on the harness: Pi reopens its workspace session; ACP reopens the

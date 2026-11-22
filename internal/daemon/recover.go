@@ -5,11 +5,20 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/andrew-bierman/lambe/internal/proc"
 	"github.com/andrew-bierman/lambe/internal/symphony"
 	"github.com/andrew-bierman/lambe/internal/tracker"
+)
+
+// Startup recovery bounds: parallel ownership reads, each time-boxed, and an
+// overall budget so a saturated tracker cannot hold up the daemon.
+const (
+	recoverConcurrency = 4
+	recoverLookupBound = 15 * time.Second
+	recoverBudget      = 60 * time.Second
 )
 
 // Orphan is one persisted process-group binding discovered at startup: the
@@ -59,9 +68,33 @@ func Recover(ctx context.Context, src OrphanSource, tr tracker.Tracker, actor st
 	if err != nil {
 		return nil, fmt.Errorf("read persisted orphans: %w", err)
 	}
+	// Ownership reads are independent and read-only: run them with bounded
+	// parallelism, each time-boxed, then act on the results in order. A
+	// read that did not finish is an unverified ownership (stand down).
+	lookCtx, cancel := context.WithTimeout(ctx, recoverBudget)
+	defer cancel()
+	looks := make([]struct {
+		issue tracker.Issue
+		ok    bool
+		err   error
+	}, len(orphans))
+	sem := make(chan struct{}, recoverConcurrency)
+	var wg sync.WaitGroup
+	for i, o := range orphans {
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			rctx, rcancel := context.WithTimeout(lookCtx, recoverLookupBound)
+			defer rcancel()
+			looks[i].issue, looks[i].ok, looks[i].err = lookupIssue(rctx, tr, o.SessionID)
+		}()
+	}
+	wg.Wait()
 	var adopted []Adoption
-	for _, o := range orphans {
-		issue, ok, err := lookupIssue(ctx, tr, o.SessionID)
+	for i, o := range orphans {
+		issue, ok, err := looks[i].issue, looks[i].ok, looks[i].err
 		if err != nil {
 			// Unverified ownership: never kill, never adopt.
 			log.Error("orphan ownership unverified, standing down",

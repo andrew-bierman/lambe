@@ -15,6 +15,7 @@ import (
 	"github.com/andrew-bierman/lambe/internal/gate"
 	"github.com/andrew-bierman/lambe/internal/httpstate"
 	"github.com/andrew-bierman/lambe/internal/mcp"
+	"github.com/andrew-bierman/lambe/internal/symphony"
 	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
@@ -69,6 +70,9 @@ type Report struct {
 	// label lanes, read in the same grouped pass as every other section so
 	// the report, the queue route, and the TUI share one canonical result.
 	Queue []tracker.ReadinessRow
+	// Orphaned lists recovered claims with no continuation state that the
+	// daemon keeps (or kept) heartbeating; see `lambe claims`.
+	Orphaned []symphony.OrphanClaim
 	// AttemptsUnreadable is set when the attempt records could not be read, so
 	// attempt numbers and wake timers are unknown rather than zero.
 	AttemptsUnreadable bool
@@ -266,6 +270,9 @@ func RenderReport(w io.Writer, rep Report) error {
 		}
 	}
 
+	if err := renderOrphans(w, rep.Orphaned); err != nil {
+		return err
+	}
 	if err := reportf(w, "last-night gate rejections:"); err != nil {
 		return err
 	}
@@ -302,7 +309,37 @@ func readReport(cfg *config.Config, machine string) (Report, error) {
 		return Report{}, fmt.Errorf("open tracker %s: %w", t.Name, err)
 	}
 	labels, routeLabels := queueLanes(cfg)
-	return BuildReport(context.Background(), local, labels, routeLabels)
+	rep, err := BuildReport(context.Background(), local, labels, routeLabels)
+	if err != nil {
+		return rep, err
+	}
+	// A failed checkpoint scan only hides the section; the report stands.
+	rep.Orphaned, _ = ListOrphanClaims(context.Background(), local, DefaultStateDir(), cfg)
+	return rep, nil
+}
+
+func renderOrphans(w io.Writer, claims []symphony.OrphanClaim) error {
+	if len(claims) == 0 {
+		return nil
+	}
+	if err := reportf(w, "orphaned claims (no continuation state; release with `lambe claims release ISSUE`):"); err != nil {
+		return err
+	}
+	tw := tabwriter.NewWriter(w, 2, 4, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "  ISSUE\tAGE\tOWNER\tWORKSPACE\tREASON"); err != nil {
+		return err
+	}
+	for _, c := range claims {
+		ws := "absent"
+		if c.WorkspacePresent {
+			ws = "present"
+		}
+		age := time.Since(c.Since).Truncate(time.Minute).String()
+		if _, err := fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\n", c.Issue, age, orDash(c.Owner), ws, c.Reason); err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
 }
 
 // Status reads the morning report from the configured local tracker and

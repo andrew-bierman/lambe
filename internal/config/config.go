@@ -34,6 +34,7 @@ const (
 	defaultHeartbeatTTLSecond = 450
 	defaultStallAfter         = DefaultStallAfter
 	defaultReclaimGrace       = 10 * time.Minute
+	defaultOrphanClaimTTL     = time.Hour
 	defaultStateAPIAddr       = "127.0.0.1:0"
 )
 
@@ -51,6 +52,11 @@ type Supervisor struct {
 	// sharing one Dolt server (see docs/MULTI-MACHINE.md).
 	AutoReclaim  bool
 	ReclaimGrace time.Duration
+	// OrphanClaimTTL is how long a recovered claim with no continuation
+	// state may stay blocked before the daemon stops heartbeating it, so
+	// its lease expires. The claim is never released automatically. Zero
+	// heartbeats such claims forever (the pre-0.11 behavior).
+	OrphanClaimTTL time.Duration
 	// StallAfter is the single stall threshold: a running run with no agent
 	// activity for this long is "stalled" to the state API, dashboard,
 	// TUI, and doctor. It is observation only; the watchdog still acts at
@@ -213,6 +219,7 @@ func Load(opts Options) (*Config, error) {
 			ProbeWindow:        k.Duration("supervisor.probe_window"),
 			AutoReclaim:        k.Bool("supervisor.auto_reclaim"),
 			ReclaimGrace:       k.Duration("supervisor.reclaim_grace"),
+			OrphanClaimTTL:     k.Duration("supervisor.orphan_claim_ttl"),
 		},
 		Gate:          Gate{CheckTimeout: k.Duration("gate.check_timeout")},
 		Machine:       strings.TrimSpace(k.String("machine")),
@@ -360,6 +367,7 @@ func defaultsProvider() *confmap.Confmap {
 			"stall_after":          defaultStallAfter.String(),
 			"auto_reclaim":         false,
 			"reclaim_grace":        defaultReclaimGrace.String(),
+			"orphan_claim_ttl":     defaultOrphanClaimTTL.String(),
 		},
 	}, ".")
 }
@@ -557,6 +565,9 @@ func validate(cfg *Config) []error {
 	}
 	if s.HeartbeatInterval <= 0 {
 		errs = append(errs, fmt.Errorf("supervisor.heartbeat_interval must be positive, got %s", s.HeartbeatInterval))
+	}
+	if s.OrphanClaimTTL < 0 {
+		errs = append(errs, fmt.Errorf("supervisor.orphan_claim_ttl must not be negative, got %s", s.OrphanClaimTTL))
 	}
 	if s.AutoReclaim && s.ReclaimGrace <= time.Duration(s.TickSeconds)*time.Second {
 		errs = append(errs, fmt.Errorf("supervisor.reclaim_grace (%s) must exceed the tick interval (%ds): a slow sync must not read as a dead worker", s.ReclaimGrace, s.TickSeconds))

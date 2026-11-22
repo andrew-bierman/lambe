@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"sync"
 	"syscall"
 	"time"
 
@@ -46,6 +48,10 @@ type checkpoint struct {
 	Workspace     string          `json:"workspace,omitempty"`
 	Retry         *Retry          `json:"retry,omitempty"`
 	Error         string          `json:"error,omitempty"`
+	// BlockedSince is when recovery first found no durable continuation
+	// for this claim. It is persisted so the orphan clock survives daemon
+	// restarts.
+	BlockedSince time.Time `json:"blocked_since,omitempty"`
 }
 
 func (l *Loop) checkpointPath(id string) string {
@@ -187,7 +193,7 @@ func (l *Loop) discoverLegacy(ctx context.Context) error {
 			continue
 		}
 		// An older installation cannot safely reconstruct a missing conversation.
-		saved := checkpoint{Version: 1, Phase: checkpointLegacy, Issue: issue, Workflow: l.Loader.Current(), Key: issue.ID}
+		saved := checkpoint{Version: 1, Phase: checkpointLegacy, Issue: issue, Workflow: l.Loader.Current(), Key: issue.ID, BlockedSince: time.Now()}
 		l.recovery[issue.ID] = saved
 		if _, err := os.Stat(l.checkpointPath(issue.ID)); os.IsNotExist(err) {
 			if err := l.writeCheckpoint(saved); err != nil {
@@ -199,53 +205,175 @@ func (l *Loop) discoverLegacy(ctx context.Context) error {
 	return nil
 }
 
+// Recovery defaults. A pass is time-boxed so a slow tracker cannot hold up
+// dispatch, and a blocked claim is re-inspected only occasionally.
+const (
+	defaultRecoveryBudget      = 15 * time.Second
+	defaultRecoveryInspect     = 10 * time.Second
+	defaultRecoveryConcurrency = 4
+	defaultRecoveryRecheck     = 5 * time.Minute
+)
+
+// lookup is the prefetched tracker read for one pending recovery.
+type lookup struct {
+	issues []tracker.Issue
+	err    error
+}
+
+func (l *Loop) readIssue(ctx context.Context, id string) ([]tracker.Issue, error) {
+	issues, err := l.Tracker.Dispatchable(ctx, tracker.DispatchQuery{IDs: []string{id}})
+	if err != nil {
+		return nil, err
+	}
+	if len(issues) == 0 {
+		// Closed issues are omitted from bd's default list view.
+		return l.Tracker.Dispatchable(ctx, tracker.DispatchQuery{IDs: []string{id}, Statuses: []string{tracker.StatusClosed}})
+	}
+	return issues, nil
+}
+
+// inspectAll reads the tracker state of every id with bounded parallelism,
+// each read time-boxed. Ids not reached before ctx ends are absent.
+func (l *Loop) inspectAll(ctx context.Context, ids []string) map[string]lookup {
+	workers := l.RecoveryConcurrency
+	if workers <= 0 {
+		workers = defaultRecoveryConcurrency
+	}
+	box := l.RecoveryInspect
+	if box <= 0 {
+		box = defaultRecoveryInspect
+	}
+	var (
+		mu  sync.Mutex
+		wg  sync.WaitGroup
+		out = make(map[string]lookup, len(ids))
+		sem = make(chan struct{}, workers)
+	)
+	for _, id := range ids {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			wg.Wait()
+			return out
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			ictx, cancel := context.WithTimeout(ctx, box)
+			defer cancel()
+			issues, err := l.readIssue(ictx, id)
+			mu.Lock()
+			out[id] = lookup{issues, err}
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	return out
+}
+
 func (l *Loop) recoverPending(ctx context.Context) {
 	ctx, cancel := l.controlContext(ctx)
 	defer cancel()
+	budget := l.RecoveryBudget
+	if budget <= 0 {
+		budget = defaultRecoveryBudget
+	}
+	ctx, cancelBudget := context.WithTimeout(ctx, budget)
+	defer cancelBudget()
 	if l.recoveryScan {
 		if err := l.discoverLegacy(ctx); err != nil {
 			l.Log.Warn("legacy claim inventory unavailable; retrying next tick", "error", err)
 		}
 	}
+	now := time.Now()
+	var due []string
 	for id, saved := range l.recovery {
+		if saved.Phase == checkpointDeferred && saved.Retry != nil && saved.Retry.At.After(now) {
+			continue
+		}
+		if l.sessions[id] != nil || now.Before(l.nextCheck[id]) {
+			continue
+		}
+		due = append(due, id)
+	}
+	sort.Strings(due)
+	looks := l.inspectAll(ctx, due)
+	recheck := l.RecoveryRecheck
+	if recheck <= 0 {
+		recheck = defaultRecoveryRecheck
+	}
+	for _, id := range due {
 		if ctx.Err() != nil {
 			return
 		}
-		if saved.Phase == checkpointDeferred && saved.Retry != nil && saved.Retry.At.After(time.Now()) {
+		look, ok := looks[id]
+		if !ok {
 			continue
 		}
-		if l.sessions[id] != nil {
-			continue
-		}
-		resumed, err := l.resumeCheckpoint(ctx, saved)
+		saved := l.recovery[id]
+		resumed, err := l.resumeCheckpoint(ctx, saved, look)
 		if err != nil {
-			if saved.Error != err.Error() {
-				saved.Error = err.Error()
-				l.recovery[id] = saved
-				if saved.Phase != checkpointLegacy {
-					_ = l.writeCheckpoint(saved)
-				}
-				l.Log.Error("session recovery blocked; preserving claim and workspace", "issue", id, "error", err)
+			// Only a claim with no continuation state is parked; anything else
+			// (a transient tracker error, a failed finalizer) retries next tick.
+			if errors.Is(err, ErrNoContinuation) {
+				l.nextCheck[id] = time.Now().Add(recheck)
 			}
+			l.noteBlocked(ctx, &saved, err)
+			l.recovery[id] = saved
 			continue
 		}
 		if resumed {
 			delete(l.recovery, id)
+			delete(l.nextCheck, id)
+			l.Orphans.Delete(id)
 		}
 	}
 }
 
-func (l *Loop) resumeCheckpoint(ctx context.Context, saved checkpoint) (bool, error) {
-	issues, err := l.Tracker.Dispatchable(ctx, tracker.DispatchQuery{IDs: []string{saved.Issue.ID}})
+// noteBlocked records why a claim cannot be recovered. A claim blocked for
+// lack of continuation state is an orphan: its clock is persisted, and once
+// it exceeds OrphanTTL (and no recorded agent can be alive) the daemon stops
+// heartbeating it so the lease expires. The claim itself is never released.
+func (l *Loop) noteBlocked(ctx context.Context, saved *checkpoint, err error) {
+	id := saved.Issue.ID
+	orphan := errors.Is(err, ErrNoContinuation)
+	changed := saved.Error != err.Error()
+	if orphan && saved.BlockedSince.IsZero() {
+		saved.BlockedSince = time.Now()
+		changed = true
+	}
+	saved.Error = err.Error()
+	if changed {
+		_ = l.writeCheckpoint(*saved)
+		l.Log.Error("session recovery blocked; preserving claim and workspace", "issue", id, "error", err)
+	}
+	if !orphan {
+		return
+	}
+	claim := OrphanClaim{Issue: id, Owner: saved.Issue.Assignee, Since: saved.BlockedSince, Reason: saved.Error, Workspace: saved.Workspace}
+	if dir, derr := l.Spaces.dirFor(SanitizeKey(saved.Key)); derr == nil {
+		claim.Workspace = dir
+		_, serr := os.Stat(dir)
+		claim.WorkspacePresent = serr == nil
+	}
+	l.Orphans.Set(claim)
+	if prev, _ := l.Orphans.Get(id); prev.Lapsed || l.OrphanTTL <= 0 || time.Since(saved.BlockedSince) < l.OrphanTTL {
+		return
+	}
+	if gone, why := AgentGone(ctx, l.Tracker, id); !gone {
+		l.Log.Warn("orphaned claim past ttl keeps heartbeating", "issue", id, "reason", why)
+		return
+	}
+	l.Orphans.Lapse(id)
+	l.Log.Warn("orphaned claim past ttl; heartbeats stopped, lease will expire (release it with `lambe claims release`)",
+		"issue", id, "since", saved.BlockedSince, "ttl", l.OrphanTTL)
+}
+
+func (l *Loop) resumeCheckpoint(ctx context.Context, saved checkpoint, look lookup) (bool, error) {
+	issues, err := look.issues, look.err
 	if err != nil {
 		return false, err
-	}
-	if len(issues) == 0 {
-		// Closed issues are omitted from bd's default list view.
-		issues, err = l.Tracker.Dispatchable(ctx, tracker.DispatchQuery{IDs: []string{saved.Issue.ID}, Statuses: []string{tracker.StatusClosed}})
-		if err != nil {
-			return false, err
-		}
 	}
 	if len(issues) == 0 {
 		l.removeCheckpoint(saved.Issue.ID)
@@ -254,7 +382,7 @@ func (l *Loop) resumeCheckpoint(ctx context.Context, saved checkpoint) (bool, er
 	issue := issues[0]
 	if issue.Assignee != l.recoveryActor {
 		// Relinquish foreign continuation state without touching its workspace or agent.
-		if issue.Assignee != "" {
+		if issue.Assignee != "" || issue.Status == tracker.StatusClosed {
 			l.removeCheckpoint(issue.ID)
 		}
 		// Unclaimed ready work goes through the normal guarded claim path.
@@ -280,7 +408,7 @@ func (l *Loop) resumeCheckpoint(ctx context.Context, saved checkpoint) (bool, er
 		return false, l.stopRecordedAgent(ctx, issue.ID)
 	}
 	if saved.Phase == checkpointLegacy {
-		return false, fmt.Errorf("no durable continuation state; inspect any old agent before releasing its stale claim")
+		return false, ErrNoContinuation
 	}
 	if err := l.Tracker.Heartbeat(ctx, issue.ID); err != nil {
 		return false, err
