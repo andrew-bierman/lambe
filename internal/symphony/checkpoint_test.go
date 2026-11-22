@@ -211,6 +211,7 @@ func TestDispatchNeverClaimsOpenOperationalRecords(t *testing.T) {
 func TestReleasedLegacyClaimStartsPositiveAttempt(t *testing.T) {
 	f := newFixture(t, "work {{ issue }}", continueTurn)
 	f.loop.CheckpointDir = filepath.Join(f.dir, "sessions")
+	f.loop.RecoveryRecheck = time.Nanosecond
 	f.tr.issues["i-1"] = tracker.Issue{ID: "i-1", Status: tracker.StatusInProgress, Assignee: "lambe"}
 	if err := f.loop.Restore(t.Context(), "lambe"); err != nil {
 		t.Fatal(err)

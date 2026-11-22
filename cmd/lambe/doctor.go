@@ -153,6 +153,7 @@ func diagnose(ctx context.Context, e doctorEnv, configFile string) []checkResult
 	rs = append(rs, checkHarness(cfg))
 	rs = append(rs, checkIdentity(e, cfg))
 	rs = append(rs, checkDaemon(e, cfg)...)
+	rs = append(rs, checkOrphanClaims(e, cfg)...)
 	rs = append(rs, checkService(ctx, e, path))
 	rs = append(rs, checkStateAPI(ctx, e, cfg))
 	rs = append(rs, checkRex(ctx, e))
@@ -525,4 +526,20 @@ func checkRex(ctx context.Context, e doctorEnv) checkResult {
 		r.Status, r.Detail = statusSkip, "Rex not detected (optional): "+av.Reason.String()
 	}
 	return r
+}
+
+// checkOrphanClaims warns about recorded claims that recovery cannot resume.
+// It reads checkpoints only, so it costs no tracker call; it reports nothing
+// when there are none.
+func checkOrphanClaims(e doctorEnv, cfg *config.Config) []checkResult {
+	claims, err := symphony.ScanOrphanClaims(daemon.CheckpointDir(e.stateDir, cfg))
+	if err != nil || len(claims) == 0 {
+		return nil
+	}
+	return []checkResult{{
+		Name:   "claims",
+		Status: statusWarn,
+		Detail: fmt.Sprintf("%d orphaned claim(s) with no continuation state; the oldest is %s (%s)", len(claims), claims[0].Issue, e.now().Sub(claims[0].Since).Round(time.Minute)),
+		Fix:    "review with `lambe claims list`; release each with `lambe claims release ISSUE` once its agent is confirmed gone",
+	}}
 }

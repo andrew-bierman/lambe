@@ -39,6 +39,7 @@ usage:
   lambe run     [-config FILE] run the supervisor daemon until SIGTERM/SIGINT
   lambe status  [-config FILE] [-json] print the morning report (-json: state API snapshot)
   lambe state-dir [-json]      print the state directory and live state API descriptors
+  lambe claims  list | release [--force] ISSUE   inspect or release orphaned claims
   lambe doctor  [-config FILE] [-json] check for anything that could stall your agents
   lambe service install|status|uninstall  keep the daemon alive under launchd/systemd
   lambe mcp     [-config FILE] serve lambe's MCP tools over stdio
@@ -86,6 +87,11 @@ func main() {
 				logging.Default().Error("lambe doctor failed", "error", err.Error())
 			}
 			os.Exit(1)
+		}
+	case "claims":
+		if err := runClaims(args[1:], os.Stdout); err != nil {
+			logging.Default().Error("lambe claims failed", "error", err.Error())
+			os.Exit(readExitCode(err))
 		}
 	case "service":
 		if err := runService(args[1:], hostEnv(), os.Stdout); err != nil {

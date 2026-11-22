@@ -605,3 +605,18 @@ workflows:
 		t.Fatal("unknown workflow harness must fail validation")
 	}
 }
+
+func TestOrphanClaimTTL(t *testing.T) {
+	cfg, err := Load(Options{File: writeTemp(t, ""), Env: []string{}})
+	if err != nil || cfg.Supervisor.OrphanClaimTTL != time.Hour {
+		t.Fatalf("default ttl = %v, err %v, want 1h", cfg.Supervisor.OrphanClaimTTL, err)
+	}
+	cfg, err = Load(Options{File: writeTemp(t, "supervisor:\n  orphan_claim_ttl: 0s\n"), Env: []string{}})
+	if err != nil || cfg.Supervisor.OrphanClaimTTL != 0 {
+		t.Fatalf("0s must disable the ttl: %v, err %v", cfg.Supervisor.OrphanClaimTTL, err)
+	}
+	_, err = Load(Options{File: writeTemp(t, "supervisor:\n  orphan_claim_ttl: -1m\n"), Env: []string{}})
+	if err == nil || !strings.Contains(err.Error(), "orphan_claim_ttl") {
+		t.Fatalf("negative ttl: got %v", err)
+	}
+}

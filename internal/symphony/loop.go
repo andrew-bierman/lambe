@@ -547,9 +547,20 @@ type Loop struct {
 	ControlTimeout time.Duration
 	// CheckpointDir enables private durable continuation records for this instance.
 	CheckpointDir string
-	recoveryScan  bool
-	recoveryActor string
-	recovery      map[string]checkpoint
+	// Orphans tracks recovered-but-blocked claims for the heartbeat loop and
+	// status. OrphanTTL, when positive, is how long a claim may stay blocked
+	// before its heartbeats stop (see noteBlocked).
+	Orphans   *OrphanRegistry
+	OrphanTTL time.Duration
+	// Recovery tuning; zero values use the defaults in checkpoint.go.
+	RecoveryBudget      time.Duration
+	RecoveryInspect     time.Duration
+	RecoveryConcurrency int
+	RecoveryRecheck     time.Duration
+	nextCheck           map[string]time.Time
+	recoveryScan        bool
+	recoveryActor       string
+	recovery            map[string]checkpoint
 	// FailureDelay overrides the failure backoff computation; the default
 	// wraps FailureBackoff with RetryCap.
 	FailureDelay func(attempt int) time.Duration
@@ -582,6 +593,8 @@ func NewLoop(tr tracker.Tracker, loader *Loader, runner AgentRunner, gates GateE
 		sessions:          map[string]*session{},
 		active:            map[string]*worker{},
 		recovery:          map[string]checkpoint{},
+		nextCheck:         map[string]time.Time{},
+		Orphans:           &OrphanRegistry{},
 		retries:           &Queue{},
 	}
 }

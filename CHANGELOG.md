@@ -12,12 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lambe status -json` prints the morning report as a state API snapshot (`GET /api/v1/state` shape) read from the tracker, with no daemon needed; `lambe state-dir [-json]` prints the resolved state directory and the live state API descriptors (never the token).
 - `lambe service install|status|uninstall -label NAME` and `lambe doctor -service-label NAME` run a second, isolated launchd/systemd service; `service install` bakes in `LAMBE_STATE_DIR` when set.
 
+- `supervisor.orphan_claim_ttl` (default 1h; 0 keeps the old behavior) stops heartbeating a recovered claim that has no continuation state once its recorded agent is provably gone, so the lease expires on its own. `lambe claims list` / `lambe claims release [--force] ISSUE` and an "orphaned claims" section in `lambe status` surface them, `lambe doctor` warns about them, and release only ever happens on explicit operator action.
+
 ### Changed
 
+- Heartbeats beat live work before orphaned claims, skip rounds with backoff when the tracker is slow, and start after a small random delay. Startup recovery inspects claims in a bounded parallel, time-boxed pass, so new work dispatches while old claims are still being checked (see `docs/solutions/orphan-claim-heartbeats.md`).
 - `lambe status` now exits 2 on a usage error (it was 1) and rejects stray arguments (they were ignored).
 
 ### Fixed
 
+- Stale claims no longer starve real work: dozens of orphaned claims used to produce thousands of failing `bd heartbeat` calls and serial multi-minute startup recovery on a single-writer hub.
+- Local checkpoints of closed issues are removed instead of being re-read on every restart.
 - Dashboard: darker secondary text and error red on a light terminal so they meet WCAG AA contrast on the selected row and status bar.
 - `lambe service uninstall` on macOS waits for launchd to finish stopping the daemon, so the agent is gone when the command returns.
 - `lambe doctor` says when a fixed `stateapi.addr` port is already in use instead of "daemon not running?".

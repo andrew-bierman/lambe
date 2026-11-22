@@ -360,6 +360,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 
 	var loop Ticker
+	var orphans *symphony.OrphanRegistry
 	if d.opts.WorkflowPath != "" {
 		loader, err := symphony.NewLoader(d.opts.WorkflowPath, symphony.OSEnv, d.log)
 		if err != nil {
@@ -432,6 +433,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 			runner.live = view
 		}
 		l.ControlTimeout = d.cycleBound()
+		l.OrphanTTL = d.opts.Config.Supervisor.OrphanClaimTTL
+		orphans = l.Orphans
 		l.CheckpointDir = filepath.Join(d.opts.StateDir, "sessions", strings.TrimSuffix(lockName, ".lock"))
 		if err := l.Restore(runCtx, d.opts.Actor); err != nil {
 			if errors.Is(err, symphony.ErrWorkspaceRootChanged) {
@@ -472,8 +475,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}()
 	}
 
-	go HeartbeatLoop(runCtx, primary, d.opts.Actor,
-		func() time.Duration { return d.opts.Config.Supervisor.HeartbeatInterval }, d.log)
+	go RunHeartbeats(runCtx, HeartbeatConfig{
+		Tracker:  primary,
+		Actor:    d.opts.Actor,
+		Interval: func() time.Duration { return d.opts.Config.Supervisor.HeartbeatInterval },
+		Log:      d.log,
+		Orphans:  orphans,
+	})
 
 	if sup := d.opts.Config.Supervisor; sup.AutoReclaim {
 		d.log.Info("auto reclaim enabled", "grace", sup.ReclaimGrace.String())
