@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -214,8 +215,8 @@ func (e *AmbiguityError) Unwrap() error { return ErrAmbiguous }
 // selects by the given selector. It never deletes a descriptor — the
 // owning daemon removes its own file at shutdown.
 func Resolve(ctx context.Context, stateDir string, sel Selector) (Endpoint, error) {
-	dir := filepath.Join(stateDir, "live")
-	matches, err := filepath.Glob(filepath.Join(dir, "stateapi-*.json"))
+	dir := LiveDir(stateDir)
+	matches, err := descriptorPaths(stateDir)
 	if err != nil {
 		return Endpoint{}, fmt.Errorf("stateapi: enumerate %s: %w", dir, err)
 	}
@@ -275,12 +276,12 @@ type Entry struct {
 // dropped), ordered by file path. A missing state or live directory is an
 // empty list, not an error. It never returns a token.
 func List(stateDir string) ([]Entry, error) {
-	matches, err := filepath.Glob(filepath.Join(stateDir, "live", "stateapi-*.json"))
+	matches, err := descriptorPaths(stateDir)
 	if err != nil {
 		return nil, fmt.Errorf("stateapi: enumerate %s: %w", stateDir, err)
 	}
 	entries := []Entry{}
-	for _, path := range matches { // Glob returns sorted names.
+	for _, path := range matches {
 		ep, ok := readDescriptor(path)
 		if !ok {
 			continue
@@ -288,6 +289,30 @@ func List(stateDir string) ([]Entry, error) {
 		entries = append(entries, Entry{Path: path, Instance: ep.Instance, Addr: ep.Addr, PID: ep.PID, Version: ep.Version, ConfigPath: ep.ConfigPath, StartedAt: ep.StartedAt})
 	}
 	return entries, nil
+}
+
+// LiveDir is where daemons publish descriptors under a state dir.
+func LiveDir(stateDir string) string { return filepath.Join(stateDir, "live") }
+
+// descriptorPaths lists the regular stateapi-*.json files under the live
+// dir, sorted. It matches names, not the whole path, so a state dir that
+// contains glob metacharacters still works; a missing live dir is empty.
+func descriptorPaths(stateDir string) ([]string, error) {
+	dir := LiveDir(stateDir)
+	ents, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, e := range ents {
+		if ok, _ := filepath.Match("stateapi-*.json", e.Name()); ok && e.Type().IsRegular() {
+			paths = append(paths, filepath.Join(dir, e.Name()))
+		}
+	}
+	return paths, nil
 }
 
 // readDescriptor decodes one descriptor file, dropping stale or malformed

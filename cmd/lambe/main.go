@@ -121,7 +121,13 @@ func parseCommon(args []string) (*config.Config, string, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, "", err
 	}
-	path, err := cliConfigPath(*configFile)
+	return loadConfig(*configFile)
+}
+
+// loadConfig resolves and loads the configuration for an explicit -config
+// value (empty means the default path, if present).
+func loadConfig(explicit string) (*config.Config, string, error) {
+	path, err := cliConfigPath(explicit)
 	if err != nil {
 		return nil, "", err
 	}
@@ -234,7 +240,7 @@ func runStatus(args []string, out io.Writer) error {
 	if fs.NArg() != 0 {
 		return usageError{fmt.Errorf("unexpected arguments: %v", fs.Args())}
 	}
-	cfg, path, err := parseCommon([]string{"-config", *configFile})
+	cfg, path, err := loadConfig(*configFile)
 	if err != nil {
 		return err
 	}

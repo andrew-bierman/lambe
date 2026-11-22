@@ -262,6 +262,9 @@ func TestBuildReportDegradesWhenAttemptReadFails(t *testing.T) {
 	if attemptReads, metadataReads := tr.readCounts(); attemptReads != 0 || metadataReads != 1 {
 		t.Errorf("reads = (attempts %d, metadata %d), want (0, 1)", attemptReads, metadataReads)
 	}
+	if !rep.AttemptsUnreadable {
+		t.Error("AttemptsUnreadable = false, want true so machine readers can refuse the zeros")
+	}
 	if len(rep.Active) != 2 {
 		t.Fatalf("active runs = %d, want 2", len(rep.Active))
 	}

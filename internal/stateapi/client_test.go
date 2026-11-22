@@ -645,3 +645,17 @@ func TestListReportsLiveDescriptorsWithoutTokens(t *testing.T) {
 		}
 	}
 }
+
+func TestListHandlesGlobMetacharactersInStateDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state [x]*?")
+	writeDescriptorFile(t, dir, "stateapi-a.json", Descriptor{
+		SchemaVersion: 1, Instance: "a", Addr: "127.0.0.1:41999", BearerToken: "secret-a", PID: os.Getpid(),
+	})
+	got, err := List(dir)
+	if err != nil || len(got) != 1 || got[0].Instance != "a" {
+		t.Fatalf("List = %+v, %v; want instance a despite glob characters in the path", got, err)
+	}
+	if _, err := Resolve(context.Background(), dir, Selector{}); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+}

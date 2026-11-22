@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/andrew-bierman/lambe/internal/daemon"
 	"github.com/andrew-bierman/lambe/internal/stateapi"
 )
 
@@ -16,7 +17,7 @@ type stateDirInfo struct {
 	// StateDir is the resolved state directory.
 	StateDir string `json:"state_dir"`
 	// Source is "env" when LAMBE_STATE_DIR chose it, "default" otherwise.
-	Source string `json:"source"`
+	Source daemon.StateDirSource `json:"source"`
 	// Exists reports whether StateDir is present on disk.
 	Exists bool `json:"exists"`
 	// LiveDir is where daemons publish state API descriptors.
@@ -30,7 +31,7 @@ type stateDirInfo struct {
 // descriptors under it, so clients need not re-derive the default or guess
 // at an override. It is read-only: it creates nothing and never prints a
 // token.
-func runStateDir(args []string, stateDir, source string, out io.Writer) error {
+func runStateDir(args []string, stateDir string, source daemon.StateDirSource, out io.Writer) error {
 	fs := flag.NewFlagSet("lambe state-dir", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	asJSON := fs.Bool("json", false, "print JSON")
@@ -45,14 +46,14 @@ func runStateDir(args []string, stateDir, source string, out io.Writer) error {
 		return err
 	}
 	_, statErr := os.Stat(stateDir)
-	info := stateDirInfo{StateDir: stateDir, Source: source, Exists: statErr == nil, LiveDir: stateDir + string(os.PathSeparator) + "live", Descriptors: entries}
+	info := stateDirInfo{StateDir: stateDir, Source: source, Exists: statErr == nil, LiveDir: stateapi.LiveDir(stateDir), Descriptors: entries}
 	if *asJSON {
 		enc := json.NewEncoder(out)
 		enc.SetEscapeHTML(false)
 		return enc.Encode(info)
 	}
 	origin := "built-in default"
-	if source == "env" {
+	if source == daemon.StateDirEnv {
 		origin = "from LAMBE_STATE_DIR"
 	}
 	if _, err := fmt.Fprintf(out, "state dir: %s (%s)\n", info.StateDir, origin); err != nil {

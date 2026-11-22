@@ -164,3 +164,32 @@ func TestStatusJSONReadsTrackerWithNoDaemon(t *testing.T) {
 		t.Errorf("snapshot = %+v", got)
 	}
 }
+
+// TestReadCommandsExitTwoFromBinary pins the main() wiring, which the
+// run* unit tests cannot see: a usage error exits 2 with nothing on stdout.
+func TestReadCommandsExitTwoFromBinary(t *testing.T) {
+	if testing.Short() {
+		t.Skip("-short skips building the binary")
+	}
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "lambe")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/lambe") //nolint:gosec // G204: fixed package path; output in the test's temp dir
+	build.Dir = root
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v: %s", err, out)
+	}
+	for _, args := range [][]string{{"status", "-nope"}, {"state-dir", "-nope"}} {
+		cmd := exec.Command(bin, args...) //nolint:gosec // G204: binary built above
+		cmd.Env = append(os.Environ(), "LAMBE_STATE_DIR="+t.TempDir(), "HOME="+t.TempDir())
+		var stdout bytes.Buffer
+		cmd.Stdout = &stdout
+		err := cmd.Run()
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) || ee.ExitCode() != 2 || stdout.Len() != 0 {
+			t.Fatalf("%v: err=%v stdout=%q, want exit 2 and empty stdout", args, err, stdout.String())
+		}
+	}
+}

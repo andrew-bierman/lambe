@@ -493,8 +493,9 @@ unknown: `runs` are the tracker's in-progress claims (`state` `running`,
 `last_event_age` `"n/a"`, no `phase`; `actor` is the claim holder),
 `needs_human` is read from the tracker (`needs_human_as_of` is the read time),
 and `gate_rejections` is empty with no `gate_rejections_as_of`, `tick_at` is
-absent, and `daemon.pid`/`identity` are unset because the CLI is not the
-daemon. `daemon.version` is the CLI build and `daemon.config_path` the config
+absent, and `daemon.pid` is `0` with no `identity` because the CLI is not the
+daemon (never signal or liveness-check pid 0). `runs` and `gate_rejections`
+are `null` when empty, as on the HTTP route. `daemon.version` is the CLI build and `daemon.config_path` the config
 it loaded. Exit codes match `lambe doctor`: 0 ok, 1 a problem (nothing is
 printed to stdout), 2 usage. Use the HTTP route when you need live phases,
 stall verdicts, or gate history.

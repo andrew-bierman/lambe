@@ -804,18 +804,21 @@ func execCommand(ctx context.Context, name string, args ...string) (string, int,
 	return "", -1, err
 }
 
+// StateDirSource says what chose the state directory.
+type StateDirSource string
+
 // State directory sources reported by ResolveStateDir.
 const (
 	// StateDirEnv means LAMBE_STATE_DIR chose the directory.
-	StateDirEnv = "env"
+	StateDirEnv StateDirSource = "env"
 	// StateDirDefault means the built-in ~/.local/state/lambe was used.
-	StateDirDefault = "default"
+	StateDirDefault StateDirSource = "default"
 )
 
 // ResolveStateDir resolves the daemon state directory and says why:
 // LAMBE_STATE_DIR (StateDirEnv) when set, otherwise ~/.local/state/lambe
 // (StateDirDefault).
-func ResolveStateDir() (dir, source string) {
+func ResolveStateDir() (dir string, source StateDirSource) {
 	if dir := os.Getenv("LAMBE_STATE_DIR"); dir != "" {
 		return dir, StateDirEnv
 	}

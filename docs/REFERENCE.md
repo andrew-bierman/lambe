@@ -145,8 +145,8 @@ a daemon, so it works with the state API off or no daemon running. It is a
 documented subset: `runs` are the tracker's in-progress claims (`state`
 `running`, no phase or event times) and `needs_human` comes from the tracker.
 `gate_rejections`, `tick_at`, and per-run phases exist only in a running
-daemon's projection, so they are empty or absent. The `daemon` block has no
-`pid` (0) or `identity`. Read the API for those.
+daemon's projection, so they are empty or absent. The `daemon` block has `pid` 0
+and no `identity`; never signal it. Read the API for those.
 
 `lambe state-dir` prints the state directory (`LAMBE_STATE_DIR` or the
 `~/.local/state/lambe` default, and which one applied) and the live state API
@@ -154,7 +154,8 @@ descriptors under `<state-dir>/live/`: path, instance, address, pid, start
 time. It never prints the bearer token; read the descriptor file itself for
 that, as the state API's client rules describe. See
 [Discovery](api/state-api.md#the-state-dir-command).
-In the command palette, **Queue an agent task** creates a Beads task in the
+
+In the dashboard's command palette, **Queue an agent task** creates a Beads task in the
 primary tracker with the workflow's configured labels. Enter a task title and
 press Enter to queue it for the running supervisor's next poll. The demo adds
 the task to its in-memory queue. Pick **Show activity chart** for a breakdown

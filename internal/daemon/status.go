@@ -69,6 +69,9 @@ type Report struct {
 	// label lanes, read in the same grouped pass as every other section so
 	// the report, the queue route, and the TUI share one canonical result.
 	Queue []tracker.ReadinessRow
+	// AttemptsUnreadable is set when the attempt records could not be read, so
+	// attempt numbers and wake timers are unknown rather than zero.
+	AttemptsUnreadable bool
 }
 
 // BuildReport reads the morning report from the local tracker: active runs
@@ -89,7 +92,8 @@ func BuildReport(ctx context.Context, tr tracker.Tracker, labels, routeLabels []
 
 	// A failed attempt read degrades to "no attempts known": the sections
 	// below still render, with attempt numbers at zero and no wake timers.
-	attempts := readAttempts(ctx, tr)
+	attempts, attemptsErr := readAttempts(ctx, tr)
+	rep.AttemptsUnreadable = attemptsErr != nil
 
 	issues, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}, Labels: labels})
 	if err != nil {
@@ -169,12 +173,12 @@ func needsHumanReason(issue tracker.Issue, gateOutput string) string {
 
 // readAttempts reads lambe's whole attempt set in one query and groups it by
 // session. An unreadable tracker yields nil so the report still renders.
-func readAttempts(ctx context.Context, tr tracker.Tracker) map[string][]tracker.Attempt {
+func readAttempts(ctx context.Context, tr tracker.Tracker) (map[string][]tracker.Attempt, error) {
 	records, err := tr.ListByMetadata(ctx, tracker.MetaKind, tracker.KindAttempt)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return tracker.GroupAttempts(records)
+	return tracker.GroupAttempts(records), nil
 }
 
 // summarizeGateOutput reduces a gate output blob to its first line, capped.
@@ -319,6 +323,9 @@ func StatusJSON(w io.Writer, cfg *config.Config, id httpstate.Daemon, now time.T
 	rep, err := readReport(cfg, id.Machine)
 	if err != nil {
 		return err
+	}
+	if rep.AttemptsUnreadable {
+		return errors.New("read attempts: tracker attempt records unreadable, so attempt numbers would be wrong")
 	}
 	stall := config.DefaultStallAfter
 	if cfg.Supervisor.StallAfter > 0 {
