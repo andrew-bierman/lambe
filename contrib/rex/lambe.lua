@@ -111,10 +111,14 @@ local function picker_items(snapshot, workflow)
         seen[id] = true
         local state = (run.Phase ~= nil and run.Phase ~= "" and run.Phase) or "unknown"
         local parts = {}
+        -- Status marker first: ● live, ◌ last known state of a stopped
+        -- daemon, ○ archived. Live runs are listed before archived ones.
+        local stale = not archived and not alive and state:sub(1, 8) ~= "stopped:"
+        local marker = archived and "○" or (stale and "◌" or "●")
         if run.Workflow ~= nil and run.Workflow ~= "" then parts[#parts + 1] = run.Workflow end
         if archived then
           parts[#parts + 1] = "archived"
-        elseif not alive and state:sub(1, 8) ~= "stopped:" then
+        elseif stale then
           parts[#parts + 1] = "daemon stopped"
         end
         parts[#parts + 1] = state
@@ -123,7 +127,7 @@ local function picker_items(snapshot, workflow)
         items[#items + 1] = {
           id = id,
           title = (run.Title ~= nil and run.Title ~= "" and run.Title) or id,
-          subtitle = table.concat(parts, " · "),
+          subtitle = marker .. " " .. table.concat(parts, " · "),
           detail = id,
           icon = archived and "clock" or "terminal",
         }
@@ -164,14 +168,38 @@ local function workflow_items(snapshot)
   return items
 end
 
-local function new_terminal_window(label, command)
-  rex.session.new_window{
-    window_label = label,
-    layout = rex.layout.block{
-      flavor = "com.superlogical.terminal.shell",
-      options = { command = command, interactive = true },
-    },
+-- Tab titles. The window label `Lambe · <issue>` is the lookup key shared
+-- with the LambeDash app, so it never changes; the pane label carries the
+-- readable title `ISSUE · Workflow · state`. last_titles remembers what this
+-- script last set per block, so a pane the user renamed is left alone. The
+-- table lives as long as the Rex server's config; after a reload nothing is
+-- known to be ours, so nothing is renamed (it errs toward never overwriting).
+local last_titles = {}
+
+local function run_title(snapshot, issue)
+  local found
+  for _, list in ipairs({ snapshot and snapshot.Runs or {}, snapshot and snapshot.History or {} }) do
+    for _, run in ipairs(list) do
+      if run.IssueID == issue and found == nil then found = run end
+    end
+  end
+  local parts = { issue }
+  if found ~= nil then
+    if found.Workflow ~= nil and found.Workflow ~= "" then parts[#parts + 1] = found.Workflow end
+    if found.Phase ~= nil and found.Phase ~= "" then parts[#parts + 1] = found.Phase end
+  end
+  return table.concat(parts, " · ")
+end
+
+local function new_terminal_window(label, command, title)
+  local layout = rex.layout.block{
+    flavor = "com.superlogical.terminal.shell",
+    label = title,
+    options = { command = command, interactive = true },
   }
+  local created = rex.session.new_window{ window_label = label, layout = layout }
+  local block = created and created.block_ids and created.block_ids[1]
+  if block ~= nil and title ~= nil then last_titles[block] = title end
 end
 
 local function open_dashboard(config)
@@ -182,34 +210,59 @@ local function open_demo()
   new_terminal_window("Lambe demo", lambe_argv({ "tui", "-demo" }, nil, false))
 end
 
--- Focus the window already following `label` and report whether one
--- existed, so picking the same run twice does not pile up tabs.
-local function focus_window_labeled(label)
+-- The window already following `label`, as {window_id, block_id, block_label},
+-- or nil, so picking the same run twice does not pile up tabs.
+local function find_window_labeled(label)
   local view = rex.session.view{}
-  if view == nil then return false end
+  if view == nil then return nil end
   for _, window in ipairs(view.windows or {}) do
     if window.label == label and window.window_id ~= nil then
-      local focused = rex.session.focus_window{ window_id = window.window_id }
-      return focused ~= nil
+      local found = { window_id = window.window_id }
+      for _, layer in ipairs(window.layers or {}) do
+        for _, block in ipairs(layer.blocks or {}) do
+          if found.block_id == nil then
+            found.block_id, found.block_label = block.block_id, block.label
+          end
+        end
+      end
+      return found
     end
   end
-  return false
+  return nil
 end
 
--- The window label `Lambe · <issue>` is a contract: the LambeDash app
--- focuses an existing window with this label before opening a new one.
-local function open_run(issue, config)
-  local label = "Lambe · " .. issue
-  if focus_window_labeled(label) then return end
-  new_terminal_window(label, lambe_argv({ "logs", "-issue", issue, "-follow" }, config, true))
+-- Refresh the title of a reused tab, unless the user changed it.
+local function retitle(found, title)
+  if found.block_id == nil or last_titles[found.block_id] ~= found.block_label then return end
+  if title == found.block_label then return end
+  rex.session.set_block_label{ block_id = found.block_id, label = title }
+  last_titles[found.block_id] = title
 end
 
 local function have_picker()
   return rex.ui and rex.ui.pick and rex.exec and rex.json and rex.json.decode
 end
 
+-- The window label `Lambe · <issue>` is a contract: the LambeDash app
+-- focuses an existing window with this label before opening a new one.
+-- `snapshot` (optional) supplies the workflow and state for the title; with
+-- none, one is read when possible, else the title is the issue id.
+local function open_run(issue, config, snapshot)
+  if snapshot == nil and have_picker() then snapshot = read_snapshot(config) end
+  local title = run_title(snapshot, issue)
+  local label = "Lambe · " .. issue
+  local found = find_window_labeled(label)
+  if found ~= nil then
+    if rex.session.focus_window{ window_id = found.window_id } ~= nil then
+      retitle(found, title)
+      return
+    end
+  end
+  new_terminal_window(label, lambe_argv({ "logs", "-issue", issue, "-follow" }, config, true), title)
+end
+
 -- Pick one run; `workflow` (optional) narrows the list. Returns the issue
--- id, or nil when nothing was chosen (already logged).
+-- id and the snapshot it was picked from, or nil when nothing was chosen (already logged).
 local function choose_run(config, workflow)
   local snapshot, why = read_snapshot(config)
   if snapshot == nil then rex.log("warn", "Lambe: " .. why) return nil end
@@ -225,7 +278,7 @@ local function choose_run(config, workflow)
     if reason and reason ~= "cancelled" then rex.log("warn", "Lambe run picker: " .. reason) end
     return nil
   end
-  return chosen
+  return chosen, snapshot
 end
 
 rex.action{
@@ -286,8 +339,10 @@ rex.action{
         open_dashboard(args.config)
         return
       end
-      issue = choose_run(args.config, args.workflow)
+      local snapshot
+      issue, snapshot = choose_run(args.config, args.workflow)
       if issue == nil then return end
+      return open_run(issue, args.config, snapshot)
     end
     open_run(issue, args.config)
   end,
@@ -317,8 +372,8 @@ rex.action{
         return
       end
     end
-    local issue = choose_run(args.config, workflow)
-    if issue ~= nil then open_run(issue, args.config) end
+    local issue, picked = choose_run(args.config, workflow)
+    if issue ~= nil then open_run(issue, args.config, picked) end
   end,
 }
 
