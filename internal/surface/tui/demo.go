@@ -101,6 +101,30 @@ func demoSnapshot(now time.Time) daemon.LiveSnapshot {
 	return daemon.LiveSnapshot{
 		UpdatedAt: now,
 		History: []daemon.LiveRun{
+			// demo-41 shows grouping: three restart-interrupted attempts and
+			// the final green one collapse into a single "passed ×3" row.
+			{
+				Progress:  symphony.Progress{IssueID: "demo-41", Title: "Publish the changelog", Phase: "stopped: gate green", Attempt: 3},
+				UpdatedAt: now.Add(-20 * time.Minute),
+				Tail:      "Changelog published.",
+			},
+			{
+				Progress:  symphony.Progress{IssueID: "demo-41", Title: "Publish the changelog", Phase: "interrupted", Attempt: 3},
+				UpdatedAt: now.Add(-10 * time.Minute),
+			},
+			{
+				Progress:  symphony.Progress{IssueID: "demo-41", Title: "Publish the changelog", Phase: "interrupted", Attempt: 2},
+				UpdatedAt: now.Add(-30 * time.Minute),
+			},
+			{
+				Progress:  symphony.Progress{IssueID: "demo-41", Title: "Publish the changelog", Phase: "interrupted", Attempt: 1},
+				UpdatedAt: now.Add(-40 * time.Minute),
+			},
+			{
+				Progress:  symphony.Progress{IssueID: "demo-39", Title: "Close the stale branch", Phase: daemon.PhaseClosedExternally, Attempt: 1},
+				UpdatedAt: now.Add(-3 * time.Hour),
+				Tail:      "Issue closed outside lambe.",
+			},
 			{
 				Progress:  symphony.Progress{IssueID: "demo-44", Title: "Retry the install smoke test", Phase: "retry", Attempt: 1},
 				UpdatedAt: now.Add(-15 * time.Minute),

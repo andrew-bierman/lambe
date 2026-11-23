@@ -133,18 +133,35 @@ func canonicalQueue() QueueResponse {
 	}
 }
 
-// canonicalHistory demonstrates the newest-first merge: a gate-stopped
-// terminal row, a restart-archived interrupted attempt, and a registry
-// terminal row that carries only the coarse state and outcome.
+// canonicalHistory demonstrates the newest-first, per-issue grouping: a
+// gate-stopped issue with three attempts behind its latest, a restart-archived
+// interrupted attempt, and a registry terminal row that carries only the
+// coarse state and outcome.
 func canonicalHistory() HistoryResponse {
 	return HistoryResponse{
 		SchemaVersion: SchemaVersion,
 		Daemon:        canonicalDaemon(),
 		AsOf:          "2026-11-19T12:00:00Z",
 		Runs: []HistoryRunDTO{
-			{Issue: "H-2", Title: "gate red task", Phase: "stopped: gate red", Attempt: 3, UpdatedAt: "2026-11-19T12:00:00Z"},
-			{Issue: "H-1", Title: "restart interrupted task", Phase: "interrupted", Attempt: 1, UpdatedAt: "2026-11-19T11:00:00Z"},
-			{Issue: "H-3", State: "settled", Attempt: 1, Outcome: "completed", UpdatedAt: "2026-11-19T10:00:00Z"},
+			{
+				Issue: "H-2", Title: "gate red task", Phase: "stopped: gate red", Attempt: 3, UpdatedAt: "2026-11-19T12:00:00Z",
+				AttemptCount: 3,
+				Attempts: []HistoryAttemptDTO{
+					{Attempt: 3, Phase: "stopped: gate red", UpdatedAt: "2026-11-19T12:00:00Z"},
+					{Attempt: 2, Phase: "stopped: gate red", UpdatedAt: "2026-11-19T11:30:00Z"},
+					{Attempt: 1, Phase: "interrupted", UpdatedAt: "2026-11-19T11:15:00Z"},
+				},
+			},
+			{
+				Issue: "H-1", Title: "restart interrupted task", Phase: "interrupted", Attempt: 1, UpdatedAt: "2026-11-19T11:00:00Z",
+				AttemptCount: 1,
+				Attempts:     []HistoryAttemptDTO{{Attempt: 1, Phase: "interrupted", UpdatedAt: "2026-11-19T11:00:00Z"}},
+			},
+			{
+				Issue: "H-3", State: "settled", Attempt: 1, Outcome: "completed", UpdatedAt: "2026-11-19T10:00:00Z",
+				AttemptCount: 1,
+				Attempts:     []HistoryAttemptDTO{{Attempt: 1, State: "settled", Outcome: "completed", UpdatedAt: "2026-11-19T10:00:00Z"}},
+			},
 		},
 	}
 }

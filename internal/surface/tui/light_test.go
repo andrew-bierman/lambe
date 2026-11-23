@@ -224,7 +224,7 @@ func lightViews(t *testing.T) map[string]string {
 func TestGoldenLightBackground(t *testing.T) {
 	forceBackground(t, false)
 	views := lightViews(t)
-	for _, name := range []string{"queue-40x24", "queue-100x30", "attention-40x24", "history-100x30"} {
+	for _, name := range []string{"queue-40x24", "queue-100x30", "attention-40x24", "history-40x24", "history-100x30"} {
 		t.Run(name, func(t *testing.T) {
 			checkGolden(t, "light-"+name, annotate(parseCells(views[name])))
 		})

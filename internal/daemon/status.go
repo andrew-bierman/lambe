@@ -57,6 +57,8 @@ type GateRejection struct {
 	Issue   string
 	Attempt int
 	Output  string
+	// At is when the rejection was recorded; zero when unknown.
+	At time.Time
 }
 
 // Report is the morning report: the daemon's whole supervised world as of
@@ -66,6 +68,9 @@ type Report struct {
 	Deferred       []DeferredRun
 	NeedsHuman     []NeedsHumanItem
 	GateRejections []GateRejection
+	// GateRejectionsKnown is set when the rejection log was read, so an
+	// empty GateRejections means "none" rather than "unavailable".
+	GateRejectionsKnown bool
 	// Queue is the dispatch-front readiness projection for the configured
 	// label lanes, read in the same grouped pass as every other section so
 	// the report, the queue route, and the TUI share one canonical result.
@@ -277,14 +282,21 @@ func RenderReport(w io.Writer, rep Report) error {
 		return err
 	}
 	if len(rep.GateRejections) == 0 {
+		if rep.GateRejectionsKnown {
+			return reportf(w, "  (none)")
+		}
 		return reportf(w, "  (history unavailable)")
 	}
 	tw := tabwriter.NewWriter(w, 2, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "  ISSUE\tATTEMPT\tOUTPUT"); err != nil {
+	if _, err := fmt.Fprintln(tw, "  ISSUE\tATTEMPT\tWHEN\tOUTPUT"); err != nil {
 		return err
 	}
 	for _, g := range rep.GateRejections {
-		if _, err := fmt.Fprintf(tw, "  %s\t%d\t%s\n", g.Issue, g.Attempt, orDash(g.Output)); err != nil {
+		when := "-"
+		if !g.At.IsZero() {
+			when = g.At.Local().Format("Jan 2 15:04")
+		}
+		if _, err := fmt.Fprintf(tw, "  %s\t%d\t%s\t%s\n", g.Issue, g.Attempt, when, orDash(clip(g.Output, 160))); err != nil {
 			return err
 		}
 	}
@@ -315,6 +327,13 @@ func readReport(cfg *config.Config, machine string) (Report, error) {
 	}
 	// A failed checkpoint scan only hides the section; the report stands.
 	rep.Orphaned, _ = ListOrphanClaims(context.Background(), local, DefaultStateDir(), cfg)
+	// A failed read leaves the section "unavailable" rather than "none".
+	if recs, err := ReadGateRejections(GateRejectionLogPath(DefaultStateDir(), cfg), time.Now().Add(-GateRejectionWindow)); err == nil {
+		rep.GateRejectionsKnown = true
+		for _, r := range recs {
+			rep.GateRejections = append(rep.GateRejections, GateRejection{Issue: r.Issue, Attempt: r.Attempt, Output: r.Output, At: r.At})
+		}
+	}
 	return rep, nil
 }
 
@@ -416,6 +435,14 @@ func queueLanes(cfg *config.Config) (labels, routeLabels []string) {
 func orDash(s string) string {
 	if s == "" {
 		return "-"
+	}
+	return s
+}
+
+// clip truncates s to n runes with an ellipsis.
+func clip(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
 	}
 	return s
 }

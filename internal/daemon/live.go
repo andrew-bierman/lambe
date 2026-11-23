@@ -67,6 +67,12 @@ func ReadLive(path string) (LiveSnapshot, bool, error) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return s, false, err
 	}
+	for i := range s.Runs {
+		s.Runs[i].Phase = canonicalPhase(s.Runs[i].Phase)
+	}
+	for i := range s.History {
+		s.History[i].Phase = canonicalPhase(s.History[i].Phase)
+	}
 	identity, err := proc.ProcessIdentity(s.PID)
 	return s, err == nil && identity == s.Identity && s.Identity != "", nil
 }

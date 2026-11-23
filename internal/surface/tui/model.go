@@ -94,6 +94,9 @@ var (
 type runItem struct {
 	run  daemon.LiveRun
 	live bool // the daemon is alive, so silence means a stall rather than history
+	// attempts is how many attempts of the issue the history row stands for;
+	// zero outside the history view.
+	attempts int
 }
 
 // stallAfter is how long an active run may stay silent before it is flagged.
@@ -677,16 +680,31 @@ func (m *Model) runsFor(showHistory, showAttention bool) []daemon.LiveRun {
 		}
 		return runs
 	}
+	groups := m.historyGroups()
+	heads := make([]daemon.LiveRun, len(groups))
+	for i, g := range groups {
+		heads[i] = g[0]
+	}
+	return heads
+}
+
+// historyAttempts is every history entry, archived and terminal, ungrouped.
+func (m *Model) historyAttempts() []daemon.LiveRun {
 	history := slices.Clone(m.snapshot.History)
 	for _, run := range m.snapshot.Runs {
 		if !m.alive || strings.HasPrefix(run.Phase, "stopped:") {
 			history = append(history, run)
 		}
 	}
-	slices.SortStableFunc(history, func(a, b daemon.LiveRun) int {
-		return b.UpdatedAt.Compare(a.UpdatedAt)
-	})
 	return history
+}
+
+// historyGroups groups the history per issue (see daemon.GroupHistory): one
+// group per issue, headline attempt first, newest group first.
+func (m *Model) historyGroups() [][]daemon.LiveRun {
+	return daemon.GroupHistory(m.historyAttempts(), func(r daemon.LiveRun) daemon.AttemptKey {
+		return daemon.AttemptKey{Issue: r.IssueID, Attempt: r.Attempt, Phase: r.Phase, At: r.UpdatedAt}
+	})
 }
 
 func needsAttention(phase string) bool {
@@ -700,8 +718,15 @@ func needsAttention(phase string) bool {
 // setRuns replaces the list contents while preserving the selected issue.
 func (m *Model) setRuns(runs []daemon.LiveRun) {
 	items := make([]list.Item, len(runs))
+	var counts map[string]int
+	if m.showHistory {
+		counts = map[string]int{}
+		for _, g := range m.historyGroups() {
+			counts[g[0].IssueID] = len(g)
+		}
+	}
 	for i, run := range runs {
-		items[i] = runItem{run: run, live: m.alive}
+		items[i] = runItem{run: run, live: m.alive, attempts: counts[run.IssueID]}
 	}
 	m.replaceListItems(items)
 	if m.selectedID != "" {
@@ -760,6 +785,13 @@ func (m *Model) refreshDetail(follow bool) {
 		return
 	}
 	content := detailBody(run, m.detail.Width, m.pins)
+	if m.showHistory {
+		for _, g := range m.historyGroups() {
+			if g[0].IssueID == run.IssueID && len(g) > 1 {
+				content = attemptList(g, clock()) + "\n\n" + content
+			}
+		}
+	}
 	if run.Thread != "" && run.Thread == m.agentSession.thread {
 		info := m.agentSession.details
 		if m.agentSession.err != nil {
@@ -894,6 +926,20 @@ func detailBody(run daemon.LiveRun, width, pins int) string {
 	return ansi.Wrap(strings.Join(sections, "\n\n"), width, "")
 }
 
+// attemptList renders a history group's attempts, newest first.
+func attemptList(group []daemon.LiveRun, now time.Time) string {
+	lines := []string{headerStyle.Render(fmt.Sprintf("%d attempts", len(group)))}
+	for _, r := range group {
+		icon, style := phasePresentation(r.Phase)
+		age := ""
+		if !r.UpdatedAt.IsZero() {
+			age = "  " + dimStyle.Render(ageText(now.Sub(r.UpdatedAt))+" ago")
+		}
+		lines = append(lines, fmt.Sprintf(" %s #%d %s%s", style.Render(icon), r.Attempt, style.Render(phaseWord(r.Phase, false)), age))
+	}
+	return strings.Join(lines, "\n")
+}
+
 // sectionRule is a labelled divider such as "── Agent output ────".
 func sectionRule(label string, width int) string {
 	head := "── " + label + " "
@@ -951,6 +997,8 @@ func phasePresentation(phase string) (string, lipgloss.Style) {
 		return "◉", gatingStyle
 	case phase == "stopped: gate green":
 		return "✔", greenStyle
+	case phase == daemon.PhaseClosedExternally:
+		return "◌", neutralStyle
 	case strings.HasPrefix(phase, "stopped:"):
 		return "✘", redStyle
 	case phase == "retry" || phase == "deferred" || phase == "interrupted":

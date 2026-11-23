@@ -406,7 +406,7 @@ func (l *Loop) resumeCheckpoint(ctx context.Context, saved checkpoint, look look
 				}
 			}
 		}
-		l.cleanup(ctx, checkpointSession(saved), "recovered closed issue")
+		l.cleanup(ctx, checkpointSession(saved), "closed externally")
 		l.removeCheckpoint(issue.ID)
 		return true, nil
 	}

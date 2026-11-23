@@ -375,12 +375,19 @@ func TestGateRedRetriesWithGateOutputInPrompt(t *testing.T) {
 		{Verdict: GateRed, Output: "tests failed: build error"},
 		{Verdict: GateGreen},
 	}
+	var rejected []string
+	f.loop.OnGateRed = func(issue string, attempt int, output string) {
+		rejected = append(rejected, fmt.Sprintf("%s/%d/%s", issue, attempt, output))
+	}
 
 	if err := f.loop.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.loop.Tick(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	if len(rejected) != 1 || !strings.HasSuffix(rejected[0], "/1/tests failed: build error") {
+		t.Errorf("OnGateRed calls = %v, want one for attempt 1 with the gate output", rejected)
 	}
 	calls := f.runner.recorded()
 	if len(calls) != 2 {

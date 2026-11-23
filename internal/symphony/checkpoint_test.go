@@ -390,3 +390,27 @@ func TestChangedWorkspaceRootRefusesRecoveryAndPreservesSavedWork(t *testing.T) 
 		t.Fatal("root mismatch launched an agent")
 	}
 }
+
+func TestClosedIssueRecoveryStopsAsClosedExternally(t *testing.T) {
+	f := newFixture(t, "work {{ issue }}")
+	l := f.loop.Loop
+	l.CheckpointDir = filepath.Join(f.dir, "sessions")
+	var phases []string
+	l.Observe = func(p Progress) { phases = append(phases, p.Phase) }
+	issue := tracker.Issue{ID: "i-2", Status: tracker.StatusClosed, Assignee: "lambe"}
+	f.tr.issues[issue.ID] = issue
+	ws, err := f.spaces.Ensure(t.Context(), issue.ID, f.loader.Current().Hooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &session{issue: issue, wf: f.loader.Current(), key: issue.ID, workspace: ws.Dir, attempt: 1, turn: 1}
+	if err := l.saveCheckpoint(s, checkpointRetry, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Restore(t.Context(), "lambe"); err != nil {
+		t.Fatal(err)
+	}
+	if len(phases) == 0 || phases[len(phases)-1] != "stopped: closed externally" {
+		t.Fatalf("phases = %v, want the closed-externally stop", phases)
+	}
+}

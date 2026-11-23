@@ -1,5 +1,5 @@
  lambe   ● running  demo  ⚠ 1 stalled  2 active · 1 waiting                                                                updated 12:00:00
- 1 Queue 7 │ 2 Attention 3 │ 3 History 3
+ 1 Queue 7 │ 2 Attention 3 │ 3 History 5
 ━━━━━━━━━━━─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
    ID      TITLE                                                   PHASE        AGE│ demo-42  ▶ running  output 8s ago
 ▌▶ demo-42 Verify the release build                                running       8s│ Verify the release build
