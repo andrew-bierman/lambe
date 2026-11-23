@@ -169,8 +169,10 @@ an isolated daemon (own state dir, config, workspace root, actor
 
 ## Migration: production hub on this Mac
 
-All paths assume `HUB=~/Code/agent-coordination`. Nothing here was run against
-production; each step except the launchd label was run on clones.
+All paths assume `HUB=~/Code/agent-coordination`. The steps were written from
+clone tests and then run once against the real hub; see the production record
+below, and prefer [`migrate-hub.sh`](dolt-server-mode/migrate-hub.sh), which adds
+a writer fence and rollback to this sequence.
 
 ```sh
 HUB=~/Code/agent-coordination; cd "$HUB"; export BEADS_DIR="$HUB/.beads"
@@ -275,6 +277,48 @@ server answers, so there is no hard dependency, but start the server first when
 doing this by hand. The hub dir inside `~/Code` stays the single home, per the
 workspace policy.
 
+## Production migration record (2026-11-22)
+
+The runbook was written from clone tests. It was then run once against the real
+hub on the owner's Mac, and these are the differences from the clone runs.
+
+- **Fencing writers.** Other agents kept writing to the hub during the window, so
+  stopping Lambe alone was not enough. [`migrate-hub.sh`](dolt-server-mode/migrate-hub.sh)
+  holds `bd`'s own lock (`.beads/embeddeddolt.gate.lock`, via
+  [`holdlock.py`](dolt-server-mode/holdlock.py)) for the whole critical section.
+  While it is held, `bd` fails fast instead of writing, so no late write can land in
+  the old embedded copy; callers see a short error and retry. Verified before use
+  that `bd list` exits non-zero under the held lock rather than blocking.
+- **Critical section:** snapshot clone, copy, start the server, set the password,
+  compare the server's head commit hash and issue count against the snapshot (no
+  `bd` needed, since it is fenced), flip `metadata.json` and `config.yaml`, release.
+  It took about 8 seconds. Any failed check rolls back to embedded.
+- **Result:** head hash and issue count (2540) identical to the snapshot. `bd`
+  calls dropped from 1 to 13 s (or the daemon's 60 s timeout) to 0.24 to 0.42 s.
+  Lambe came up in about 40 s instead of 6+ minutes and dispatched the next issue
+  on its first tick.
+- **Backup destination.** After the flip `bd backup status` reported no
+  destination, although the server's copy still had the `backup_export` remote.
+  Run `bd backup init <the same path>` once; `bd backup sync` then works.
+  `bd backup status` kept showing the pre-migration "Last backup" time after
+  successful syncs, so check freshness from the destination's `manifest` mtime or
+  the job log instead.
+- **Scheduled backup.** [`hub-backup.ts`](dolt-server-mode/hub-backup.ts) runs
+  `bd backup sync` under a non-overlap lock with a 3 minute timeout and logs to
+  `~/.local/state/dolt-hub/backup.log`; [`register-hub-backup.ts`](dolt-server-mode/register-hub-backup.ts)
+  registers it every 15 minutes with `Bun.cron` (launchd job `bun.cron.hub-backup`,
+  real `bun` binary, not a version-manager shim). Remove it with
+  `bun -e 'await Bun.cron.remove("hub-backup")'`. Do not use `backup.enabled=true`
+  instead: with many clients on one server each registers its own backup and
+  full-syncs, which `bd` documents as a self-amplifying storm.
+- **Restore check.** A backup restored into a scratch directory
+  (`dolt backup restore file://<dest> <dir>`) had the same head commit hash as the
+  live database and all 2540 issues. This covers the Dolt layer only; a restore
+  through `bd backup restore` into a fresh server was not exercised.
+- **Before it:** `dolt` installed as a real binary in `~/.local/bin` (the mise shim
+  fails outside a mise project), with a Dolt identity set globally and for
+  `bin/coord`'s separate `DOLT_ROOT_PATH`.
+
 ## Other machines
 
 - **Default, no change required:** omarchy boxes and the Mac mini keep their own
@@ -305,8 +349,33 @@ workspace policy.
 - The existing destination `file://.../agent-coordination/.beads/backup` is
   registered inside the repo state (`backup_export`) and moves with the data
   directory, so `bd backup sync` keeps using it.
+
+### Off-machine backup
+
+`file://` destinations on the same disk protect against a corrupted database, not
+against losing the machine. Dolt's `dolt backup` accepts these destinations (see
+Dolt's backup docs and `dolt backup --help`):
+
+- `file://<absolute path>`: local disk (what the hub uses today).
+- `gs://<bucket>/<path>`: Google Cloud Storage, using Application Default
+  Credentials; no Dolt-specific credential setup.
+- `aws://[<dynamo table>:<bucket>]/<path>`: S3; Dolt's AWS guide also needs a
+  DynamoDB table, so it takes more setup.
+- DoltHub: the cloud option `bd backup --help` recommends
+  (`bd backup init https://doltremoteapi.dolthub.com/<user>/<repo>` with
+  `DOLT_REMOTE_USER` / `DOLT_REMOTE_PASSWORD`).
+- `dolt backup sync-url <url>` pushes to any of these without registering a named
+  backup.
+
+A git remote used for replica sync is not a substitute: with `auto-push` off it is
+only as fresh as the last manual sync and has no point-in-time history. `bd backup
+init` configures a single destination; a second one means `dolt backup add` against
+the server's database directly. None of the off-machine options above were tested
+here. A hub that holds private work data is better backed up to a bucket the owner
+controls than to a third-party service, unless that service's terms are acceptable.
+
 - Also keep the step 3 snapshot until the server has run cleanly for a week.
-- Not verified: restoring the backup into a fresh server, and a periodic
+- Not verified: restoring through `bd backup restore` into a fresh server (the Dolt-level restore was checked, see the production record), and a periodic
   `dolt gc` to keep the data dir from growing (an externally managed server gets
   no bd auto-GC; try `bd admin compact --dolt` on a clone before relying on it).
 
@@ -388,8 +457,9 @@ Go only when every line is true.
   server mode, other machines' replicas pulling the Mac's push, conflicts with
   real concurrent remote writers. Only local `file://` and `git+file://` remotes
   were exercised.
-- The production daemon under server mode with the real opencode workflow (the
-  account was out of quota); a fake ACP agent was used.
+- The production daemon under server mode was exercised with one real opencode run
+  of a harmless demo workflow (gate green); the clone tests used a fake ACP agent.
+  No long soak was done.
 - Other machines as network clients of this server (see MULTI-MACHINE.md for what
   was proven earlier), and a Tailscale-bound server.
 - A real 5-minute lease expiry in server mode (an already-expired lease was
