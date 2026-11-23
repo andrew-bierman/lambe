@@ -273,20 +273,17 @@ func (a *StateSourceAdapter) Queue() httpstate.Queue {
 }
 
 // History merges the live projection's terminal rows and restart-archived
-// attempts with the registry's terminal rows, newest first, bounded at
-// maxHistoryEntries. Restart-archived rows arrive with the operator phase
-// "interrupted"; terminal live rows keep their stop phase.
+// attempts with the registry's terminal rows and groups them per issue: one
+// row per issue showing its latest attempt (see GroupHistory), with the
+// attempt list behind it, newest row first, bounded at maxHistoryEntries.
+// Restart-archived rows arrive with the operator phase "interrupted";
+// terminal live rows keep their stop phase.
 func (a *StateSourceAdapter) History() httpstate.History {
 	history := httpstate.History{AsOf: time.Now()}
 	live := a.readProjection()
-	seen := make(map[string]bool)
+	var attempts []httpstate.HistoryRun
 	add := func(issue, title, phase, state string, attempt int, outcome string, at time.Time) {
-		key := fmt.Sprintf("%s/%d", issue, attempt)
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		history.Runs = append(history.Runs, httpstate.HistoryRun{
+		attempts = append(attempts, httpstate.HistoryRun{
 			Issue:     issue,
 			Title:     title,
 			Phase:     phase,
@@ -318,9 +315,23 @@ func (a *StateSourceAdapter) History() httpstate.History {
 		}
 		add(run.IssueID, "", "", stateName(run.State), run.Attempt, run.Outcome, run.LastEventAt)
 	}
-	sort.SliceStable(history.Runs, func(i, j int) bool {
-		return history.Runs[i].UpdatedAt.After(history.Runs[j].UpdatedAt)
-	})
+	for _, group := range GroupHistory(attempts, func(r httpstate.HistoryRun) AttemptKey {
+		return AttemptKey{Issue: r.Issue, Attempt: r.Attempt, Phase: r.Phase, At: r.UpdatedAt}
+	}) {
+		row := group[0]
+		// The title may live on any attempt; the headline may be a bare
+		// registry row.
+		for _, g := range group {
+			if row.Title == "" {
+				row.Title = g.Title
+			}
+		}
+		row.Attempts = make([]httpstate.HistoryAttempt, len(group))
+		for i, g := range group {
+			row.Attempts[i] = httpstate.HistoryAttempt{Attempt: g.Attempt, Phase: g.Phase, State: g.State, Outcome: g.Outcome, UpdatedAt: g.UpdatedAt}
+		}
+		history.Runs = append(history.Runs, row)
+	}
 	if len(history.Runs) > maxHistoryEntries {
 		history.Runs = history.Runs[:maxHistoryEntries]
 	}

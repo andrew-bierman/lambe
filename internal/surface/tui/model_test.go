@@ -527,13 +527,15 @@ func TestHistorySelectionSurvivesNewerAttempts(t *testing.T) {
 	}
 	m.Update(snapshotMsg{snapshot: snapshot, alive: true})
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if run, ok := m.selectedRun(); !ok || run.Attempt != 2 || len(m.list.Items()) != 1 {
+		t.Fatalf("history should be one row headlining attempt 2: %+v, %d rows", run, len(m.list.Items()))
+	}
 	snapshot.History = append([]daemon.LiveRun{
-		{Progress: symphony.Progress{IssueID: "ac-1", Attempt: 3}, UpdatedAt: now.Add(time.Minute)},
+		{Progress: symphony.Progress{IssueID: "ac-1", Attempt: 3}, UpdatedAt: now.Add(time.Minute), Tail: "third output"},
 	}, snapshot.History...)
 	m.Update(snapshotMsg{snapshot: snapshot, alive: true})
-	if run, ok := m.selectedRun(); !ok || run.Attempt != 1 || !strings.Contains(m.View(), "first output") {
-		t.Fatalf("history moved away from the first attempt: %+v\n%s", run, m.View())
+	if run, ok := m.selectedRun(); !ok || run.IssueID != "ac-1" || run.Attempt != 3 || !strings.Contains(m.View(), "3 attempts") {
+		t.Fatalf("history should follow the issue to its newest attempt: %+v\n%s", run, m.View())
 	}
 }
 
@@ -746,5 +748,43 @@ func TestReadinessViewsKeepHistorySeparate(t *testing.T) {
 		if run.IssueID == "ac-4" || run.IssueID == "ac-5" {
 			t.Fatalf("upcoming work leaked into history: %+v", run)
 		}
+	}
+}
+
+func TestHistoryGroupsAttemptsPerIssue(t *testing.T) {
+	m := demoModel(frozenClock(t))
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	rows := map[string]runItem{}
+	for _, it := range m.list.Items() {
+		r := it.(runItem)
+		if _, dup := rows[r.run.IssueID]; dup {
+			t.Fatalf("issue %s listed twice in history", r.run.IssueID)
+		}
+		rows[r.run.IssueID] = r
+	}
+	if got := rows["demo-41"]; got.run.Phase != "stopped: gate green" || got.attempts != 3 {
+		t.Fatalf("demo-41 row = %q ×%d, want passed ×3 (interrupted attempts must not headline)", got.run.Phase, got.attempts)
+	}
+	for m.selectedID != "demo-41" {
+		before := m.selectedID
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		if m.selectedID == before {
+			t.Fatal("demo-41 not reachable in history")
+		}
+	}
+	view := plain(m.View())
+	if !strings.Contains(view, "×3") || !strings.Contains(view, "3 attempts") {
+		t.Fatalf("grouped row or attempt list missing:\n%s", view)
+	}
+}
+
+func TestClosedExternallyIsNeutral(t *testing.T) {
+	icon, style := phasePresentation(daemon.PhaseClosedExternally)
+	if icon == "✘" || style.GetForeground() == redStyle.GetForeground() {
+		t.Fatalf("closed externally must not look like a failure: %q", icon)
+	}
+	if got := phaseWord(daemon.PhaseClosedExternally, false); got != "closed" {
+		t.Fatalf("phase word = %q", got)
 	}
 }

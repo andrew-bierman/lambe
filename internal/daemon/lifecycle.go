@@ -436,6 +436,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 			}
 		}
 		l.Observe = view.progress
+		rejections := NewGateRejectionLog(GateRejectionLogPath(d.opts.StateDir, d.opts.Config))
+		l.OnGateRed = func(issue string, attempt int, output string) {
+			if err := rejections.Record(issue, attempt, output, time.Now()); err != nil {
+				d.log.Warn("gate rejection record failed", "issue", issue, "error", err)
+			}
+		}
 		if runner, ok := d.asm.Runner.(*harnessRunner); ok {
 			runner.live = view
 		}

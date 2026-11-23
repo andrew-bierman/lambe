@@ -365,7 +365,7 @@ Readiness rows for every configured label. Fixture:
 
 ### `HistoryResponse` — `GET /api/v1/history`
 
-Finished and archived attempts. Fixture:
+Finished and archived attempts, grouped per issue. Fixture:
 [`history.json`](../../testdata/contract/v1/history.json).
 
 | Field | Type | Presence | Meaning |
@@ -373,17 +373,25 @@ Finished and archived attempts. Fixture:
 | `schema_version` | number | always | Wire schema version (1). |
 | `daemon` | object | always | `DaemonDTO`. |
 | `as_of` | string | optional | When the merge was built. |
-| `runs` | list | always, `[]` when empty | Newest first, bounded at **100** entries. |
+| `runs` | list | always, `[]` when empty | One row per issue, newest first, bounded at **100** entries. |
 
 Semantics:
 
-- **Ordering:** newest first by `updated_at`.
-- **Bound:** at most 100 entries; older history lives in the tracker, not
+- **Ordering:** newest first by the row's `updated_at`.
+- **Bound:** at most 100 rows (issues); older history lives in the tracker, not
   here.
+- **Grouping:** one row per issue. The row's own fields (`phase`, `attempt`,
+  `outcome`, ...) describe the issue's **latest attempt**: the highest attempt
+  number, where a restart-`interrupted` (or phase-less) record never shadows a
+  real outcome recorded for the same attempt number. The `attempts` list
+  carries every known attempt, one entry per attempt number, newest first,
+  headline included. Clients that predate grouping keep working: the row
+  fields they read are unchanged, there are simply fewer rows.
 - **Merge:** terminal rows still in the live projection (phase `stopped: …`),
   attempts archived across daemon restarts (phase `interrupted`), and
   terminal registry rows that never got a projection record (coarse `state`
-  and `outcome`, no phase) are merged and deduplicated per `issue`+`attempt`.
+  and `outcome`, no phase) are merged and deduplicated per `issue`+`attempt`,
+  then grouped per issue.
   A daemon restart preserves history; it does not reset it.
 
 `HistoryRunDTO`:
@@ -396,7 +404,12 @@ Semantics:
 | `state` | string | optional | Coarse state, when known. |
 | `attempt` | number | always | Attempt number. |
 | `outcome` | string | optional | How the run ended, when the record carries one. |
-| `updated_at` | string | optional | When the attempt was last observed; the ordering key. |
+| `updated_at` | string | optional | When the latest attempt was last observed; the ordering key. |
+| `attempt_count` | number | always | How many attempts of the issue are known (at least 1); additive. |
+| `attempts` | list | optional | `HistoryAttemptDTO` entries, newest first, headline first; additive. Absent from sources that do not group. |
+
+`HistoryAttemptDTO`: `attempt` (number, always), `phase`, `state`, `outcome`,
+and `updated_at` (strings, optional, same meaning as on the row).
 
 ### `RefreshResponse` — `POST /api/v1/refresh`
 
@@ -447,7 +460,9 @@ must not be collapsed:
   Values served today: `claiming`, `preparing`, `running`, `retry`, `gating`,
   `deferred`, `interrupted`, and terminal `stopped: <reason>` strings
   (`stopped: gate green`, `stopped: gate red`, `stopped: gate escalation`,
-  and other stop reasons). The set is open —
+  `stopped: closed externally` — the issue was closed by someone else, not a
+  failure; daemons before this phase name served `stopped: recovered closed
+  issue` — and other stop reasons). The set is open —
   new phases may appear without a schema bump.
 
 Typical pairings (illustrative, not a normative transition table):
@@ -459,6 +474,7 @@ Typical pairings (illustrative, not a normative transition table):
 | `deferred` | `deferred` |
 | `settled` | `stopped: gate green` |
 | `failed` | `stopped: gate red`, `stopped: gate escalation` |
+| `canceled` | `stopped: closed externally` (neutral, not a failure) |
 | (archived) | `interrupted` — a run cut off by a daemon restart |
 
 Client rules: render `phase` when present and fall back to `state`; treat

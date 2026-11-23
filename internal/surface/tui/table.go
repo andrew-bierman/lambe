@@ -10,6 +10,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/andrew-bierman/lambe/internal/daemon"
 )
 
 // clock is the time source for rendered ages; tests replace it.
@@ -50,6 +52,8 @@ func phaseWord(phase string, stalled bool) string {
 		return "failed"
 	case phase == "stopped: gate escalation":
 		return "escalated"
+	case phase == daemon.PhaseClosedExternally:
+		return "closed"
 	case strings.HasPrefix(phase, "stopped"):
 		return "stopped"
 	case phase == "":
@@ -177,11 +181,15 @@ func (m *Model) renderRow(item runItem, c tableCols, selected bool, now time.Tim
 	if stalled {
 		age, ageStyle = ageText(stalledFor(item.run, true, now)), redStyle
 	}
+	titleCell := st(titleStyle).Render(pad(title, c.title, false))
+	if suffix := fmt.Sprintf(" ×%d", item.attempts); item.attempts > 1 && c.title > len(suffix)+8 {
+		titleCell = st(titleStyle).Render(pad(title, c.title-len(suffix), false)) + st(dimStyle).Render(suffix)
+	}
 	parts := []string{
 		marker + st(phaseStyle).Render(icon) + st(lipgloss.NewStyle()).Render(" "),
 		st(valueStyle.Bold(selected)).Render(pad(item.run.IssueID, c.id, false)),
 		st(lipgloss.NewStyle()).Render(" "),
-		st(titleStyle).Render(pad(title, c.title, false)),
+		titleCell,
 	}
 	if c.showPhase {
 		parts = append(parts, st(lipgloss.NewStyle()).Render(" "),

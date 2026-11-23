@@ -244,7 +244,8 @@ type HistoryResponse struct {
 	Runs []HistoryRunDTO `json:"runs"`
 }
 
-// HistoryRunDTO is one archived or terminal run in the history read.
+// HistoryRunDTO is one issue's row in the history read: its latest attempt,
+// with the count and list of the attempts behind it.
 type HistoryRunDTO struct {
 	// Issue is the issue identifier the attempt worked on.
 	Issue string `json:"issue"`
@@ -262,6 +263,28 @@ type HistoryRunDTO struct {
 	Outcome string `json:"outcome,omitempty"`
 	// UpdatedAt is when the attempt was last observed, RFC 3339; the
 	// newest-first ordering key.
+	UpdatedAt string `json:"updated_at,omitempty"`
+	// AttemptCount is how many attempts of the issue are known; the row's
+	// other fields describe the latest one. Always present (additive), at
+	// least 1.
+	AttemptCount int `json:"attempt_count"`
+	// Attempts lists the known attempts newest first, the headline attempt
+	// included as the first entry. Absent from sources that do not group
+	// (additive).
+	Attempts []HistoryAttemptDTO `json:"attempts,omitempty"`
+}
+
+// HistoryAttemptDTO is one attempt of an issue's grouped history row.
+type HistoryAttemptDTO struct {
+	// Attempt is the attempt number.
+	Attempt int `json:"attempt"`
+	// Phase is the operator phase the attempt ended in, when known.
+	Phase string `json:"phase,omitempty"`
+	// State is the coarse run state name, when known.
+	State string `json:"state,omitempty"`
+	// Outcome is how the run ended, when the record carries one.
+	Outcome string `json:"outcome,omitempty"`
+	// UpdatedAt is when the attempt was last observed, RFC 3339.
 	UpdatedAt string `json:"updated_at,omitempty"`
 }
 

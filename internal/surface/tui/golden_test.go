@@ -87,6 +87,16 @@ func TestGoldenLayouts(t *testing.T) {
 		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 		checkGolden(t, "attention-40x24", plain(m.View()))
 	})
+	for _, size := range [][2]int{{40, 24}, {100, 30}} {
+		w, h := size[0], size[1]
+		t.Run(fmt.Sprintf("history-%dx%d", w, h), func(t *testing.T) {
+			m := demoModel(now)
+			m.Update(tea.WindowSizeMsg{Width: w, Height: h})
+			m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+			fits(t, m.View(), w, h)
+			checkGolden(t, fmt.Sprintf("history-%dx%d", w, h), plain(m.View()))
+		})
+	}
 	t.Run("history-140x40", func(t *testing.T) {
 		m := demoModel(now)
 		m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})

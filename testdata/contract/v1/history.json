@@ -15,21 +15,56 @@
       "title": "gate red task",
       "phase": "stopped: gate red",
       "attempt": 3,
-      "updated_at": "2026-11-19T12:00:00Z"
+      "updated_at": "2026-11-19T12:00:00Z",
+      "attempt_count": 3,
+      "attempts": [
+        {
+          "attempt": 3,
+          "phase": "stopped: gate red",
+          "updated_at": "2026-11-19T12:00:00Z"
+        },
+        {
+          "attempt": 2,
+          "phase": "stopped: gate red",
+          "updated_at": "2026-11-19T11:30:00Z"
+        },
+        {
+          "attempt": 1,
+          "phase": "interrupted",
+          "updated_at": "2026-11-19T11:15:00Z"
+        }
+      ]
     },
     {
       "issue": "H-1",
       "title": "restart interrupted task",
       "phase": "interrupted",
       "attempt": 1,
-      "updated_at": "2026-11-19T11:00:00Z"
+      "updated_at": "2026-11-19T11:00:00Z",
+      "attempt_count": 1,
+      "attempts": [
+        {
+          "attempt": 1,
+          "phase": "interrupted",
+          "updated_at": "2026-11-19T11:00:00Z"
+        }
+      ]
     },
     {
       "issue": "H-3",
       "state": "settled",
       "attempt": 1,
       "outcome": "completed",
-      "updated_at": "2026-11-19T10:00:00Z"
+      "updated_at": "2026-11-19T10:00:00Z",
+      "attempt_count": 1,
+      "attempts": [
+        {
+          "attempt": 1,
+          "state": "settled",
+          "outcome": "completed",
+          "updated_at": "2026-11-19T10:00:00Z"
+        }
+      ]
     }
   ]
 }

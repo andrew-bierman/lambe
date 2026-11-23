@@ -121,6 +121,19 @@ type HistoryRun struct {
 	Attempt   int
 	Outcome   string
 	UpdatedAt time.Time
+	// Attempts lists every known attempt of the issue, newest first,
+	// including this headline row as its first entry. Empty from sources
+	// that do not group.
+	Attempts []HistoryAttempt
+}
+
+// HistoryAttempt is one attempt inside a grouped history row.
+type HistoryAttempt struct {
+	Attempt   int
+	Phase     string
+	State     string
+	Outcome   string
+	UpdatedAt time.Time
 }
 
 // History is the merged terminal-and-archived view served at
@@ -394,7 +407,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, _ *http.Request) {
 		Runs:          make([]HistoryRunDTO, 0, len(history.Runs)),
 	}
 	for _, run := range history.Runs {
-		resp.Runs = append(resp.Runs, HistoryRunDTO{
+		hr := HistoryRunDTO{
 			Issue:     run.Issue,
 			Title:     run.Title,
 			Phase:     run.Phase,
@@ -402,7 +415,18 @@ func (s *Server) handleHistory(w http.ResponseWriter, _ *http.Request) {
 			Attempt:   run.Attempt,
 			Outcome:   run.Outcome,
 			UpdatedAt: formatTime(run.UpdatedAt),
-		})
+		}
+		hr.AttemptCount = max(1, len(run.Attempts))
+		for _, a := range run.Attempts {
+			hr.Attempts = append(hr.Attempts, HistoryAttemptDTO{
+				Attempt:   a.Attempt,
+				Phase:     a.Phase,
+				State:     a.State,
+				Outcome:   a.Outcome,
+				UpdatedAt: formatTime(a.UpdatedAt),
+			})
+		}
+		resp.Runs = append(resp.Runs, hr)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

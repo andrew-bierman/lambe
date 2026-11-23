@@ -523,6 +523,10 @@ type session struct {
 type Loop struct {
 	// Observe receives progress from concurrent workers; it must be concurrency-safe.
 	Observe func(Progress)
+	// OnGateRed, when set, is told about every red gate verdict so the
+	// operator surface can report rejections; it must be concurrency-safe and
+	// must not block.
+	OnGateRed func(issueID string, attempt int, output string)
 
 	Tracker          tracker.Tracker
 	Loader           *Loader
@@ -1221,6 +1225,9 @@ func (w *worker) evaluateGate(ctx context.Context, s *session, output string, lo
 	if outcome.Verdict == GateRed {
 		log.Info("gate red, scheduling failure retry with gate output")
 		s.lastGate = outcome.Output
+		if l.OnGateRed != nil {
+			l.OnGateRed(s.issue.ID, s.attempt, outcome.Output)
+		}
 		w.schedule(s, RetryFailure, l.failureDelay(s.attempt))
 		return true
 	}
