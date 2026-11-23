@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-22
+
 ### Added
 
 - `lambe setup rex [--apply] [--uninstall] [--force] [--dir DIR]` installs the Rex palette actions (`contrib/rex/lambe.lua`). It is a dry run by default, writes only a header-marked `lambe.lua`, never edits your `init.lua` (it prints the snippet and a suggested key binding instead), and refuses to overwrite a file you modified without `--force`.
@@ -44,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - `docs/release-template/`: reusable release setup (goreleaser, workflow, scripts) for other Go tools.
+- `docs/solutions/dolt-server-mode.md`: running the Beads hub on a loopback `dolt sql-server` (measurements, migration script with a writer fence, rollback, scheduled backup, off-machine backup options).
 
 ## [0.10.1] - 2026-11-21
 
@@ -239,7 +242,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exposed via the `lambe` binary (`run`, `status`, `version`).
 - Documentation and CI.
 
-[Unreleased]: https://github.com/andrew-bierman/lambe/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/andrew-bierman/lambe/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/andrew-bierman/lambe/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/andrew-bierman/lambe/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/andrew-bierman/lambe/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/andrew-bierman/lambe/compare/v0.9.1...v0.9.2
