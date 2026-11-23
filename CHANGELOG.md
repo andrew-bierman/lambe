@@ -14,8 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `supervisor.orphan_claim_ttl` (default 1h; 0 keeps the old behavior) stops heartbeating a recovered claim that has no continuation state once its recorded agent is provably gone, so the lease expires on its own. `lambe claims list` / `lambe claims release [--force] ISSUE` and an "orphaned claims" section in `lambe status` surface them, `lambe doctor` warns about them, and release only ever happens on explicit operator action.
 
+- `supervisor.bd_timeout`, `bd_write_timeout`, `bd_max_concurrency`, and `bd_queue_wait` tune the `bd` subprocess limits that were a fixed 60s per call with no cap. The per-call timeout now counts only the process run, not the wait for a slot. `lambe doctor` times a trivial `bd list` and a metadata query on an embedded hub and warns when either is slow, recommending Dolt server mode. See `docs/solutions/slow-embedded-dolt.md`.
+
 ### Changed
 
+- `bd` subprocesses are capped (default 3) behind a priority queue: writes (claim, attempt record, close) are served before reads and polls, which are served before heartbeats, so a backlog of heartbeats can no longer delay a claim's attempt record and keep the agent from being prompted.
+- Recording an attempt costs one `bd create` (already `blocked`, metadata included) instead of create, show, and update; a re-record is one update. Attempt lookups use one id-addressed `bd list --id` instead of a metadata-field scan. Startup and periodic recovery look claims up in grouped reads of 25 (closed included) instead of one or two `bd` calls per claim. The persist and recovery time-boxes stretch to a raised `bd_timeout` instead of cutting a slow but healthy call short.
 - Heartbeats beat live work before orphaned claims, skip rounds with backoff when the tracker is slow, and start after a small random delay. Startup recovery inspects claims in a bounded parallel, time-boxed pass, so new work dispatches while old claims are still being checked (see `docs/solutions/orphan-claim-heartbeats.md`).
 - `lambe status` now exits 2 on a usage error (it was 1) and rejects stray arguments (they were ignored).
 

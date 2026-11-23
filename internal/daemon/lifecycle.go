@@ -263,6 +263,13 @@ func (d *Daemon) trackers(ctx context.Context) ([]tracker.Tracker, error) {
 	if len(d.asm.Trackers) > 0 {
 		return d.asm.Trackers, nil
 	}
+	sup := d.opts.Config.Supervisor
+	tracker.SetLimits(tracker.Limits{
+		MaxConcurrent: sup.BdMaxConcurrency,
+		Timeout:       sup.BdTimeout,
+		WriteTimeout:  sup.BdWriteTimeout,
+		QueueWait:     sup.BdQueueWait,
+	})
 	var trackers []tracker.Tracker
 	for _, t := range d.opts.Config.Trackers {
 		local, err := tracker.NewLocal(d.opts.BdBin, t.Path, d.opts.Actor)
@@ -434,6 +441,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 		l.ControlTimeout = d.cycleBound()
 		l.OrphanTTL = d.opts.Config.Supervisor.OrphanClaimTTL
+		// A raised bd timeout must not be cut short by the recovery time-box.
+		if bd := d.opts.Config.Supervisor.BdTimeout; bd > 10*time.Second {
+			l.RecoveryInspect = bd
+			l.RecoveryBudget = 2 * bd
+		}
 		orphans = l.Orphans
 		l.CheckpointDir = filepath.Join(d.opts.StateDir, "sessions", strings.TrimSuffix(lockName, ".lock"))
 		if err := l.Restore(runCtx, d.opts.Actor); err != nil {

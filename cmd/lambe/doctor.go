@@ -57,6 +57,9 @@ type doctorEnv struct {
 	rexRunner rex.CommandRunner
 	// hostname resolves the machine name; nil uses os.Hostname.
 	hostname func() (string, error)
+	// timeBD runs one read-only bd command in dir and reports how long it
+	// took; nil skips the latency check.
+	timeBD func(ctx context.Context, bin, dir string, args ...string) (time.Duration, error)
 }
 
 func hostDoctorEnv() doctorEnv {
@@ -68,7 +71,17 @@ func hostDoctorEnv() doctorEnv {
 		getenv:    os.Getenv,
 		rexRunner: rexExec,
 		hostname:  os.Hostname,
+		timeBD:    timeBDCommand,
 	}
+}
+
+// timeBDCommand runs bd read-only in dir and returns the wall time.
+func timeBDCommand(ctx context.Context, bin, dir string, args ...string) (time.Duration, error) {
+	cmd := exec.CommandContext(ctx, bin, args...) // #nosec G204 -- fixed read-only bd probe argv
+	cmd.Dir = dir
+	start := time.Now()
+	err := cmd.Run()
+	return time.Since(start), err
 }
 
 func rexExec(ctx context.Context, name string, args ...string) (string, int, error) {
@@ -149,7 +162,11 @@ func diagnose(ctx context.Context, e doctorEnv, configFile string) []checkResult
 
 	rs = append(rs, checkWorkflow(cfg))
 	rs = append(rs, checkTracker(cfg)...)
-	rs = append(rs, checkBD(ctx, e))
+	bdResult := checkBD(ctx, e)
+	rs = append(rs, bdResult)
+	if bdResult.Status == statusOK {
+		rs = append(rs, checkBDLatency(ctx, e, cfg)...)
+	}
 	rs = append(rs, checkHarness(cfg))
 	rs = append(rs, checkIdentity(e, cfg))
 	rs = append(rs, checkDaemon(e, cfg)...)
@@ -289,6 +306,60 @@ func checkBD(ctx context.Context, e doctorEnv) checkResult {
 	}
 	r.Status, r.Detail = statusOK, strings.TrimSpace(ver)+" at "+bd
 	return r
+}
+
+// slowBDThreshold is the single-call latency above which an embedded hub is
+// slow enough to starve the daemon: every tick fans out several bd calls and
+// they serialize behind one writer lock.
+const slowBDThreshold = 5 * time.Second
+
+// checkBDLatency times one trivial read and one metadata query on an
+// embedded tracker (the metadata scan is the expensive query attempt records
+// used to depend on) and warns when either is slow, recommending Dolt server
+// mode. Server-mode and unreadable trackers are skipped.
+func checkBDLatency(ctx context.Context, e doctorEnv, cfg *config.Config) []checkResult {
+	if e.timeBD == nil || len(cfg.Trackers) == 0 || sharedServer(cfg) {
+		return nil
+	}
+	dir := cfg.Trackers[0].Path
+	if _, err := os.Stat(filepath.Join(dir, ".beads")); err != nil {
+		return nil
+	}
+	bd, err := e.lookPath("bd")
+	if err != nil {
+		return nil
+	}
+	r := checkResult{Name: "bd-latency"}
+	probes := []struct {
+		name string
+		args []string
+	}{
+		{"list", []string{"list", "--limit", "1", "--json"}},
+		{"metadata query", []string{"list", "--limit", "1", "--json", "--metadata-field", "lambe_kind=attempt"}},
+	}
+	var parts, slow []string
+	for _, p := range probes {
+		pctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		d, err := e.timeBD(pctx, bd, dir, p.args...)
+		cancel()
+		if err != nil {
+			r.Status, r.Detail = statusWarn, fmt.Sprintf("bd %s failed: %v", p.name, err)
+			return []checkResult{r}
+		}
+		parts = append(parts, fmt.Sprintf("%s %s", p.name, d.Round(10*time.Millisecond)))
+		if d > slowBDThreshold {
+			slow = append(slow, p.name)
+		}
+	}
+	r.Detail = strings.Join(parts, ", ")
+	if len(slow) == 0 {
+		r.Status = statusOK
+		return []checkResult{r}
+	}
+	r.Status = statusWarn
+	r.Detail += fmt.Sprintf(" (over %s: %s)", slowBDThreshold, strings.Join(slow, ", "))
+	r.Fix = "run Dolt in server mode (`bd init --server`), or raise supervisor.bd_timeout and lower supervisor.bd_max_concurrency; see docs/solutions/slow-embedded-dolt.md"
+	return []checkResult{r}
 }
 
 func checkHarness(cfg *config.Config) checkResult {

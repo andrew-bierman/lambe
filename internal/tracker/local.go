@@ -61,7 +61,7 @@ func (l *Local) AddWorkflowLabel(ctx context.Context, id, label string) error {
 	if id == "" || strings.HasPrefix(id, "-") {
 		return fmt.Errorf("invalid task ID %q", id)
 	}
-	_, err := l.shell.run(ctx, []string{
+	_, err := l.shell.run(ctx, LaneWrite, []string{
 		"update", id, "--add-label", label, "--json",
 	})
 	return err
@@ -70,7 +70,7 @@ func (l *Local) AddWorkflowLabel(ctx context.Context, id, label string) error {
 // Init creates the tracker's .beads/ storage if the directory has none.
 // It is a no-op when storage already exists.
 func (l *Local) Init(ctx context.Context) error {
-	status, err := l.shell.run(ctx, []string{"status"})
+	status, err := l.shell.run(ctx, LaneWrite, []string{"status"})
 	if err == nil && len(status.Raw) > 0 {
 		return nil
 	}
@@ -131,7 +131,7 @@ func (l *Local) Readiness(ctx context.Context, labels, anyLabels []string) ([]Re
 	for _, label := range anyLabels {
 		args = append(args, "--label-any="+label)
 	}
-	result, err := l.shell.run(ctx, args)
+	result, err := l.shell.run(ctx, LaneRead, args)
 	if err != nil {
 		return nil, err
 	}

@@ -50,15 +50,15 @@ func TestShellTransportHungCommandTimesOut(t *testing.T) {
 func TestShellTransportDefaultCommandTimeout(t *testing.T) {
 	t.Parallel()
 	tr := NewShellTransport("bd", ".", "a")
-	if got := tr.commandTimeout(); got != DefaultCommandTimeout {
+	if got := tr.commandTimeout(LaneRead); got != DefaultCommandTimeout {
 		t.Errorf("default timeout = %v, want %v", got, DefaultCommandTimeout)
 	}
 	tr.CommandTimeout = -time.Second
-	if got := tr.commandTimeout(); got != DefaultCommandTimeout {
+	if got := tr.commandTimeout(LaneRead); got != DefaultCommandTimeout {
 		t.Errorf("negative timeout = %v, want default %v", got, DefaultCommandTimeout)
 	}
 	tr.CommandTimeout = 5 * time.Second
-	if got := tr.commandTimeout(); got != 5*time.Second {
+	if got := tr.commandTimeout(LaneRead); got != 5*time.Second {
 		t.Errorf("explicit timeout = %v, want 5s", got)
 	}
 }

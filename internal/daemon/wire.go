@@ -33,7 +33,9 @@ import (
 const (
 	// driverCloseBound bounds one driver Close call.
 	driverCloseBound = 30 * time.Second
-	// persistBound bounds one persist-seam tracker round trip.
+	// persistBound is the floor for one persist-seam tracker round trip; the
+	// effective bound is raised to the bd write timeout so a slow hub is not
+	// cut off before bd's own limit.
 	persistBound = 10 * time.Second
 	// Leave time for subprocess cleanup before the daemon's shutdown deadline.
 	persistTransactionBound = ShutdownBound - 5*time.Second
@@ -492,7 +494,7 @@ func newAttemptPersisterFrom(openTracker func(context.Context) (tracker.Tracker,
 		return tr, nil
 	}
 	return func(ctx context.Context, sessionID string, pgid int) error {
-		ctx, cancel := context.WithTimeout(ctx, persistTransactionBound)
+		ctx, cancel := context.WithTimeout(ctx, persistTransactionBoundNow())
 		defer cancel()
 		tr, err := open(ctx)
 		if err != nil {
@@ -532,13 +534,25 @@ func newAttemptPersisterFrom(openTracker func(context.Context) (tracker.Tracker,
 	}
 }
 
+// persistAttemptBound is one persist round trip's deadline: persistBound, or
+// the bd write timeout when that is longer.
+func persistAttemptBound() time.Duration {
+	return max(persistBound, tracker.WriteRunTimeout())
+}
+
+// persistTransactionBoundNow bounds a whole persist transaction (open, read,
+// write, one retry each) and stretches with the per-attempt bound.
+func persistTransactionBoundNow() time.Duration {
+	return max(persistTransactionBound, 4*persistAttemptBound())
+}
+
 // retryPersistTimeout retries an idempotent tracker operation once after a timeout.
 func retryPersistTimeout(ctx context.Context, operation func(context.Context) error) error {
 	for i := 0; ; i++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		attemptCtx, cancel := context.WithTimeout(ctx, persistBound)
+		attemptCtx, cancel := context.WithTimeout(ctx, persistAttemptBound())
 		err := operation(attemptCtx)
 		cancel()
 		if i > 0 || !errors.Is(err, context.DeadlineExceeded) {

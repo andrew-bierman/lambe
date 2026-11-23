@@ -29,18 +29,21 @@ type ShellTransport struct {
 	// Env carries extra environment entries (KEY=VALUE) appended after the
 	// transport's own BD_JSON_ENVELOPE and BEADS_ACTOR.
 	Env []string
-	// CommandTimeout bounds each bd invocation; zero or negative means
-	// DefaultCommandTimeout. A call whose bd subprocess outlives the bound
-	// fails with (an error wrapping) context.DeadlineExceeded.
+	// CommandTimeout bounds each bd invocation's run, overriding the
+	// process-wide Limits for this transport; zero or negative defers to
+	// SetLimits (default DefaultCommandTimeout). The clock starts when the
+	// subprocess does, never while the call waits for a slot. A call whose
+	// bd subprocess outlives the bound fails with (an error wrapping)
+	// context.DeadlineExceeded.
 	CommandTimeout time.Duration
 }
 
-// commandTimeout resolves the effective per-call bound.
-func (t *ShellTransport) commandTimeout() time.Duration {
+// commandTimeout resolves the effective per-run bound for a lane.
+func (t *ShellTransport) commandTimeout(lane Lane) time.Duration {
 	if t.CommandTimeout > 0 {
 		return t.CommandTimeout
 	}
-	return DefaultCommandTimeout
+	return currentLimits().runTimeout(lane)
 }
 
 // NewShellTransport returns a subprocess transport for the bd binary at bin
@@ -49,14 +52,23 @@ func NewShellTransport(bin, dir, actor string) *ShellTransport {
 	return &ShellTransport{Bin: bin, Dir: dir, Actor: actor}
 }
 
-// run executes one bd invocation under the per-call timeout bound and
-// splits success from exit failure. A subprocess killed by the bound
+// run executes one bd invocation: it waits for a subprocess slot in lane
+// (bounded by the queue-wait limit), then runs bd under the per-run timeout
+// and splits success from exit failure. A subprocess killed by the bound
 // surfaces as an error wrapping context.DeadlineExceeded so callers can
 // classify it (the daemon maps it to CategoryUnavailable).
-func (t *ShellTransport) run(ctx context.Context, args []string, extraEnv ...string) (Result, error) {
-	callCtx, cancel := context.WithTimeout(ctx, t.commandTimeout())
+func (t *ShellTransport) run(ctx context.Context, lane Lane, args []string, extraEnv ...string) (Result, error) {
+	release, err := bdGate.acquire(ctx, lane, currentLimits().queueWait())
+	if err != nil {
+		return Result{}, fmt.Errorf("run bd %s: %w", strings.Join(args, " "), err)
+	}
+	defer release()
+	if len(args) > 0 {
+		bdStats.add(args[0])
+	}
+	callCtx, cancel := context.WithTimeout(ctx, t.commandTimeout(lane))
 	defer cancel()
-	cmd := exec.CommandContext(callCtx, t.Bin, args...) // #nosec G204 -- args are constructed in this package from typed requests, never user input
+	cmd := exec.CommandContext(callCtx, t.Bin, args...) // #nosec G204 G702 -- args are constructed in this package from typed requests, never user input
 	// A killed bd's orphaned descendants can inherit the stdout pipe and
 	// hold it open; WaitDelay stops Wait from blocking on them after the
 	// process (or the deadline) is gone.
@@ -71,8 +83,7 @@ func (t *ShellTransport) run(ctx context.Context, args []string, extraEnv ...str
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if err != nil {
+	if err := cmd.Run(); err != nil {
 		if cerr := callCtx.Err(); cerr != nil {
 			return Result{}, fmt.Errorf("run bd %s: %w", strings.Join(args, " "), cerr)
 		}
@@ -155,18 +166,21 @@ func (t *ShellTransport) List(ctx context.Context, q DispatchQuery) (Result, err
 	if q.Unlimited {
 		args = append(args, "--limit", "0")
 	}
+	if q.IncludeClosed {
+		args = append(args, "--all")
+	}
 	for _, kv := range sortedPairs(q.Metadata) {
 		args = append(args, "--metadata-field", kv[0]+"="+kv[1])
 	}
 	if len(q.Labels) > 0 {
 		args = append(args, "--label", strings.Join(q.Labels, ","))
 	}
-	return t.run(ctx, args)
+	return t.run(ctx, LaneRead, args)
 }
 
 // Show implements Transport.
 func (t *ShellTransport) Show(ctx context.Context, id string) (Result, error) {
-	return t.run(ctx, []string{"show", "--json", id})
+	return t.run(ctx, LaneRead, []string{"show", "--json", id})
 }
 
 // Create implements Transport.
@@ -188,10 +202,13 @@ func (t *ShellTransport) Create(ctx context.Context, r CreateRequest) (Result, e
 		}
 		args = append(args, "--metadata", string(m))
 	}
+	if r.Status != "" {
+		args = append(args, "--status", r.Status)
+	}
 	if r.Ephemeral {
 		args = append(args, "--ephemeral")
 	}
-	return t.run(ctx, args)
+	return t.run(ctx, LaneWrite, args)
 }
 
 // Update implements Transport.
@@ -218,7 +235,7 @@ func (t *ShellTransport) Update(ctx context.Context, r UpdateRequest) (Result, e
 	if r.DeferClear {
 		args = append(args, "--defer", "")
 	}
-	return t.run(ctx, args)
+	return t.run(ctx, LaneWrite, args)
 }
 
 // Defer implements Transport. A nil until is an indefinite icebox.
@@ -230,12 +247,12 @@ func (t *ShellTransport) Defer(ctx context.Context, id string, until *time.Time,
 	if reason != "" {
 		args = append(args, "--reason", reason)
 	}
-	return t.run(ctx, args)
+	return t.run(ctx, LaneWrite, args)
 }
 
 // Heartbeat implements Transport.
 func (t *ShellTransport) Heartbeat(ctx context.Context, id string) (Result, error) {
-	return t.run(ctx, []string{"heartbeat", id, "--json"})
+	return t.run(ctx, LaneBackground, []string{"heartbeat", id, "--json"})
 }
 
 // Unclaim implements Transport. A non-empty ifAssignee guards the release:
@@ -245,7 +262,7 @@ func (t *ShellTransport) Unclaim(ctx context.Context, id string, ifAssignee stri
 	if ifAssignee != "" {
 		args = append(args, "--if-assignee", ifAssignee)
 	}
-	return t.run(ctx, args)
+	return t.run(ctx, LaneWrite, args)
 }
 
 // Reclaim implements Transport.
@@ -254,7 +271,7 @@ func (t *ShellTransport) Reclaim(ctx context.Context, olderThan time.Duration, i
 	for _, id := range ids {
 		args = append(args, "--id", id)
 	}
-	return t.run(ctx, args)
+	return t.run(ctx, LaneWrite, args)
 }
 
 // Batch implements Transport. All ops render into a temp batch file applied
@@ -278,18 +295,18 @@ func (t *ShellTransport) Batch(ctx context.Context, ops []BatchOp) (Result, erro
 		return Result{}, fmt.Errorf("write batch file: %w", err)
 	}
 	defer os.Remove(path) //nolint:errcheck // best-effort cleanup of a temp file
-	return t.run(ctx, []string{"batch", "-f", path, "--json"})
+	return t.run(ctx, LaneWrite, []string{"batch", "-f", path, "--json"})
 }
 
 // Events implements Transport. BD_EVENTS_JOURNAL=1 makes the journal record
 // mutations even when the workspace default is off.
 func (t *ShellTransport) Events(ctx context.Context, since int64) (Result, error) {
-	return t.run(ctx, []string{"events", "tail", "--since", strconv.FormatInt(since, 10), "--json"}, "BD_EVENTS_JOURNAL=1")
+	return t.run(ctx, LaneRead, []string{"events", "tail", "--since", strconv.FormatInt(since, 10), "--json"}, "BD_EVENTS_JOURNAL=1")
 }
 
 // Version implements Transport, returning bd's version string.
 func (t *ShellTransport) Version(ctx context.Context) (string, error) {
-	res, err := t.run(ctx, []string{"--version"})
+	res, err := t.run(ctx, LaneRead, []string{"--version"})
 	if err != nil {
 		return "", err
 	}
@@ -298,7 +315,7 @@ func (t *ShellTransport) Version(ctx context.Context) (string, error) {
 
 // ConfigGet implements Transport, returning the raw config value.
 func (t *ShellTransport) ConfigGet(ctx context.Context, key string) (string, error) {
-	res, err := t.run(ctx, []string{"config", "get", key})
+	res, err := t.run(ctx, LaneRead, []string{"config", "get", key})
 	if err != nil {
 		return "", err
 	}

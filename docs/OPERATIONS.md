@@ -207,6 +207,10 @@ is the section separator):
 | `supervisor.tick_seconds` | 10 | Loop cadence. |
 | `supervisor.heartbeat_interval` | 150s | Lease extension cadence. |
 | `supervisor.orphan_claim_ttl` | 1h | How long a recovered claim with no continuation state may stay blocked before the daemon stops heartbeating it so its lease can expire. `0` heartbeats such claims forever. The claim is never released automatically; see [Orphaned claims](#orphaned-claims). |
+| `supervisor.bd_timeout` | 60s | Bound on one `bd` read or heartbeat subprocess run. The clock starts when the process starts, never while it waits in the queue. Raise it (180s) on a slow embedded hub; see [slow embedded Dolt](solutions/slow-embedded-dolt.md). |
+| `supervisor.bd_write_timeout` | 0s (= `bd_timeout`) | Bound on one `bd` write run (claim, attempt record, close). |
+| `supervisor.bd_max_concurrency` | 3 | Most `bd` subprocesses running at once. Writes jump the queue ahead of reads, and reads ahead of heartbeats. |
+| `supervisor.bd_queue_wait` | 10m | How long a call may wait for a free slot before it fails. |
 | `supervisor.silence_timeout` | 10m | No agent output for this long: the watchdog probes, then kills. |
 | `supervisor.turn_timeout` | 1h | Hard cap on one agent turn. |
 | `supervisor.stall_after` | 5m | **The one stall threshold.** A running run with no agent activity or supervisor progress for this long is `stalled` in the state API (`stalled`, `stall_after_seconds`) and flagged by `lambe doctor`. Observation only; the watchdog still acts at `silence_timeout`. |

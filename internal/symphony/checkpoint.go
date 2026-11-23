@@ -220,20 +220,20 @@ type lookup struct {
 	err    error
 }
 
-func (l *Loop) readIssue(ctx context.Context, id string) ([]tracker.Issue, error) {
-	issues, err := l.Tracker.Dispatchable(ctx, tracker.DispatchQuery{IDs: []string{id}})
-	if err != nil {
-		return nil, err
-	}
-	if len(issues) == 0 {
-		// Closed issues are omitted from bd's default list view.
-		return l.Tracker.Dispatchable(ctx, tracker.DispatchQuery{IDs: []string{id}, Statuses: []string{tracker.StatusClosed}})
-	}
-	return issues, nil
+// readIssues is the grouped lookup of a chunk of ids: one tracker read
+// that includes closed issues, replacing an open read plus a closed read
+// per id. An id absent from the answer no longer exists.
+func (l *Loop) readIssues(ctx context.Context, ids []string) ([]tracker.Issue, error) {
+	return l.Tracker.Dispatchable(ctx, tracker.DispatchQuery{IDs: ids, IncludeClosed: true, Unlimited: true})
 }
 
-// inspectAll reads the tracker state of every id with bounded parallelism,
-// each read time-boxed. Ids not reached before ctx ends are absent.
+// recoveryChunk is how many ids one grouped recovery read carries.
+const recoveryChunk = 25
+
+// inspectAll reads the tracker state of every id in chunked grouped reads
+// with bounded parallelism, each read time-boxed. On an embedded hub every
+// bd call pays an engine start, so 80 claims cost a handful of calls instead
+// of 80-160. Ids not reached before ctx ends are absent.
 func (l *Loop) inspectAll(ctx context.Context, ids []string) map[string]lookup {
 	workers := l.RecoveryConcurrency
 	if workers <= 0 {
@@ -249,7 +249,8 @@ func (l *Loop) inspectAll(ctx context.Context, ids []string) map[string]lookup {
 		out = make(map[string]lookup, len(ids))
 		sem = make(chan struct{}, workers)
 	)
-	for _, id := range ids {
+	for start := 0; start < len(ids); start += recoveryChunk {
+		chunk := ids[start:min(start+recoveryChunk, len(ids))]
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
@@ -262,9 +263,15 @@ func (l *Loop) inspectAll(ctx context.Context, ids []string) map[string]lookup {
 			defer func() { <-sem }()
 			ictx, cancel := context.WithTimeout(ctx, box)
 			defer cancel()
-			issues, err := l.readIssue(ictx, id)
+			issues, err := l.readIssues(ictx, chunk)
+			byID := make(map[string][]tracker.Issue, len(chunk))
+			for _, issue := range issues {
+				byID[issue.ID] = append(byID[issue.ID], issue)
+			}
 			mu.Lock()
-			out[id] = lookup{issues, err}
+			for _, id := range chunk {
+				out[id] = lookup{byID[id], err}
+			}
 			mu.Unlock()
 		}()
 	}

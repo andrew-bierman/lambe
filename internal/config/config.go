@@ -57,6 +57,16 @@ type Supervisor struct {
 	// its lease expires. The claim is never released automatically. Zero
 	// heartbeats such claims forever (the pre-0.11 behavior).
 	OrphanClaimTTL time.Duration
+	// BdTimeout bounds one bd subprocess run for reads and heartbeats; the
+	// clock starts when the process does, not while it queues. BdWriteTimeout
+	// bounds writes (claim, attempt record, close); zero uses BdTimeout.
+	// Raise them on a hub whose bd calls are slow (docs/solutions/slow-embedded-dolt.md).
+	BdTimeout      time.Duration
+	BdWriteTimeout time.Duration
+	// BdMaxConcurrency caps simultaneous bd subprocesses; BdQueueWait bounds
+	// how long a call may wait for a free slot.
+	BdMaxConcurrency int
+	BdQueueWait      time.Duration
 	// StallAfter is the single stall threshold: a running run with no agent
 	// activity for this long is "stalled" to the state API, dashboard,
 	// TUI, and doctor. It is observation only; the watchdog still acts at
@@ -220,6 +230,10 @@ func Load(opts Options) (*Config, error) {
 			AutoReclaim:        k.Bool("supervisor.auto_reclaim"),
 			ReclaimGrace:       k.Duration("supervisor.reclaim_grace"),
 			OrphanClaimTTL:     k.Duration("supervisor.orphan_claim_ttl"),
+			BdTimeout:          k.Duration("supervisor.bd_timeout"),
+			BdWriteTimeout:     k.Duration("supervisor.bd_write_timeout"),
+			BdMaxConcurrency:   k.Int("supervisor.bd_max_concurrency"),
+			BdQueueWait:        k.Duration("supervisor.bd_queue_wait"),
 		},
 		Gate:          Gate{CheckTimeout: k.Duration("gate.check_timeout")},
 		Machine:       strings.TrimSpace(k.String("machine")),
@@ -368,6 +382,10 @@ func defaultsProvider() *confmap.Confmap {
 			"auto_reclaim":         false,
 			"reclaim_grace":        defaultReclaimGrace.String(),
 			"orphan_claim_ttl":     defaultOrphanClaimTTL.String(),
+			"bd_timeout":           "60s",
+			"bd_write_timeout":     "0s",
+			"bd_max_concurrency":   3,
+			"bd_queue_wait":        "10m",
 		},
 	}, ".")
 }
@@ -568,6 +586,18 @@ func validate(cfg *Config) []error {
 	}
 	if s.OrphanClaimTTL < 0 {
 		errs = append(errs, fmt.Errorf("supervisor.orphan_claim_ttl must not be negative, got %s", s.OrphanClaimTTL))
+	}
+	if s.BdTimeout <= 0 {
+		errs = append(errs, fmt.Errorf("supervisor.bd_timeout must be positive, got %s", s.BdTimeout))
+	}
+	if s.BdWriteTimeout < 0 {
+		errs = append(errs, fmt.Errorf("supervisor.bd_write_timeout must not be negative, got %s", s.BdWriteTimeout))
+	}
+	if s.BdMaxConcurrency < 1 {
+		errs = append(errs, fmt.Errorf("supervisor.bd_max_concurrency must be >= 1, got %d", s.BdMaxConcurrency))
+	}
+	if s.BdQueueWait <= 0 {
+		errs = append(errs, fmt.Errorf("supervisor.bd_queue_wait must be positive, got %s", s.BdQueueWait))
 	}
 	if s.AutoReclaim && s.ReclaimGrace <= time.Duration(s.TickSeconds)*time.Second {
 		errs = append(errs, fmt.Errorf("supervisor.reclaim_grace (%s) must exceed the tick interval (%ds): a slow sync must not read as a dead worker", s.ReclaimGrace, s.TickSeconds))

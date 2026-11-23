@@ -500,12 +500,28 @@ func attemptKey(sessionID string, number int) string {
 	return fmt.Sprintf("att-%s-%d", sessionID, number)
 }
 
-// PutAttempt implements Tracker: pinned create on first record, idempotent
-// metadata update on re-put.
+// knownAttempts remembers attempt bead ids this process has created or
+// updated, so a re-put (the daemon's pgid persist) goes straight to the
+// update instead of paying a failed create first. A stale entry is harmless:
+// an update of a missing bead falls back to create.
+var knownAttempts sync.Map
+
+// attemptProbeMax bounds the attempt numbers an id-addressed read probes for
+// one session; it matches the attempt_cap ceiling.
+const attemptProbeMax = 100
+
+// PutAttempt implements Tracker: a pinned-id create that already carries the
+// blocked status and every metadata field (one bd call for a new record),
+// and an idempotent metadata update for a re-put.
 func (b *Beads) PutAttempt(ctx context.Context, a Attempt) error {
 	if a.SessionID == "" || a.Number < 1 {
 		return fmt.Errorf("put attempt: session id and positive attempt number required")
 	}
+	prefix, err := b.issuePrefix(ctx)
+	if err != nil {
+		return err
+	}
+	id := prefix + "-" + attemptKey(a.SessionID, a.Number)
 	meta := map[string]string{
 		metaKind:            kindAttempt,
 		metaSession:         a.SessionID,
@@ -516,45 +532,73 @@ func (b *Beads) PutAttempt(ctx context.Context, a Attempt) error {
 	if !a.WakeAt.IsZero() {
 		meta[metaWakeAt] = a.WakeAt.UTC().Format(time.RFC3339)
 	}
-	issue, err := b.EnsureIssue(ctx, attemptKey(a.SessionID, a.Number), IssueSpec{
-		Title:    fmt.Sprintf("attempt %d of session %s", a.Number, a.SessionID),
-		Priority: 2,
-		Labels:   []string{"lambe", kindAttempt},
-		Metadata: meta,
-	})
-	if err != nil {
-		return err
-	}
 	// Operational records stay off the ready dispatch front: an open attempt
 	// bead would be dispatched as work by the loop's own two-read within the
-	// same tick that wrote it. "blocked" keeps it readable via metadata query
-	// while invisible to Dispatchable. The create cannot carry a status, and
-	// a re-put finds the issue already existing (whose create metadata was
-	// not applied), so the pgid/wake fields ride on this update as well —
-	// using the id EnsureIssue returned rather than recomposing it.
-	update := map[string]string{metaWakeAt: ""}
-	if a.PGID > 0 {
-		update[metaPGID] = strconv.Itoa(a.PGID)
-		update[metaProcessIdentity] = a.ProcessIdentity
+	// same tick that wrote it, so the create itself is "blocked". The record
+	// stays readable by id and by metadata query.
+	create := func() error {
+		_, err := b.t.Create(ctx, CreateRequest{
+			ID:       id,
+			Title:    fmt.Sprintf("attempt %d of session %s", a.Number, a.SessionID),
+			Priority: 2,
+			Labels:   []string{"lambe", kindAttempt},
+			Metadata: meta,
+			Status:   StatusBlocked,
+		})
+		return err
 	}
-	if !a.WakeAt.IsZero() {
-		update[metaWakeAt] = a.WakeAt.UTC().Format(time.RFC3339)
-	}
-	if _, err := b.t.Update(ctx, UpdateRequest{ID: issue.ID, Status: StatusBlocked, Metadata: update}); err != nil {
-		if typed := classifyExit(err); typed != nil {
-			return fmt.Errorf("put attempt: %w", typed)
+	// A re-put finds the issue existing (whose create metadata is not
+	// applied), so the pgid/wake fields ride on an update.
+	update := func() error {
+		fields := map[string]string{metaWakeAt: ""}
+		if a.PGID > 0 {
+			fields[metaPGID] = strconv.Itoa(a.PGID)
+			fields[metaProcessIdentity] = a.ProcessIdentity
 		}
-		return fmt.Errorf("put attempt: %w", err)
+		if !a.WakeAt.IsZero() {
+			fields[metaWakeAt] = a.WakeAt.UTC().Format(time.RFC3339)
+		}
+		_, err := b.t.Update(ctx, UpdateRequest{ID: id, Status: StatusBlocked, Metadata: fields})
+		return err
 	}
-	return nil
+	done := func(err error) error {
+		if err == nil {
+			knownAttempts.Store(id, struct{}{})
+			return nil
+		}
+		if typed := classifyExit(err); typed != nil {
+			return fmt.Errorf("put attempt %s: %w", id, typed)
+		}
+		return fmt.Errorf("put attempt %s: %w", id, err)
+	}
+	if _, known := knownAttempts.Load(id); known {
+		err := update()
+		if err == nil || !strings.Contains(exitText(err), "no issue found") {
+			return done(err)
+		}
+	}
+	err = create()
+	if err != nil && strings.Contains(exitText(err), "already exists") {
+		err = update()
+	}
+	return done(err)
 }
 
-// Attempts implements Tracker: exact-match metadata query, ordered by
-// attempt number. A whole-set read is ListByMetadata plus GroupAttempts.
+// Attempts implements Tracker: an id-addressed read. Attempt ids are
+// deterministic (<prefix>-att-<session>-<n>), so one `list --id` over the
+// candidate numbers replaces the metadata-field scan, which costs a full
+// table pass on a large hub. Ordered by attempt number. A whole-set read is
+// ListByMetadata plus GroupAttempts.
 func (b *Beads) Attempts(ctx context.Context, sessionID string) ([]Attempt, error) {
-	res, err := b.t.List(ctx, DispatchQuery{
-		Metadata: map[string]string{metaKind: kindAttempt, metaSession: sessionID},
-	})
+	prefix, err := b.issuePrefix(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list attempts for %s: %w", sessionID, err)
+	}
+	ids := make([]string, 0, attemptProbeMax)
+	for n := 1; n <= attemptProbeMax; n++ {
+		ids = append(ids, prefix+"-"+attemptKey(sessionID, n))
+	}
+	res, err := b.t.List(ctx, DispatchQuery{IDs: ids})
 	if err != nil {
 		return nil, fmt.Errorf("list attempts for %s: %w", sessionID, err)
 	}
@@ -564,6 +608,9 @@ func (b *Beads) Attempts(ctx context.Context, sessionID string) ([]Attempt, erro
 	}
 	attempts := make([]Attempt, 0, len(rows))
 	for _, r := range rows {
+		if r.Metadata[metaKind] != kindAttempt || r.Metadata[metaSession] != sessionID {
+			continue
+		}
 		a, ok := attemptFromIssue(r)
 		if !ok {
 			continue
