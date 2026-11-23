@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `lambe setup rex [--apply] [--uninstall] [--force] [--dir DIR]` installs the Rex palette actions (`contrib/rex/lambe.lua`). It is a dry run by default, writes only a header-marked `lambe.lua`, never edits your `init.lua` (it prints the snippet and a suggested key binding instead), and refuses to overwrite a file you modified without `--force`.
+- Rex: run tabs get a pane title `ISSUE · Workflow · state` (refreshed when you reopen the run, never over a title you changed), and the Open Run picker marks each row `●` live, `◌` stopped daemon, or `○` archived, live runs first.
 - `lambe status -json` prints the morning report as a state API snapshot (`GET /api/v1/state` shape) read from the tracker, with no daemon needed; `lambe state-dir [-json]` prints the resolved state directory and the live state API descriptors (never the token).
 - `lambe service install|status|uninstall -label NAME` and `lambe doctor -service-label NAME` run a second, isolated launchd/systemd service; `service install` bakes in `LAMBE_STATE_DIR` when set.
 

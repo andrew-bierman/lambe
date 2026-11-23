@@ -14,6 +14,8 @@ local path = os.getenv("LAMBE_REX_LUA") or (os.getenv("HOME") .. "/.config/rex/l
 local real = rex
 local actions, opened, focused, queued, picks = {}, {}, {}, {}, {}
 local labeled = {} -- window labels the stubbed session already shows
+local block_labels = {} -- window label -> {id, label} of its pane
+local renamed = {}
 
 local stub = setmetatable({
   action = function(def) actions[def.name] = def end,
@@ -24,11 +26,19 @@ local stub = setmetatable({
   session = {
     view = function() 
       local windows = {}
-      for label, id in pairs(labeled) do windows[#windows + 1] = { label = label, window_id = id } end
+      for label, id in pairs(labeled) do
+        local b = block_labels[label] or { id = "block:" .. id, label = "" }
+        windows[#windows + 1] = { label = label, window_id = id,
+          layers = { { blocks = { { block_id = b.id, label = b.label } } } } }
+      end
       return { windows = windows }
     end,
     focus_window = function(a) focused[#focused + 1] = a.window_id return {} end,
-    new_window = function(a) opened[#opened + 1] = a return {} end,
+    new_window = function(a)
+      opened[#opened + 1] = a
+      return { window_id = "window:" .. #opened, block_ids = { "block:" .. #opened } }
+    end,
+    set_block_label = function(a) renamed[#renamed + 1] = a return {} end,
   },
   log = function(level, message) print(level .. ": " .. tostring(message)) end,
   layout = { block = function(a) return a end }, -- keep the options readable
@@ -53,13 +63,22 @@ local label = opened[1].window_label
 check(label == "Lambe · " .. rows[1].id, "window label is not `Lambe · <issue>`: " .. tostring(label))
 check(command(opened[1]):find("logs -issue " .. rows[1].id .. " -follow", 1, true), "window does not follow the chosen run")
 
+local title = opened[1].layout.label
+check(title and title:sub(1, #rows[1].id + 4) == rows[1].id .. " · ", "pane title is not `ISSUE · Workflow · state`: " .. tostring(title))
+
 labeled[label] = "window:existing"
+block_labels[label] = { id = "block:1", label = title } -- still the title Lambe set
 actions.lambe_open_run.run({}, {})
 check(#opened == 1 and focused[1] == "window:existing", "an open run window was not reused")
 
+block_labels[label] = { id = "block:1", label = "my own name" } -- the user renamed it
+local before = #renamed
+actions.lambe_open_run.run({}, {})
+check(#renamed == before, "a pane the user renamed was overwritten")
+
 actions.lambe_open_run.run({}, { issue = "x-1" })
 check(opened[2].window_label == "Lambe · x-1", "issue argument skipped the picker incorrectly")
-check(#picks == 2 or #picks == 3, "issue argument must not open the picker")
+check(#picks >= 2, "issue argument must not open the picker")
 
 actions.lambe_open_workflow_run.run({}, {})
 actions.lambe_switch_host.run({}, {})

@@ -11,7 +11,7 @@ Type **Lambe** in the Rex command palette:
 | **Lambe: Open Dashboard** | Opens `lambe tui` for this host's daemon. |
 | **Lambe: Open Demo** | Opens the dashboard with sample runs. |
 | **Lambe: Choose Dashboard…** | Native picker for the two above. |
-| **Lambe: Open Run…** | Native picker over current and archived runs. Each row shows the title, workflow, phase, attempt, and turn; archived runs are marked, and a stopped daemon's last rows say `daemon stopped`. The picker title names the machine whose runs it lists. Choosing a run opens `lambe logs -issue ID -follow` in a tab labeled `Lambe · ID`, or focuses that tab if it is already open. |
+| **Lambe: Open Run…** | Native picker over current and archived runs. Live runs come first, each row led by a status marker (`●` live, `◌` last state of a stopped daemon, `○` archived) and showing the title, workflow, phase, attempt, and turn. The picker title names the machine whose runs it lists. Choosing a run opens `lambe logs -issue ID -follow` in a tab whose window label is `Lambe · ID` and whose pane is titled `ID · Workflow · state`, or focuses that tab if it is already open (see [Tab titles](#tab-titles)). |
 | **Lambe: Open Run by Workflow…** | Pick a workflow, then one of its runs. Skips the first step when only one workflow has runs. |
 | **Lambe: Switch Host…** | Opens Rex's host picker. Rex runs the actions on the host the app is connected to, so switch to the machine running your agents, then use **Open Run…**. |
 | **Lambe: Check Setup** | Runs `lambe doctor` exactly as the other actions run `lambe`. |
@@ -21,6 +21,15 @@ the picker actions open the dashboard instead. For scripts,
 `rex do lambe_open_run issue=ac-123` skips the picker.
 
 ## Install
+
+The short way, on the machine that runs the Rex server:
+
+```sh
+lambe setup rex            # dry run: prints exactly what it would do
+lambe setup rex --apply    # writes lambe.lua
+```
+
+See [`lambe setup rex`](#lambe-setup-rex) below. The manual steps follow.
 
 Do this on every machine whose Rex server should offer the actions. The
 actions run on the Rex **server**, so the file goes on the host that runs the
@@ -62,6 +71,37 @@ server, not on the machine whose app you are looking at.
    `check.lua` loads `lambe.lua` with a stubbed `rex`, answers each picker
    with its first row, and prints `PASS` plus the rows. For a remote host,
    run `lambe_check` with `rex -S HOST do lambe_check`.
+
+## `lambe setup rex`
+
+`lambe setup rex` installs the `lambe.lua` that shipped with your `lambe`
+binary into Rex's config directory (the directory of `$REX_CONFIG`, else
+`$XDG_CONFIG_HOME/rex`, else `~/.config/rex`; override with `--dir DIR`).
+
+- **Dry run by default.** It prints the file it would create or update, the
+  `dofile` line to add to `init.lua` with a commented-out key binding
+  suggestion, and the `rex config check && rex config reload` command.
+- **`--apply`** writes only `lambe.lua`, atomically. The file starts with a
+  `-- lambe-managed: v1 sha256=...` header. Re-running updates a managed file,
+  and a byte-identical hand copy is adopted.
+- **It never edits `init.lua`** and writes nothing else, in `$HOME` or anywhere.
+- **It refuses to overwrite** a `lambe.lua` that is not lambe's or that you
+  edited after installing (the hash in the header no longer matches), unless you
+  pass `--force`.
+- **`--uninstall [--apply]`** removes a managed `lambe.lua` under the same
+  rules and reminds you to delete the `dofile` line yourself.
+
+## Tab titles
+
+The window label `Lambe · ID` is how the LambeDash app and the palette find an
+existing run tab, so it never changes. The pane inside is titled
+`ID · Workflow · state`. When you pick a run whose tab is already open, the
+title is refreshed to the run's current state, but only if the pane still has
+the title Lambe last set. A pane you renamed is never touched. Lambe remembers
+what it set only until Rex reloads its config; after a reload it assumes
+nothing is its own and leaves titles alone until the tab is reopened. Titles
+update when you pick the run again, not on their own: see
+`docs/solutions/rex-events.md` for why there is no live subscription.
 
 ## Use Lambe across machines
 

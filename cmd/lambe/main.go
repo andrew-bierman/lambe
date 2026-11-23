@@ -42,6 +42,7 @@ usage:
   lambe claims  list | release [--force] ISSUE   inspect or release orphaned claims
   lambe doctor  [-config FILE] [-json] check for anything that could stall your agents
   lambe service install|status|uninstall  keep the daemon alive under launchd/systemd
+  lambe setup   rex [--apply] [--uninstall] [--force] [--dir DIR]   install the Rex palette actions (dry run by default)
   lambe mcp     [-config FILE] serve lambe's MCP tools over stdio
   lambe logs    [-config FILE] [-issue ID] [-follow] [-json] show agent output
   lambe enqueue [-config FILE] -workflow NAME [-apply] ISSUE_ID
@@ -97,6 +98,11 @@ func main() {
 		if err := runService(args[1:], hostEnv(), os.Stdout); err != nil {
 			logging.Default().Error("lambe service failed", "error", err.Error())
 			os.Exit(1)
+		}
+	case "setup":
+		if err := runSetup(args[1:], hostRexSetupEnv(), os.Stdout); err != nil {
+			logging.Default().Error("lambe setup failed", "error", err.Error())
+			os.Exit(readExitCode(err))
 		}
 	case "status":
 		if err := runStatus(args[1:], os.Stdout); err != nil {
