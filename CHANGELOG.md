@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `lambe doctor` no longer reports a finished run (phase `stopped: ...`, which the daemon keeps in its snapshot) as silent or unfinished, so it no longer fails with "the watchdog should have reclaimed it" long after a run completed.
+
 ## [0.11.0] - 2026-11-22
 
 ### Added

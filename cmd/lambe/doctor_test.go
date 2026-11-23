@@ -388,6 +388,20 @@ func TestDoctorProgressUsesConfiguredStallAfter(t *testing.T) {
 	}
 }
 
+func TestDoctorIgnoresFinishedRuns(t *testing.T) {
+	f := newDoctorFixture(t, "")
+	identity, err := proc.ProcessIdentity(os.Getpid())
+	must(t, err)
+	holdLock(t, f)
+	done := liveRun("x-1", 53*time.Minute)
+	done.Phase = "stopped: gate green"
+	writeLive(t, f, os.Getpid(), identity, []daemon.LiveRun{done})
+	r := doctorResult(t, diagnose(context.Background(), f.env, f.configPath), "progress")
+	if r.Status != statusOK || !strings.Contains(r.Detail, "no active runs") {
+		t.Errorf("progress with only a finished run = %+v, want ok and no active runs", r)
+	}
+}
+
 func TestDoctorStateAPIPortInUse(t *testing.T) {
 	t.Parallel()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
