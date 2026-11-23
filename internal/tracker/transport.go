@@ -47,6 +47,7 @@ type CreateRequest struct {
 	Priority  int
 	Labels    []string
 	Metadata  map[string]string
+	Status    string // initial status; empty keeps bd's default (open)
 	Ephemeral bool
 }
 
@@ -208,8 +209,8 @@ func quoteBatchToken(tok string) string {
 	return `"` + escaped + `"`
 }
 
-// DefaultCommandTimeout bounds one bd subprocess invocation when the
-// transport does not configure its own limit. Without it a wedged bd (a
+// DefaultCommandTimeout bounds one bd subprocess run when neither the
+// transport nor SetLimits configures a limit. Without it a wedged bd (a
 // hung dolt engine, a stuck lock) would wedge every caller — including the
 // daemon's tick loop — forever.
 const DefaultCommandTimeout = 60 * time.Second

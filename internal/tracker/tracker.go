@@ -136,6 +136,10 @@ type DispatchQuery struct {
 	// reads (lambe's own attempt beads) set it: a silently truncated read
 	// would drop state the caller is about to summarize.
 	Unlimited bool
+	// IncludeClosed adds closed issues to the answer (bd's default view
+	// omits them), so an ID lookup needs one read instead of an open read
+	// plus a closed read.
+	IncludeClosed bool
 }
 
 // Empty reports whether the query can match nothing, in which case

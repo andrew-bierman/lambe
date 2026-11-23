@@ -22,6 +22,7 @@ type slowLookupTracker struct {
 
 	mu           sync.Mutex
 	inflight     int
+	idReads      int
 	peak         int
 	releaseCalls int
 }
@@ -32,6 +33,7 @@ func (s *slowLookupTracker) Dispatchable(ctx context.Context, q tracker.Dispatch
 	}
 	s.mu.Lock()
 	s.inflight++
+	s.idReads++
 	s.peak = max(s.peak, s.inflight)
 	s.mu.Unlock()
 	defer func() { s.mu.Lock(); s.inflight--; s.mu.Unlock() }()
@@ -193,5 +195,21 @@ func TestClosedIssueDropsForeignCheckpoint(t *testing.T) {
 	scanned, _ := ScanOrphanClaims(l.CheckpointDir)
 	if len(scanned) != 0 {
 		t.Fatalf("closed, unassigned issue kept its checkpoint: %+v", scanned)
+	}
+}
+
+// TestRecoveryReadsClaimsInGroupedChunks proves recovery cost scales with
+// claims/chunk, not claims: 50 recovered claims are looked up in a couple of
+// grouped reads, not 50-100 per-issue reads (each one a bd process).
+func TestRecoveryReadsClaimsInGroupedChunks(t *testing.T) {
+	f, st := orphanFixture(t, 0)
+	if err := f.loop.Restore(t.Context(), "lambe"); err != nil {
+		t.Fatal(err)
+	}
+	if want := (orphanCount + recoveryChunk - 1) / recoveryChunk; st.idReads != want {
+		t.Fatalf("id reads for %d claims = %d, want %d grouped reads", orphanCount, st.idReads, want)
+	}
+	if got := len(f.loop.Orphans.List()); got != orphanCount {
+		t.Fatalf("registered %d orphans, want %d", got, orphanCount)
 	}
 }

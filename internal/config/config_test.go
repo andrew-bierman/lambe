@@ -620,3 +620,28 @@ func TestOrphanClaimTTL(t *testing.T) {
 		t.Fatalf("negative ttl: got %v", err)
 	}
 }
+
+func TestBdLimits(t *testing.T) {
+	cfg, err := Load(Options{File: writeTemp(t, ""), Env: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := cfg.Supervisor
+	if s.BdTimeout != time.Minute || s.BdWriteTimeout != 0 || s.BdMaxConcurrency != 3 || s.BdQueueWait != 10*time.Minute {
+		t.Fatalf("defaults = %+v", s)
+	}
+	cfg, err = Load(Options{File: writeTemp(t, "supervisor:\n  bd_timeout: 180s\n  bd_write_timeout: 5m\n  bd_max_concurrency: 2\n  bd_queue_wait: 20m\n"), Env: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s = cfg.Supervisor
+	if s.BdTimeout != 3*time.Minute || s.BdWriteTimeout != 5*time.Minute || s.BdMaxConcurrency != 2 || s.BdQueueWait != 20*time.Minute {
+		t.Fatalf("overrides = %+v", s)
+	}
+	for _, bad := range []string{"bd_timeout: 0s", "bd_write_timeout: -1s", "bd_max_concurrency: 0", "bd_queue_wait: 0s"} {
+		_, err := Load(Options{File: writeTemp(t, "supervisor:\n  "+bad+"\n"), Env: []string{}})
+		if err == nil || !strings.Contains(err.Error(), strings.SplitN(bad, ":", 2)[0]) {
+			t.Errorf("%s: got %v", bad, err)
+		}
+	}
+}

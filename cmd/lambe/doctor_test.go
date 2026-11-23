@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -396,5 +397,74 @@ func TestDoctorStateAPIPortInUse(t *testing.T) {
 	got := checkStateAPI(context.Background(), f.env, f.cfg)
 	if got.Status != statusWarn || !strings.Contains(got.Detail, "already in use") {
 		t.Errorf("busy port = %+v, want warn naming the port conflict", got)
+	}
+}
+
+func TestCheckBDLatency(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".beads"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Trackers: []config.Tracker{{Name: "hub", Path: dir}}}
+	env := func(listD, metaD time.Duration, err error) doctorEnv {
+		return doctorEnv{
+			lookPath: func(string) (string, error) { return "/bin/bd", nil },
+			timeBD: func(_ context.Context, _, _ string, args ...string) (time.Duration, error) {
+				if slices.Contains(args, "--metadata-field") {
+					return metaD, err
+				}
+				return listD, err
+			},
+		}
+	}
+	tests := []struct {
+		name       string
+		listD      time.Duration
+		metaD      time.Duration
+		err        error
+		wantStatus string
+		wantDetail string
+	}{
+		{"fast hub", time.Second, 2 * time.Second, nil, statusOK, "metadata query 2s"},
+		{"slow metadata scan", time.Second, 13 * time.Second, nil, statusWarn, "over 5s: metadata query"},
+		{"slow everything", 8 * time.Second, 13 * time.Second, nil, statusWarn, "over 5s: list, metadata query"},
+		{"probe failure", 0, 0, errors.New("boom"), statusWarn, "failed: boom"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := checkBDLatency(t.Context(), env(tt.listD, tt.metaD, tt.err), cfg)
+			if len(got) != 1 || got[0].Status != tt.wantStatus || !strings.Contains(got[0].Detail, tt.wantDetail) {
+				t.Fatalf("result = %+v, want %s containing %q", got, tt.wantStatus, tt.wantDetail)
+			}
+			if tt.wantStatus == statusWarn && tt.err == nil && !strings.Contains(got[0].Fix, "server mode") {
+				t.Errorf("fix %q does not recommend server mode", got[0].Fix)
+			}
+		})
+	}
+	if got := checkBDLatency(t.Context(), doctorEnv{lookPath: func(string) (string, error) { return "bd", nil }}, cfg); got != nil {
+		t.Errorf("no probe seam must skip the check, got %+v", got)
+	}
+}
+
+// TestCheckBDLatencySkipsServerMode: a hub already on a Dolt server must not
+// be told to move to one.
+func TestCheckBDLatencySkipsServerMode(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".beads"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".beads", "metadata.json"), []byte(`{"dolt_mode":"server"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Trackers: []config.Tracker{{Name: "hub", Path: dir}}}
+	e := doctorEnv{
+		lookPath: func(string) (string, error) { return "bd", nil },
+		timeBD: func(context.Context, string, string, ...string) (time.Duration, error) {
+			t.Fatal("server-mode hub must not be probed")
+			return 0, nil
+		},
+	}
+	if got := checkBDLatency(t.Context(), e, cfg); got != nil {
+		t.Fatalf("got %+v, want no result", got)
 	}
 }

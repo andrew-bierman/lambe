@@ -1037,7 +1037,7 @@ func (tr gateCloseRaceTracker) Heartbeat(_ context.Context, id string) error {
 
 func (tr gateCloseRaceTracker) Dispatchable(ctx context.Context, q tracker.DispatchQuery) ([]tracker.Issue, error) {
 	rows, err := tr.Tracker.Dispatchable(ctx, q)
-	if tr.omitClosed && len(q.Statuses) == 0 {
+	if tr.omitClosed && len(q.Statuses) == 0 && !q.IncludeClosed {
 		var filtered []tracker.Issue
 		for _, row := range rows {
 			if row.Status != tracker.StatusClosed {

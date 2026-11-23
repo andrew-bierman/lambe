@@ -266,6 +266,57 @@ func TestBDPinnedDuplicateCreateIsNoOp(t *testing.T) {
 	}
 }
 
+// TestBDAttemptFlowCallsAndVisibility runs the cheap attempt flow against a
+// real bd: a new record is created blocked in one create call (no show, no
+// follow-up update), it never reaches the ready front, a fresh tracker
+// instance (a restart) re-puts it idempotently, and the id-addressed read
+// finds it with a single list.
+func TestBDAttemptFlowCallsAndVisibility(t *testing.T) {
+	l := newLocal(t, "lambe@flow")
+	before := CallCounts()
+	if err := l.PutAttempt(t.Context(), Attempt{SessionID: "ses-9", Number: 1}); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	after := CallCounts()
+	if d := after["create"] - before["create"]; d != 1 {
+		t.Errorf("creates for a new record = %d, want 1", d)
+	}
+	if d := after["update"] - before["update"]; d != 0 {
+		t.Errorf("updates for a new record = %d, want 0 (status rides on the create)", d)
+	}
+	if d := after["show"] - before["show"]; d != 0 {
+		t.Errorf("shows = %d, want 0", d)
+	}
+	ready, err := l.Dispatchable(t.Context(), DispatchQuery{Statuses: []string{StatusReady}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, issue := range ready {
+		if issue.Metadata[metaKind] == kindAttempt {
+			t.Fatalf("attempt record %s leaked onto the ready front", issue.ID)
+		}
+	}
+
+	restarted, err := NewLocal(l.bin, l.dir, "lambe@flow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.PutAttempt(t.Context(), Attempt{SessionID: "ses-9", Number: 1, PGID: 4321, ProcessIdentity: "tok"}); err != nil {
+		t.Fatalf("idempotent re-put after restart: %v", err)
+	}
+	before = CallCounts()
+	attempts, err := restarted.Attempts(t.Context(), "ses-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := CallCounts()["list"] - before["list"]; d != 1 {
+		t.Errorf("lists for Attempts = %d, want 1", d)
+	}
+	if len(attempts) != 1 || attempts[0].PGID != 4321 || attempts[0].ProcessIdentity != "tok" {
+		t.Fatalf("attempts = %+v", attempts)
+	}
+}
+
 func TestBDAttemptRecordsRoundTrip(t *testing.T) {
 	l := newLocal(t, "lambe@att")
 	wake := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
@@ -324,13 +375,13 @@ func TestBDEventsConsumeCheckpointAndRebaseline(t *testing.T) {
 
 	// Force truncation below the checkpoint: cut retention to the bone and
 	// prune everything retained so far.
-	if _, err := l.shell.run(t.Context(), []string{"config", "set", "events-journal-retain-rows", "1"}); err != nil {
+	if _, err := l.shell.run(t.Context(), LaneWrite, []string{"config", "set", "events-journal-retain-rows", "1"}); err != nil {
 		t.Fatalf("set retain rows: %v", err)
 	}
-	if _, err := l.shell.run(t.Context(), []string{"config", "set", "events-journal-retain-days", "0"}); err != nil {
+	if _, err := l.shell.run(t.Context(), LaneWrite, []string{"config", "set", "events-journal-retain-days", "0"}); err != nil {
 		t.Fatalf("set retain days: %v", err)
 	}
-	if _, err := l.shell.run(t.Context(), []string{"events", "prune", "--before", fmt.Sprint(sawSeq + 1)}); err != nil {
+	if _, err := l.shell.run(t.Context(), LaneWrite, []string{"events", "prune", "--before", fmt.Sprint(sawSeq + 1)}); err != nil {
 		t.Fatalf("prune: %v", err)
 	}
 
@@ -462,7 +513,7 @@ func TestLocalReadinessIncludesBlocker(t *testing.T) {
 	l := newLocal(t, "lambe@readiness")
 	parent := mkIssue(t, l, "Prepare input")
 	child := mkIssue(t, l, "Process input")
-	if _, err := l.shell.run(t.Context(), []string{"dep", "add", child, parent}); err != nil {
+	if _, err := l.shell.run(t.Context(), LaneWrite, []string{"dep", "add", child, parent}); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := l.Readiness(t.Context(), nil, nil)
