@@ -388,6 +388,13 @@ func lockHeld(path string) (held, exists bool) {
 	return false, true
 }
 
+// runFinished reports whether a live-snapshot run has reached a terminal phase
+// ("stopped: gate green", "stopped: closed externally", ...). The daemon keeps
+// finished runs in its snapshot, so they must not count as active or silent.
+func runFinished(run daemon.LiveRun) bool {
+	return strings.HasPrefix(run.Phase, "stopped")
+}
+
 // checkDaemon is the stall detector: is the supervisor alive, and is any
 // run it owns past the silence timeout without output?
 func checkDaemon(e doctorEnv, cfg *config.Config) []checkResult {
@@ -398,7 +405,7 @@ func checkDaemon(e doctorEnv, cfg *config.Config) []checkResult {
 	orphans := 0
 	if hasSnap && !alive {
 		for _, run := range snap.Runs {
-			if run.WakeAt.IsZero() {
+			if run.WakeAt.IsZero() && !runFinished(run) {
 				orphans++
 			}
 		}
@@ -440,8 +447,8 @@ func checkDaemon(e doctorEnv, cfg *config.Config) []checkResult {
 	var worstIssue string
 	active := 0
 	for _, run := range snap.Runs {
-		if !run.WakeAt.IsZero() {
-			continue // waiting on a scheduled retry, not silent
+		if !run.WakeAt.IsZero() || runFinished(run) {
+			continue // waiting on a scheduled retry, or already finished: not silent
 		}
 		active++
 		last := run.UpdatedAt
