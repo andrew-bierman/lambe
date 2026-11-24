@@ -17,7 +17,7 @@ func (m *Model) refreshDetail(follow bool) {
 		m.detail.SetContent(dimStyle.Render("No active run. Output appears here when a run starts."))
 		return
 	}
-	content := detailBody(run, m.detail.Width, m.pins)
+	content := detailBody(run, m.alive, m.detail.Width, m.pins)
 	if m.showHistory {
 		for _, g := range m.historyGroups() {
 			if g[0].IssueID == run.IssueID && len(g) > 1 {
@@ -40,13 +40,14 @@ func (m *Model) refreshDetail(follow bool) {
 	}
 }
 
-func detailContent(run daemon.LiveRun, width int) string {
-	return detailBody(run, width, 0)
+func detailContent(run daemon.LiveRun, live bool, width int) string {
+	return detailBody(run, live, width, 0)
 }
 
 // detailBody formats a run for the preview. The pane pins the title (pins >= 1)
 // and an attempt/turn/workflow line (pins >= 2), so the body leaves those out.
-func detailBody(run daemon.LiveRun, width, pins int) string {
+// live says whether the daemon is running; a stopped daemon's active phases are drawn dim and parenthesised, as in the list.
+func detailBody(run daemon.LiveRun, live bool, width, pins int) string {
 	if width < 1 {
 		width = 80
 	}
@@ -82,7 +83,7 @@ func detailBody(run daemon.LiveRun, width, pins int) string {
 	if pins < 2 {
 		left = []string{
 			row("Issue:", oneLine(run.IssueID)),
-			row("Phase:", phaseLabel(run.Phase)),
+			row("Phase:", phaseLabelFor(run.Phase, live)),
 			row("Attempt:", fmt.Sprintf("%d", run.Attempt)),
 			row("Turn:", fmt.Sprintf("%d", run.Turn)),
 		}

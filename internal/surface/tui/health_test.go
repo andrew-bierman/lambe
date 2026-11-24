@@ -11,8 +11,10 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrew-bierman/lambe/internal/daemon"
+	"github.com/andrew-bierman/lambe/internal/symphony"
 )
 
 // healthCase builds one connection state on top of the demo snapshot.
@@ -294,5 +296,30 @@ func TestGoldenHealthDark(t *testing.T) {
 	views := healthViews(t, now)
 	for _, name := range slices.Sorted(maps.Keys(views)) {
 		t.Run(name, func(t *testing.T) { checkGolden(t, "dark-"+name, annotate(parseCells(views[name]))) })
+	}
+}
+
+// TestDetailPhaseOfStoppedDaemonIsDimmed: the Phase row follows the list rows,
+// so a stopped daemon's "running" reads "(running)" with the dim glyph.
+func TestDetailPhaseOfStoppedDaemonIsDimmed(t *testing.T) {
+	run := daemon.LiveRun{Progress: symphony.Progress{IssueID: "ac-1", Phase: "running"}}
+	phaseRow := func(live bool) string {
+		for _, line := range strings.Split(ansi.Strip(detailContent(run, live, 80)), "\n") {
+			if strings.HasPrefix(line, "Phase:") {
+				return line
+			}
+		}
+		t.Fatal("no Phase row")
+		return ""
+	}
+	if got := phaseRow(true); !strings.Contains(got, "▶ running") {
+		t.Errorf("live row = %q", got)
+	}
+	if got := phaseRow(false); !strings.Contains(got, "◌ (running)") || strings.Contains(got, "▶") {
+		t.Errorf("stopped row = %q", got)
+	}
+	run.Phase = "stopped: gate green" // finished work is not active: it stays as is
+	if got := phaseRow(false); !strings.Contains(got, "stopped: gate green") {
+		t.Errorf("finished row = %q", got)
 	}
 }

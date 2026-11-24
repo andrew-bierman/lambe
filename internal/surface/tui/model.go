@@ -93,6 +93,7 @@ type Model struct {
 	showActivity   bool
 	showHelp       bool
 	yank           bool // y was pressed; the next key picks what to copy
+	yankSeq        int  // identifies the y press a pending timeout belongs to
 	acts           actions
 	helpVP         viewport.Model
 	readiness      func() ([]tracker.ReadinessRow, error)
@@ -368,6 +369,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.showToast(msg.status, false, false)
 		}
 		return m, nil
+	case yankExpiredMsg:
+		if m.yank && msg.seq == m.yankSeq {
+			m.yank = false
+			return m, m.showToast("Copy cancelled: no key within 3 s", false, false)
+		}
+		return m, nil
 	case toastExpiredMsg:
 		if msg.seq == m.toast.seq {
 			m.toast = toast{}
@@ -414,7 +421,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Copy):
 		m.yank = true
-		return m, m.showToast("copy: y id · w workspace · o output · esc cancel", false, true)
+		m.yankSeq++
+		seq := m.yankSeq
+		m.showToast("copy: y id · w workspace · o output · esc cancel", false, true)
+		return m, tea.Tick(yankTimeout, func(time.Time) tea.Msg { return yankExpiredMsg{seq} })
 	case key.Matches(msg, m.keys.Open):
 		return m, m.openWorkspace(false)
 	case key.Matches(msg, m.keys.OpenEditor):
@@ -439,7 +449,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case key.Matches(msg, m.keys.Commands):
 		return m, m.openPalette()
-	case msg.String() == "r":
+	case key.Matches(msg, m.keys.Refresh):
 		return m, m.readNow(true)
 	case msg.String() == "1":
 		m.setQueueView(false, false)

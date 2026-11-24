@@ -20,6 +20,12 @@ import (
 // base64 exceeds roughly 75 KB, so a long output is copied from its tail.
 const maxCopyBytes = 48 * 1024
 
+// yankTimeout is how long the key after y is awaited before the prefix lapses.
+const yankTimeout = 3 * time.Second
+
+// yankExpiredMsg ends the pending y prefix with the same seq; older ones are ignored.
+type yankExpiredMsg struct{ seq int }
+
 // actions is everything the copy and open keys do outside the TUI. Tests
 // inject a fake so no clipboard write, process or editor is ever started.
 type actions interface {
@@ -33,15 +39,32 @@ type actions interface {
 
 // systemActions is the real implementation, used only after a key press.
 type systemActions struct {
-	out io.Writer // terminal for OSC 52; os.Stdout in production
+	out    io.Writer           // terminal for OSC 52; os.Stdout in production
+	getenv func(string) string // environment lookup; os.Getenv in production
 }
 
 func (a systemActions) Copy(text string) error {
 	if len(text) > maxCopyBytes {
 		text = text[len(text)-maxCopyBytes:]
 	}
-	_, err := io.WriteString(a.out, "\x1b]52;c;"+base64.StdEncoding.EncodeToString([]byte(text))+"\a")
+	_, err := io.WriteString(a.out, a.osc52(text))
 	return err
+}
+
+// osc52 is the clipboard-write sequence for text. Inside tmux ($TMUX set) it
+// is wrapped in tmux's DCS passthrough, with every ESC doubled, so tmux
+// forwards it to the outer terminal; that needs `set -g allow-passthrough on`
+// (tmux 3.3+). shortcut: GNU screen's passthrough is not wrapped.
+func (a systemActions) osc52(text string) string {
+	seq := "\x1b]52;c;" + base64.StdEncoding.EncodeToString([]byte(text)) + "\a"
+	getenv := a.getenv
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	if getenv("TMUX") == "" {
+		return seq
+	}
+	return "\x1bPtmux;" + strings.ReplaceAll(seq, "\x1b", "\x1b\x1b") + "\x1b\\"
 }
 
 func (systemActions) Open(dir string) error {

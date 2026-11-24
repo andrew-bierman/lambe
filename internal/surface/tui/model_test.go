@@ -371,7 +371,7 @@ func TestNarrowDetailWrapsUnicodeOutput(t *testing.T) {
 		Tail:     strings.Repeat("長", 24) + "-end",
 	}
 	const width = 20
-	content := detailContent(run, width)
+	content := detailContent(run, true, width)
 	if got := lipgloss.Width(content); got > width {
 		t.Fatalf("content width = %d, want <= %d:\n%s", got, width, content)
 	}
@@ -395,7 +395,7 @@ func TestDetailContent(t *testing.T) {
 		},
 		Tail: "agent output\nmore output",
 	}
-	content := detailContent(run, 80)
+	content := detailContent(run, true, 80)
 	for _, want := range []string{"ac-1", "test issue", "running", "2", "3", "thread-1", "/tmp/ws", "agent output"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("detail content missing %q:\n%s", want, content)

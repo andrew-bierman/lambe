@@ -53,7 +53,7 @@ func (k keyMap) helpGroups(v helpView) []helpGroup {
 	groups = append(groups,
 		helpGroup{"Views", rows(k.Views, k.Attention, k.History)},
 		helpGroup{"Actions", rows(k.Copy, k.Open, k.OpenEditor)},
-		helpGroup{"General", rows(k.Commands, k.Help, k.Close, k.Quit)})
+		helpGroup{"General", rows(k.Refresh, k.Commands, k.Help, k.Close, k.Quit)})
 	return groups
 }
 
