@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`lambe init` no longer writes outside the directory you ran it in.** It used to adopt any `.beads` found in a parent directory, including a global `~/.beads`, and write `WORKFLOW.md` and a starter formula there. It now ignores stub `.beads` directories, uses a real ancestor tracker only with `--tracker PATH` (or an interactive confirmation that names the path; never for `$HOME`), and `--non-interactive` refuses with a clear message.
+- Unknown keys in the config file are now an error with a "did you mean" suggestion, and a value of the wrong type names the bad input (`supervisor.attempt_cap: expected an integer, got "banana"`) instead of silently reading 0.
 - `lambe status -json` (and the state API) emit `[]`, never `null`, for empty `runs`, `needs_human` and `gate_rejections`.
 
 ## [0.11.1] - 2026-11-22

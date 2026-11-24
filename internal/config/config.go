@@ -191,6 +191,13 @@ func Load(opts Options) (*Config, error) {
 	}
 
 	if opts.File != "" {
+		fileOnly := koanf.New(".")
+		if err := fileOnly.Load(file.Provider(opts.File), yaml.Parser()); err != nil {
+			return nil, fmt.Errorf("config file: %w", err)
+		}
+		if errs := checkFileKeys(opts.File, fileOnly); len(errs) > 0 {
+			return nil, &errorCollection{errs: errs}
+		}
 		if err := k.Load(file.Provider(opts.File), yaml.Parser()); err != nil {
 			return nil, fmt.Errorf("config file: %w", err)
 		}
@@ -208,6 +215,10 @@ func Load(opts Options) (*Config, error) {
 		if err := k.Load(flagProvider(opts.Flags), nil); err != nil {
 			return nil, err
 		}
+	}
+
+	if errs := checkValueTypes(k); len(errs) > 0 {
+		return nil, &errorCollection{errs: errs}
 	}
 
 	harness := k.String("harness")
