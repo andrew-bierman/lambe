@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Docs: removed the stale duplicated "Reference" half of `docs/OPERATIONS.md`, the configuration tables that named keys that do not exist (`tick`, `sync_interval` / `LAMBE_SYNC_INTERVAL`), and the broken `#os-level-restart-production` anchor. The README mascot image is 124 KB instead of 795 KB.
+- ACP: after the agent exits, the supervisor closes the stdout read end as soon as the read loop has drained the pipe instead of always waiting the full 3 s `WaitDelay`; a descendant that still holds the write end keeps the bounded delay.
 
 - **`lambe init` no longer writes outside the directory you ran it in.** It used to adopt any `.beads` found in a parent directory, including a global `~/.beads`, and write `WORKFLOW.md` and a starter formula there. It now ignores stub `.beads` directories, uses a real ancestor tracker only with `--tracker PATH` (or an interactive confirmation that names the path; never for `$HOME`), and `--non-interactive` refuses with a clear message.
 - Unknown keys in the config file are now an error with a "did you mean" suggestion, and a value of the wrong type names the bad input (`supervisor.attempt_cap: expected an integer, got "banana"`) instead of silently reading 0.

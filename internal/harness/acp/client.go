@@ -74,10 +74,35 @@ type agentProc struct {
 	stdin   *os.File // write end; closed to request orderly shutdown
 	stdout  *os.File // read end; closed only after the process is reaped
 
-	waitDone  chan struct{}
-	waitErr   error
-	closeOnce sync.Once
-	stdinOnce sync.Once
+	// reader is stdout wrapped so waitOwner can see the read loop reach EOF
+	// instead of always sleeping a full WaitDelay.
+	reader     *eofReader
+	waitDone   chan struct{}
+	waitErr    error
+	pipeClosed chan struct{}
+	closeOnce  sync.Once
+	stdinOnce  sync.Once
+}
+
+// eofReader reports when the stream ends, so the owner can close the read end
+// as soon as the pipe is drained. A descendant still holding the write end
+// keeps it open, and waitOwner falls back to a bounded timeout.
+type eofReader struct {
+	r    io.Reader
+	done chan struct{}
+	once sync.Once
+}
+
+func newEOFReader(r io.Reader) *eofReader {
+	return &eofReader{r: r, done: make(chan struct{})}
+}
+
+func (e *eofReader) Read(p []byte) (int, error) {
+	n, err := e.r.Read(p)
+	if err != nil {
+		e.once.Do(func() { close(e.done) })
+	}
+	return n, err
 }
 
 // spawnAgent launches the described process in a new process group (Setpgid)
@@ -129,12 +154,14 @@ func spawnAgent(opts clientOptions) (*agentProc, error) {
 	_ = stdoutWrite.Close()
 
 	p := &agentProc{
-		pgid:     pgid,
-		session:  opts.Session,
-		cmd:      cmd,
-		stdin:    stdinWrite,
-		stdout:   stdoutRead,
-		waitDone: make(chan struct{}),
+		pgid:       pgid,
+		session:    opts.Session,
+		cmd:        cmd,
+		stdin:      stdinWrite,
+		stdout:     stdoutRead,
+		reader:     newEOFReader(stdoutRead),
+		waitDone:   make(chan struct{}),
+		pipeClosed: make(chan struct{}),
 	}
 	logger.Info("acp agent spawned", "pgid", pgid, "session", opts.Session, "pid", cmd.Process.Pid)
 	go p.waitOwner()
@@ -152,10 +179,20 @@ func (p *agentProc) waitOwner() {
 	}
 	p.waitErr = waitErr
 	close(p.waitDone)
+	// The SDK read loop needs to drain what the child wrote, but a child with
+	// descendants can leave the write end open after it exits. Close the read
+	// end when the loop has seen EOF, and fall back to the bounded delay only
+	// when it has not.
 	timer := time.NewTimer(proc.DefaultWaitDelay)
 	defer timer.Stop()
-	<-timer.C
-	p.closeOnce.Do(func() { _ = p.stdout.Close() })
+	select {
+	case <-p.reader.done:
+	case <-timer.C:
+	}
+	p.closeOnce.Do(func() {
+		_ = p.stdout.Close()
+		close(p.pipeClosed)
+	})
 }
 
 // Pgid returns the process-group id.
@@ -163,6 +200,9 @@ func (p *agentProc) Pgid() int { return p.pgid }
 
 // WaitDone returns a channel closed when the process is reaped.
 func (p *agentProc) WaitDone() <-chan struct{} { return p.waitDone }
+
+// PipeClosed returns a channel closed once the stdout read end is closed.
+func (p *agentProc) PipeClosed() <-chan struct{} { return p.pipeClosed }
 
 // WaitErr returns the wait error once WaitDone has closed.
 func (p *agentProc) WaitErr() error {
@@ -298,9 +338,9 @@ func startClient(opts clientOptions, sink inbound) (*client, error) {
 	var conn *acpsdk.ClientSideConnection
 	if opts.OnActivity != nil {
 		hook := opts.OnActivity
-		conn = acpsdk.NewClientSideConnection(cbs, p.stdin, &activityReader{r: p.stdout, onActivity: hook})
+		conn = acpsdk.NewClientSideConnection(cbs, p.stdin, &activityReader{r: p.reader, onActivity: hook})
 	} else {
-		conn = acpsdk.NewClientSideConnection(cbs, p.stdin, p.stdout)
+		conn = acpsdk.NewClientSideConnection(cbs, p.stdin, p.reader)
 	}
 	if opts.Logger != nil {
 		conn.SetLogger(opts.Logger)
