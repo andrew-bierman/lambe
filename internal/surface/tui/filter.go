@@ -31,11 +31,11 @@ var filterFields = map[string]int{"id": fID, "title": fTitle, "phase": fPhase, "
 
 // FilterValue is the searchable text of the row: the same words the table shows.
 func (i runItem) FilterValue() string {
-	stalled := stalledFor(i.run, i.live, clock()) > 0
+	_, _, phase := presentPhase(i.run.Phase, i.live, stalledFor(i.run, i.live, clock()) > 0)
 	parts := [fieldCount]string{
 		fID:       i.run.IssueID,
 		fTitle:    strings.Join(strings.Fields(cleanTaskText(i.run.Title)), " "),
-		fPhase:    phaseWord(i.run.Phase, stalled),
+		fPhase:    phase,
 		fWorkflow: i.run.Workflow,
 	}
 	for k, p := range parts {

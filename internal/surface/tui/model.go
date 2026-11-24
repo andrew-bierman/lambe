@@ -46,9 +46,8 @@ type runItem struct {
 	attempts int
 }
 
-// stallAfter is how long an active run may stay silent before it is flagged.
-// shortcut: the snapshot only carries LastOutputAt, so a chatty-but-stuck run
-// is not detected; upgrade when the daemon exports a last-progress time.
+// stallAfter is how long an active run may stay silent (no output and no agent
+// event of any kind) before it is flagged.
 const stallAfter = 2 * time.Minute
 
 // shortAge renders a whole-minute duration as "4m" or "1h5m".
@@ -63,10 +62,14 @@ func stalledFor(run daemon.LiveRun, live bool, now time.Time) time.Duration {
 	default:
 		return 0
 	}
-	if !live || run.LastOutputAt.IsZero() {
+	last := run.LastOutputAt
+	if run.LastActivityAt.After(last) {
+		last = run.LastActivityAt
+	}
+	if !live || last.IsZero() {
 		return 0
 	}
-	if age := now.Sub(run.LastOutputAt); age >= stallAfter {
+	if age := now.Sub(last); age >= stallAfter {
 		return age.Round(time.Minute)
 	}
 	return 0
@@ -102,6 +105,8 @@ type Model struct {
 	snapshot        daemon.LiveSnapshot
 	alive           bool
 	err             error
+	missing         bool // the snapshot file does not exist
+	bannerH         int
 	width           int
 	height          int
 	focus           focusArea
@@ -200,14 +205,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case snapshotMsg:
 		m.loading = false
 		if msg.err != nil {
-			// Keep the last good snapshot on transient errors (for example a
-			// daemon restart rewriting the file) instead of flashing empty.
-			if !errors.Is(msg.err, os.ErrNotExist) || m.snapshot.UpdatedAt.IsZero() {
+			// Keep the last good snapshot on errors (for example a daemon
+			// restart rewriting the file) instead of flashing empty; the
+			// health banner says the data is not current.
+			m.missing = errors.Is(msg.err, os.ErrNotExist)
+			m.err = nil
+			if !m.missing {
 				m.err = msg.err
 			}
+			m.syncHealth()
 			return m, nil
 		}
-		m.err = nil
+		m.err, m.missing = nil, false
 		runs, history := m.snapshot.Runs, m.snapshot.History
 		runsChanged := !slices.Equal(runs, msg.snapshot.Runs)
 		historyChanged := !slices.Equal(history, msg.snapshot.History)
@@ -225,6 +234,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setRuns(m.visibleRuns())
 			m.refreshDetail(!m.showHistory && !m.showAttention && m.detail.AtBottom())
 		}
+		m.syncHealth()
 		return m, nil
 
 	case agentSessionMsg:
@@ -273,6 +283,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
+		m.syncHealth()
 		return m, tea.Batch(readSnapshot(m.path), tick())
 
 	case spinner.TickMsg:
@@ -365,6 +376,11 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case key.Matches(msg, m.keys.Commands):
 		return m, m.openPalette()
+	case msg.String() == "r":
+		if m.path == "" {
+			return m, nil
+		}
+		return m, readSnapshot(m.path)
 	case msg.String() == "1":
 		m.setQueueView(false, false)
 		return m, nil
@@ -505,10 +521,14 @@ func (m *Model) View() string {
 	if m.height == 2 {
 		return lipgloss.JoinVertical(lipgloss.Left, header, footer)
 	}
-	if m.tabsH == 0 {
-		return lipgloss.JoinVertical(lipgloss.Left, header, m.renderBody(), footer)
+	parts := []string{header}
+	if m.bannerH > 0 {
+		parts = append(parts, m.renderBanner())
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, header, m.renderTabs(), m.renderBody(), footer)
+	if m.tabsH > 0 {
+		parts = append(parts, m.renderTabs())
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, append(parts, m.renderBody(), footer)...)
 }
 
 // detailContent formats one run for the detail viewport.

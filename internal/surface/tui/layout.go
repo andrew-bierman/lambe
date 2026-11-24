@@ -26,6 +26,10 @@ func (m *Model) layout() {
 		return
 	}
 	footerH := lipgloss.Height(m.renderFooter())
+	m.bannerH = 0
+	if m.bannerWanted() {
+		m.bannerH = 1
+	}
 	m.tabsH = 0
 	switch {
 	case m.height >= 16:
@@ -33,7 +37,7 @@ func (m *Model) layout() {
 	case m.height >= 7:
 		m.tabsH = 1
 	}
-	bodyH := max(1, m.height-1-m.tabsH-footerH)
+	bodyH := max(1, m.height-1-m.bannerH-m.tabsH-footerH)
 	m.bodyH = bodyH
 	m.colHeader = bodyH >= 4
 	hdr := 0
@@ -142,20 +146,17 @@ func (m *Model) previewBar(width int) string {
 	if run, ok := m.selectedRun(); ok {
 		now := clock()
 		stalled := stalledFor(run, m.alive, now)
-		icon, phaseStyle := phasePresentation(run.Phase)
-		if stalled > 0 {
-			icon, phaseStyle = "⚠", redStyle.Bold(true)
-		}
+		icon, phaseStyle, word := presentPhase(run.Phase, m.alive, stalled > 0)
 		bg := lipgloss.NewStyle().Background(colBarBg)
 		label = " " + style.Render(run.IssueID) + bg.Render("  ") +
-			phaseStyle.Background(colBarBg).Render(icon+" "+phaseWord(run.Phase, stalled > 0))
+			phaseStyle.Background(colBarBg).Render(icon+" "+word)
 		timing := ""
 		switch {
 		case !run.WakeAt.IsZero():
 			timing = "retry in " + ageText(run.WakeAt.Sub(now))
 		case stalled > 0:
 			timing = "silent " + shortAge(stalled)
-		case !run.LastOutputAt.IsZero() && run.Phase == "running":
+		case m.alive && !run.LastOutputAt.IsZero() && run.Phase == "running":
 			timing = "output " + ageText(now.Sub(run.LastOutputAt)) + " ago"
 		}
 		if timing != "" && lipgloss.Width(label)+lipgloss.Width(timing)+4 <= width {
@@ -175,7 +176,7 @@ func (m *Model) paneAt(x, y int) (pane focusArea, ok bool) {
 	if m.previewHeader {
 		pre = 1
 	}
-	top := 1 + m.tabsH
+	top := 1 + m.bannerH + m.tabsH
 	inList := func(w int) bool { return x >= 0 && x < w && y >= top+hdr && y < top+hdr+m.list.Height() }
 	switch {
 	case m.split:

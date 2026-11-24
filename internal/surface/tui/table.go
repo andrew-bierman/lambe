@@ -80,7 +80,7 @@ func ageText(d time.Duration) string {
 func (i runItem) rowAge(now time.Time) string {
 	run := i.run
 	switch {
-	case !run.WakeAt.IsZero():
+	case !run.WakeAt.IsZero() && i.live: // a dead daemon will not wake it
 		return "in " + ageText(run.WakeAt.Sub(now))
 	case run.Phase == "ready" || run.Phase == "blocked":
 		return ""
@@ -165,10 +165,7 @@ func (m *Model) renderRow(item runItem, c tableCols, selected bool, now time.Tim
 		return s
 	}
 	stalled := stalledFor(item.run, item.live, now) > 0
-	icon, phaseStyle := phasePresentation(item.run.Phase)
-	if stalled {
-		icon, phaseStyle = "⚠", redStyle.Bold(true)
-	}
+	icon, phaseStyle, word := presentPhase(item.run.Phase, item.live, stalled)
 	marker := " "
 	if selected {
 		marker = lipgloss.NewStyle().Foreground(accentColor).Background(colSelBg).Render("▌")
@@ -195,7 +192,7 @@ func (m *Model) renderRow(item runItem, c tableCols, selected bool, now time.Tim
 	}
 	if c.showPhase {
 		parts = append(parts, st(lipgloss.NewStyle()).Render(" "),
-			m.cell(phaseWord(item.run.Phase, stalled), phaseColWidth, false, st(phaseStyle.Bold(false)), fPhase))
+			m.cell(word, phaseColWidth, false, st(phaseStyle.Bold(false)), fPhase))
 	}
 	parts = append(parts, st(lipgloss.NewStyle()).Render(" "), st(ageStyle).Render(pad(age, ageColWidth, true)))
 	row := strings.Join(parts, "")

@@ -80,11 +80,8 @@ func (m *Model) renderHeader() string {
 	badge := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).
 		Background(lipgloss.AdaptiveColor{Light: "#6236A1", Dark: "#654399"}).Padding(0, 1).Render("lambe")
 
-	state, stateStyle := "stopped", redStyle.Bold(true)
-	if m.alive {
-		state, stateStyle = "running", runningStyle
-	}
-	health := on(stateStyle).Render("● " + state)
+	h := m.health(clock())
+	health := on(h.style()).Render(h.label(m.width < 36))
 
 	active, waiting, stalled := 0, 0, 0
 	if m.alive {
@@ -107,7 +104,6 @@ func (m *Model) renderHeader() string {
 		counts = append([]fitSegment{{on(redStyle.Bold(true)).Render(fmt.Sprintf("⚠ %d stalled", stalled)), 0}}, counts...)
 	}
 	if m.width < 60 { // glyph counts, warning first so truncation never hides it
-		health = on(stateStyle).Render("●")
 		counts = []fitSegment{{on(runningStyle).Render(fmt.Sprintf("%d▶", active)) + on(lipgloss.NewStyle()).Render(" ") +
 			on(retryStyle).Render(fmt.Sprintf("%d↻", waiting)), 1}}
 		if stalled > 0 {
@@ -135,9 +131,6 @@ func (m *Model) renderHeader() string {
 			segs = append(segs, fitSegment{on(dimStyle).Render("demo"), 4})
 		}
 		segs = append(segs, counts...)
-		if m.err != nil {
-			segs = append(segs, fitSegment{on(errorStyle).Render("read error: " + truncate(m.err.Error(), 40)), 3})
-		}
 		if m.readinessErr != nil && !m.showHistory {
 			segs = append(segs, fitSegment{on(retryStyle).Render("Beads unavailable"), 6})
 		}
