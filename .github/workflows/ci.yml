@@ -6,9 +6,11 @@ on:
     tags: ["v*"]
   pull_request:
 
-# One run per PR; a new push cancels the stale run. Branch and tag runs are never cancelled.
+# One run per PR; a new push cancels the stale PR run. Pushes (master, tags) use a
+# per-SHA group and are never cancelled: a shared group would let GitHub drop the
+# older pending run when several PRs land minutes apart.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -18,7 +20,7 @@ jobs:
   # Docs-only PRs skip the Go work. The jobs below still run (and report success)
   # so the required status names `check` and `test` stay stable.
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -46,7 +48,7 @@ jobs:
 
   check:
     needs: changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       RUN_GO: ${{ needs.changes.outputs.go }}
@@ -61,7 +63,14 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         if: env.RUN_GO == 'true'
         with:
-          go-version: "1.27.x"
+          go-version: "1.27.4" # keep equal to mise.toml; go.mod `go` is the lowest supported
+      - name: Go pin matches mise.toml
+        if: env.RUN_GO == 'true'
+        run: |
+          want=$(sed -n 's/^go = "\(.*\)"/\1/p' mise.toml)
+          for f in .github/workflows/*.yml; do
+            grep -nE '^ +go-version:' "$f" | grep -v "\"$want\"" && { echo "::error::$f: go-version differs from mise.toml ($want)"; exit 1; } || true
+          done
       - name: go vet
         if: env.RUN_GO == 'true'
         run: go vet ./...
@@ -86,7 +95,7 @@ jobs:
 
   test:
     needs: changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       RUN_GO: ${{ needs.changes.outputs.go }}
@@ -98,41 +107,32 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         if: env.RUN_GO == 'true'
         with:
-          go-version: "1.27.x"
+          go-version: "1.27.4" # keep equal to mise.toml; go.mod `go` is the lowest supported
       - name: Install bd
         if: env.RUN_GO == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          # Prefer a stable 1.4.x release; fall back to the latest 1.3.x.
-          version=$(gh release list --repo gastownhall/beads --limit 20 --json tagName \
-            --jq '[.[] | select(.tagName | test("^v1\\.4\\.[0-9]+$"))][0].tagName // empty')
-          if [ -z "$version" ]; then
-            version=$(gh release list --repo gastownhall/beads --limit 20 --json tagName \
-              --jq '[.[] | select(.tagName | test("^v1\\.3\\.[0-9]+$"))][0].tagName // empty')
-          fi
-          if [ -z "$version" ]; then
-            echo "no bd 1.3.x/1.4.x release found" >&2
-            exit 1
-          fi
-          echo "installing bd $version"
-          ver=${version#v}
-          gh release download "$version" --repo gastownhall/beads \
-            --pattern "beads_${ver}_linux_amd64.tar.gz" --output - | tar -xz -C /tmp
+          # Pinned release + checksum (published in the release's checksums.txt); bump together.
+          ver=1.3.4
+          sha=175c26904bde3ff9168d2282ff6b56f17b17f60c22fa5acb3dacc9fb3465303a
+          tarball="beads_${ver}_linux_amd64.tar.gz"
+          gh release download "v${ver}" --repo gastownhall/beads --pattern "$tarball" --dir "$RUNNER_TEMP"
+          echo "${sha}  ${RUNNER_TEMP}/${tarball}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${tarball}" -C "$RUNNER_TEMP" bd
           mkdir -p "$HOME/.local/bin"
-          mv /tmp/bd "$HOME/.local/bin/bd"
-          chmod +x "$HOME/.local/bin/bd"
+          mv "${RUNNER_TEMP}/bd" "$HOME/.local/bin/bd"
           "$HOME/.local/bin/bd" --version
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Test (with bd integration)
         if: env.RUN_GO == 'true'
         env:
           LAMBE_TEST_BD: "1"
-        run: go test -race ./...
+        run: go test -race -timeout 15m ./...
 
   rex-lua:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -145,7 +145,7 @@ jobs:
 
   build:
     needs: changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       RUN_GO: ${{ needs.changes.outputs.go }}
@@ -168,7 +168,7 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         if: env.RUN_GO == 'true'
         with:
-          go-version: "1.27.x"
+          go-version: "1.27.4" # keep equal to mise.toml; go.mod `go` is the lowest supported
       - name: Build
         if: env.RUN_GO == 'true'
         env:
