@@ -61,6 +61,15 @@ Body {{ attempt }}.
 			},
 		},
 		{
+			name: "hook_timeout_ms that would overflow is rejected",
+			content: `---
+hook_timeout_ms: 9223372036854775807
+---
+body
+`,
+			wantErr: "hook_timeout_ms is too large",
+		},
+		{
 			name: "env substitution with default",
 			content: `---
 hooks:
