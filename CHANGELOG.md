@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `lambe enqueue --json` prints one object (`schema_version`, `issue`, `workflow`, `applied`, `would_add_label`) instead of prose; exit codes are unchanged.
+- Docs: the glossary now links each term to the code or documentation it is grounded in, and defines Beads, Gate, Claim, Lease, Attempt, and Needs-human in more depth (thanks @avaldivieso-meraki, issue #82).
 
 ### Fixed
 
