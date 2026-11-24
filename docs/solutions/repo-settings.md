@@ -108,11 +108,17 @@ What it does:
   Go steps are skipped), so the names always report.
 - "Require branches to be up to date" is off (`strict_required_status_checks_policy: false`)
   so merging one PR does not force a rebase of every other open PR.
-- Repository admins (role id 5) are bypass actors with mode `always`, so the
-  owner and merge agents can still merge or push in an emergency. This also
-  means admins are not blocked by the status checks: green CI is a
-  discipline for admins, a gate for everyone else. To enforce on admins, remove
-  `bypass_actors`.
+- **Admin bypass removed (2026-11-23).** The ruleset originally listed repository
+  admins (role id 5) as bypass actors with mode `always`. Because every merge
+  agent uses the owner's admin token, that meant `check` and `test` were not
+  enforced against them, and an audit found two PRs (#45, #55) merged without
+  every check on their head commit green. `bypass_actors` is now empty, so the
+  required checks and the squash-only rule apply to everyone, including admins.
+  Consequence: if CI is down or broken, nothing merges until it is fixed or the
+  rule is relaxed. To relax it temporarily, add the bypass actor back:
+  `gh api -X PUT repos/andrew-bierman/lambe/rulesets/27963635 --input ruleset.json`
+  with `"bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "pull_request"}]`
+  (`pull_request` mode limits the bypass to merging through a PR, not direct pushes).
 
 ## Could not change
 
