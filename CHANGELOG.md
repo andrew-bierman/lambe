@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-24
+
 ### Added
 
 - Docs: the Rex README now has a compatibility matrix by Rex preview and API revision, an error table, troubleshooting driven by `lambe_check` output, and the OSC status mapping; `docs/solutions/rex-mutations.md` proposes mutating palette actions for the owner to decide (issue #59).
@@ -17,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lambe setup rex` now adds a managed, marker-delimited block to Rex's `init.lua` (opt out with `--no-init`), validates the new file with `rex config check --json` before replacing `init.lua` and leaves it untouched if Rex rejects it, can bind suggested keys under a `cmd+shift+l` prefix with `--keys` (skipping keys already bound per `rex keymap --json`), prints a machine-readable plan or result with `--json`, and `--uninstall` removes the block.
 - Docs: a generated configuration reference (`docs/reference/config.md`, checked by a Go test so it cannot drift from the code), a real contributor `docs/ARCHITECTURE.md` (the planning-era document moved to `docs/research/`), `docs/TROUBLESHOOTING.md`, `docs/GLOSSARY.md`, `docs/UPGRADING.md`, and a documentation index in the README.
 - `lambe completion bash|zsh|fish` prints shell completions generated from the help text. The Homebrew formula installs them, the deb/rpm/apk packages ship them under the standard vendor completion directories, and the release archives include a `completions/` directory.
+- Rex: run output can open as a split beside the pane you ran the action from (`placement=split` or `placement = "split"` in `lambe.config.lua`), an already-open run tab is found in any session on the server instead of being duplicated, and run tabs stay open after the run finishes so its output stays readable.
+- Rex: **Lambe: Needs You…** lists only the runs waiting on a human. **Open Run…** now sorts needs-you runs first (`▲`), shows plain-language phases, hides `attempt 0 · turn 0`, counts workflow runs per distinct issue, and explains empty lists (stopped daemon, no runs, unknown workflow).
+- A luajit test suite for the Rex integration (`luajit contrib/rex/test/run.lua`, CI job `rex-lua`) with a strict `rex` stub, version profiles for Rex preview.16, .19, and .21, and golden picker rows. `lambe_check` now returns a machine-readable report (plugin version, Rex API revision, picker availability, binary, doctor output) and fails when `lambe doctor` fails.
 
 ### Changed
 
@@ -27,9 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lambe logs --json --brief` prints the live snapshot without each run's agent output (about 10x smaller on a 2,500-run snapshot), adding per-run `AgeSec`, an `Attention {Reason, AgeSec}` field for runs that need a human, and `LambeVersion`. The dashboard's Attention view and this field share one rule, `daemon.NeedsAttention`. The Rex "Needs You" picker already reads `Attention`. The full `--json` output is unchanged.
 - TUI: transient messages (`Queued demo-55`, errors) now appear as a toast in the footer for about four seconds instead of replacing the header's health, counts and stall warning. `lambe tui -demo` no longer ages into an all-stalled screen, and a task queued in the demo gets an unused id instead of colliding with `demo-55`.
 - The Homebrew package is now a cask (`Casks/lambe.rb`, still macOS and Linux) instead of a formula, because goreleaser deprecated formula publishing. If you installed the formula, run `brew uninstall lambe && brew install --cask andrew-bierman/tap/lambe` once.
-
 - Releases now sign every artifact (archives, deb/rpm/apk packages, SBOMs and `checksums.txt`) with cosign, one `<file>.sigstore.json` bundle each, instead of only `checksums.txt`; verification steps are in the README and docs/RELEASING.md. Release binaries and packages are also reproducible from the commit.
-
 - TUI: `?` opens a scrollable help overlay per view (Queue, Attention, History, run details) generated from the same key table that drives the footer hints, so the two cannot drift. The `:` palette now fuzzy-matches command labels and descriptions and shows each command's key hint. `q` in run details returns to the list before quitting, and `Esc` closes every overlay.
 - Rex palette actions now raise failures with the reason (lambe not found, no runs yet, a picker that could not show) instead of only logging them, and say once that the pickers need Rex preview.21 (API revision 17) instead of silently opening the dashboard on older servers. `lambe setup rex` now installs a small managed `lambe.lua` shim plus a `lambe/` module directory, and creates `lambe.config.lua` (with the absolute `lambe` path) for your settings so editing them no longer makes updates refuse. Re-run `lambe setup rex --apply` to migrate an older single-file install (an unedited one updates cleanly; if you edited its `override` variables, move them into `lambe.config.lua` and pass `--force`).
 - `lambe status` now prints `orphaned claims: unavailable (reason)` when the orphan scan fails, instead of silently omitting the section.
@@ -37,26 +40,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lambe tui` polls cheaply: it stats the snapshot first and skips the read and decode when the file is unchanged, and never overlaps reads. On a 2,500-run snapshot the idle poll drops from 5.1 ms (0.8 MB file) / 13.5 ms (7.5 MB) to 24 µs, about 2.0% / 5.4% of a core at 4 Hz down to 0.01%.
 - `lambe doctor --label NAME` replaces `-service-label` (still accepted, prints a deprecation note). `LAMBE_CONFIG` sets the default `--config`.
 
+### Removed
+
+- `contrib/rex/check.lua`, replaced by the hermetic suite and the live `lambe_check` action.
+
 ### Fixed
 
 - TUI: windows narrower than 20 columns, ids or workflows containing line breaks, and a very narrow filter prompt or footer no longer overflow the window (found by the new `FuzzViewFits`), and the faint text on the selected row in dark terminals is lighter so it meets WCAG AA contrast.
 - `lambe tui` no longer shows a wedged or stopped daemon as healthy. The header always carries a health glyph and word (`● running`, `▲ stale 2m`, `▲ wedged 30m`, `■ stopped 4m`, `○ no data`, `✖ unreadable`) at every width, an unhealthy state adds a banner with the last-update age, rows of a stopped daemon read `◌ (running)` instead of `▶ running`, a missing or corrupt snapshot says so instead of a raw error, runs with recent agent activity are no longer flagged as stalled, and `r` re-reads the snapshot now.
 - TUI table: the `×N` history suffix no longer shifts the AGE column, archived retry/interrupted history rows show their age instead of a blank or countdown, and the PHASE column is wide enough for `interrupted`.
 - Docs: removed the stale duplicated "Reference" half of `docs/OPERATIONS.md`, the configuration tables that named keys that do not exist (`tick`, `sync_interval` / `LAMBE_SYNC_INTERVAL`), and the broken `#os-level-restart-production` anchor. The README mascot image is 124 KB instead of 795 KB.
-
 - **`lambe init` no longer writes outside the directory you ran it in.** It used to adopt any `.beads` found in a parent directory, including a global `~/.beads`, and write `WORKFLOW.md` and a starter formula there. It now ignores stub `.beads` directories, uses a real ancestor tracker only with `--tracker PATH` (or an interactive confirmation that names the path; never for `$HOME`), and `--non-interactive` refuses with a clear message.
 - Unknown keys in the config file are now an error with a "did you mean" suggestion, and a value of the wrong type names the bad input (`supervisor.attempt_cap: expected an integer, got "banana"`) instead of silently reading 0.
 - `lambe status -json` (and the state API) emit `[]`, never `null`, for empty `runs`, `needs_human` and `gate_rejections`.
+- The ACP client no longer has a data race between `SetLogger` and the SDK's read loop: reads from the agent are held until the logger is installed. This was behind intermittent test failures and could surface as a race report against any ACP test.
+- The process watchdog's losing timer no longer parks a goroutine behind the winner's kill ladder (which can run for seconds) when the silence and deadline timers fire together.
+- A `hook_timeout_ms` large enough to overflow `time.Duration` is now rejected with a clear error instead of producing a negative timeout (thanks @harryhawwy69, #128).
+- The ACP client now prefers reject-always over reject-once wherever the agent lists it, as its documentation always said (thanks @harryhawwy69, #129).
 
-### Added
+### Contributors
 
-- Rex: run output can open as a split beside the pane you ran the action from (`placement=split` or `placement = "split"` in `lambe.config.lua`), an already-open run tab is found in any session on the server instead of being duplicated, and run tabs stay open after the run finishes so its output stays readable.
-- Rex: **Lambe: Needs You…** lists only the runs waiting on a human. **Open Run…** now sorts needs-you runs first (`▲`), shows plain-language phases, hides `attempt 0 · turn 0`, counts workflow runs per distinct issue, and explains empty lists (stopped daemon, no runs, unknown workflow).
-- A luajit test suite for the Rex integration (`luajit contrib/rex/test/run.lua`, CI job `rex-lua`) with a strict `rex` stub, version profiles for Rex preview.16, .19, and .21, and golden picker rows. `lambe_check` now returns a machine-readable report (plugin version, Rex API revision, picker availability, binary, doctor output) and fails when `lambe doctor` fails.
-
-### Removed
-
-- `contrib/rex/check.lua`, replaced by the hermetic suite and the live `lambe_check` action.
+Thanks to @harryhawwy69 (#97, #99, #100, #128, #129) and @avaldivieso-meraki for their first contributions.
 
 ## [0.11.1] - 2026-11-22
 
@@ -299,7 +303,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exposed via the `lambe` binary (`run`, `status`, `version`).
 - Documentation and CI.
 
-[Unreleased]: https://github.com/andrew-bierman/lambe/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/andrew-bierman/lambe/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/andrew-bierman/lambe/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/andrew-bierman/lambe/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/andrew-bierman/lambe/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/andrew-bierman/lambe/compare/v0.10.0...v0.10.1
