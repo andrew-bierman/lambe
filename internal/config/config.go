@@ -181,13 +181,13 @@ func (e *errorCollection) Error() string {
 	return strings.Join(parts, "; ")
 }
 
-// Load resolves configuration as defaults < file < env < flags and validates
-// the result, reporting every problem at once.
 // MaxConfigBytes bounds the config file. Duplicate-key handling in the YAML
 // parser is quadratic, so a malformed or hostile file must not be able to hang
 // startup; operator configs are far smaller than this.
 const MaxConfigBytes = 1 << 20
 
+// Load resolves configuration as defaults < file < env < flags and validates
+// the result, reporting every problem at once.
 func Load(opts Options) (*Config, error) {
 	k := koanf.New(".")
 

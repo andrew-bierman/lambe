@@ -86,16 +86,16 @@ var hookNames = map[HookName]bool{
 	HookBeforeRemove: true,
 }
 
-// ParseWorkflow parses WORKFLOW.md content: YAML front matter between ---
-// delimiters followed by the prompt body. Front-matter string values undergo
-// $VAR / ${VAR} / ${VAR:-default} environment resolution; a referenced
-// variable that is unset without a default is an error. The returned
-// Workflow carries the content hash as its Revision.
 // MaxWorkflowBytes bounds WORKFLOW.md. Duplicate-key handling in the YAML
 // parser is quadratic, so a malformed or hostile file must not be able to hang
 // the daemon.
 const MaxWorkflowBytes = 1 << 20
 
+// ParseWorkflow parses WORKFLOW.md content: YAML front matter between ---
+// delimiters followed by the prompt body. Front-matter string values undergo
+// $VAR / ${VAR} / ${VAR:-default} environment resolution; a referenced
+// variable that is unset without a default is an error. The returned
+// Workflow carries the content hash as its Revision.
 func ParseWorkflow(content []byte, env EnvLookup) (*Workflow, error) {
 	if len(content) > MaxWorkflowBytes {
 		return nil, fmt.Errorf("WORKFLOW.md is larger than %d bytes", MaxWorkflowBytes)
