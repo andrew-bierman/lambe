@@ -1,0 +1,70 @@
+{
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "focus": {
+        "description": "Whether to make the new window the active window. Defaults to true. A session with no active window always makes the new one active.",
+        "type": [
+          "null",
+          "boolean"
+        ]
+      },
+      "layout": {
+        "description": "The blocks to create in the window and how to arrange them. Required. Each node holds either block, with a flavor and optional options and label, or split, with direction, before, after, and an optional ratio.",
+        "type": [
+          "null",
+          "object"
+        ]
+      },
+      "session_id": {
+        "description": "The session to act on.",
+        "type": "string"
+      },
+      "window_label": {
+        "description": "The window's label, up to 128 characters. Leave it out for a label made from the window's ID, such as Window 89abcdef.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id"
+    ],
+    "type": "object"
+  },
+  "name": "session.new_window",
+  "output_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "block_ids": {
+        "description": "The new blocks' IDs, in layout order: each split's before side comes ahead of its after side.",
+        "items": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "revision": {
+        "description": "The session's revision after the window was created.",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "window_id": {
+        "description": "The new window's ID.",
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "window_id",
+      "block_ids",
+      "revision"
+    ],
+    "type": "object"
+  }
+}

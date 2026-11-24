@@ -21,6 +21,52 @@ for _, name in ipairs({ "document", "folder", "branch", "terminal", "code", "ser
 
 local function fail(msg) error("rexstub: " .. msg, 3) end
 
+-- Request schemas captured from Rex itself (contrib/rex/testdata/api,
+-- rendered by contrib/rex/internal/gen).
+local SCHEMA = require("apischema")
+
+local LUA_TYPE = { string = "string", number = "number", integer = "number", boolean = "boolean", object = "table", array = "table" }
+
+-- validate checks request args for `method` against the schema of the
+-- profile's API revision: the newest captured revision not above it, else
+-- the oldest captured one. `injected` is true for rex.session.*, where the
+-- Lua wrapper supplies session_id.
+local function validate(api_revision, method, args, injected)
+  local best, oldest
+  for rev, methods in pairs(SCHEMA) do
+    if methods[method] then
+      if rev <= api_revision and (best == nil or rev > best) then best = rev end
+      if oldest == nil or rev < oldest then oldest = rev end
+    end
+  end
+  local spec = SCHEMA[best or oldest] and SCHEMA[best or oldest][method]
+  if spec == nil then return end -- no captured schema for this method
+  args = args or {}
+  if type(args) ~= "table" then fail(method .. " takes a table") end
+  for name, value in pairs(args) do
+    local field = spec.fields[name]
+    if field == nil then
+      if spec.closed then fail(method .. ": unknown field `" .. tostring(name) .. "`") end
+    else
+      local ok = false
+      for _, t in ipairs(field.types) do
+        if t ~= "null" and LUA_TYPE[t] == type(value) then ok = true end
+      end
+      if not ok then fail(method .. ": field `" .. name .. "` must be " .. table.concat(field.types, "|")) end
+      if field.enum then
+        local found = false
+        for _, e in ipairs(field.enum) do if e == value then found = true end end
+        if not found then fail(method .. ": field `" .. name .. "` must be one of " .. table.concat(field.enum, ", ")) end
+      end
+    end
+  end
+  for _, name in ipairs(spec.required) do
+    if args[name] == nil and not (injected and name == "session_id") then
+      fail(method .. ": missing required field `" .. name .. "`")
+    end
+  end
+end
+
 local function check_keys(what, tbl, allowed)
   for key in pairs(tbl) do
     if not allowed[key] then fail(what .. ": unknown field `" .. tostring(key) .. "`") end
@@ -177,6 +223,7 @@ function M.install(profile_name)
     if type(method) ~= "string" then fail("rex.call wants a method name") end
     ctl.calls[#ctl.calls + 1] = method
     if ctl.loading then return nil, "rex.call is not available while the config loads" end
+    validate(profile.api_revision, method, args, false)
     local err = select(2, faulty(method))
     if err then return nil, err end
     if method == "server.version" then
@@ -258,7 +305,7 @@ function M.install(profile_name)
     new_window = function(args)
       local nilv, err = faulty("new_window")
       if err then return nilv, err end
-      check_keys("new_window", args, set({ "window_label", "layout", "focus" }))
+      validate(profile.api_revision, "session.new_window", args, true)
       if type(args.window_label) ~= "string" then fail("new_window needs a window_label string") end
       if type(args.layout) ~= "table" or type(args.layout.flavor) ~= "string" then fail("new_window layout must come from rex.layout.block") end
       local window = { window_id = next_id("window"), label = args.window_label, blocks = {} }
@@ -268,7 +315,7 @@ function M.install(profile_name)
       return { window_id = window.window_id, block_ids = { block.block_id } }
     end,
     view = function(args)
-      if type(args) ~= "table" then fail("session.view takes a table") end
+      validate(profile.api_revision, "session.view", args, true)
       local windows = {}
       for _, w in ipairs(ctl.windows) do
         local blocks = {}
@@ -280,7 +327,7 @@ function M.install(profile_name)
     new_split = function(args)
       local nilv, err = faulty("new_split")
       if err then return nilv, err end
-      check_keys("new_split", args, set({ "anchor_id", "direction", "side", "ratio", "layout", "focus", "window_id" }))
+      validate(profile.api_revision, "session.new_split", args, true)
       if args.direction ~= "horizontal" and args.direction ~= "vertical" then fail("new_split direction must be horizontal or vertical") end
       if args.side ~= "before" and args.side ~= "after" then fail("new_split side must be before or after") end
       if args.ratio ~= nil and not (type(args.ratio) == "number" and args.ratio > 0 and args.ratio < 1) then fail("new_split ratio must be between 0 and 1") end
@@ -301,7 +348,7 @@ function M.install(profile_name)
       return { block_ids = { block.block_id }, split_ids = { next_id("split") }, anchor_id = args.anchor_id }
     end,
     list_blocks = function(args)
-      if type(args) ~= "table" then fail("list_blocks takes a table") end
+      validate(profile.api_revision, "session.list_blocks", args, true)
       local blocks = {}
       for _, w in ipairs(ctl.windows) do
         for _, b in ipairs(w.blocks) do
@@ -311,7 +358,7 @@ function M.install(profile_name)
       return { blocks = blocks }
     end,
     focus_block = function(args)
-      if type(args) ~= "table" or type(args.block_id) ~= "string" then fail("focus_block needs block_id") end
+      validate(profile.api_revision, "session.focus_block", args, true)
       for _, w in ipairs(ctl.windows) do
         for _, b in ipairs(w.blocks) do
           if b.block_id == args.block_id then ctl.focused[#ctl.focused + 1] = args.block_id return {} end
@@ -320,13 +367,14 @@ function M.install(profile_name)
       return nil, "no such block"
     end,
     focus_window = function(args)
-      if type(args) ~= "table" or type(args.window_id) ~= "string" then fail("focus_window needs window_id") end
+      validate(profile.api_revision, "session.focus_window", args, true)
       if not find_window(args.window_id) then return nil, "no such window" end
       ctl.focused[#ctl.focused + 1] = args.window_id
       return {}
     end,
     set_block_label = function(args)
-      if type(args) ~= "table" or type(args.block_id) ~= "string" or type(args.label) ~= "string" then fail("set_block_label needs block_id and label") end
+      validate(profile.api_revision, "session.set_block_label", args, true)
+      if type(args.label) ~= "string" then fail("set_block_label needs a label") end
       for _, w in ipairs(ctl.windows) do
         for _, b in ipairs(w.blocks) do
           if b.block_id == args.block_id then b.label = args.label return {} end

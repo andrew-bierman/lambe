@@ -1,0 +1,114 @@
+{
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "anchor_id": {
+        "description": "The block or split whose space to split. A block ID splits that one block. A split ID puts the new blocks beside that split and everything under it. Leave it out to split the focused block of window_id, or of the active window. Don't send it with window_id.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "direction": {
+        "description": "How to divide the anchor's space: 'horizontal' for side by side or 'vertical' for one above the other.",
+        "enum": [
+          "horizontal",
+          "vertical"
+        ],
+        "type": "string"
+      },
+      "focus": {
+        "description": "Whether to make the anchor's window active and focus the first new block. Defaults to false.",
+        "type": "boolean"
+      },
+      "layout": {
+        "description": "The blocks to create beside the anchor and how to arrange them. Each node holds either block, with a flavor and optional options and label, or split, with direction, before, after, and an optional ratio.",
+        "type": [
+          "null",
+          "object"
+        ]
+      },
+      "ratio": {
+        "description": "The fraction of the space that the before part gets, greater than 0 and less than 1. Defaults to 0.5.",
+        "type": "number"
+      },
+      "session_id": {
+        "description": "The session to act on.",
+        "type": "string"
+      },
+      "side": {
+        "description": "Where the new blocks go: 'before' for the left or top part, or 'after' for the right or bottom part.",
+        "enum": [
+          "before",
+          "after"
+        ],
+        "type": "string"
+      },
+      "window_id": {
+        "description": "The window whose focused block to split. Send it only when anchor_id is left out.",
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "session_id",
+      "direction",
+      "side",
+      "layout"
+    ],
+    "type": "object"
+  },
+  "name": "session.new_split",
+  "output_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "anchor_id": {
+        "description": "The block or split whose space was split. If the request didn't name one, this is the focused block the server used.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "block_ids": {
+        "description": "The new blocks' IDs, in layout order: each split's before side comes ahead of its after side.",
+        "items": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "revision": {
+        "description": "The session's revision after this call.",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "split_ids": {
+        "description": "The IDs of the splits this call created: first the one at the anchor, then the new layout's own splits in layout order.",
+        "items": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      }
+    },
+    "required": [
+      "anchor_id",
+      "block_ids",
+      "split_ids",
+      "revision"
+    ],
+    "type": "object"
+  }
+}

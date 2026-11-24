@@ -1,0 +1,38 @@
+{
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "session_id": {
+        "description": "The session to act on.",
+        "type": "string"
+      },
+      "window_id": {
+        "description": "The window to make active. Focus goes to the block that was focused in it.",
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "session_id",
+      "window_id"
+    ],
+    "type": "object"
+  },
+  "name": "session.focus_window",
+  "output_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "revision": {
+        "description": "The session's revision after this call. It is unchanged if the call changed nothing that session.view shows, unless the method's notes say otherwise.",
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "revision"
+    ],
+    "type": "object"
+  }
+}

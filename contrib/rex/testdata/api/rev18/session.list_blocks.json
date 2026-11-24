@@ -1,0 +1,84 @@
+{
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "session_id": {
+        "description": "The session to act on.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id"
+    ],
+    "type": "object"
+  },
+  "name": "session.list_blocks",
+  "output_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "blocks": {
+        "description": "Every block in the session, including detached blocks.",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "block_id": {
+              "description": "The block's ID.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "creator_name": {
+              "description": "The creator that made the block, such as com.superlogical.terminal.",
+              "type": "string"
+            },
+            "flavor": {
+              "description": "The flavor the block was made from, such as com.superlogical.terminal.shell.",
+              "type": "string"
+            },
+            "host_id": {
+              "description": "Identifies the machine and account the block runs as. If it equals your local server's host_id, the block sees the same files you do. Otherwise treat the block as remote.",
+              "type": "string"
+            },
+            "label": {
+              "description": "The block's label.",
+              "type": "string"
+            },
+            "owner": {
+              "description": "The client that owns the block. Left out when the block has no owner.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "placement": {
+              "description": "Whether the block is in a window: 'placed' or 'detached'. Treat a value you don't know as 'detached'.",
+              "type": "string"
+            },
+            "window_id": {
+              "description": "The window the block is in. Left out when the block is detached.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "block_id",
+            "label",
+            "placement"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      }
+    },
+    "required": [
+      "blocks"
+    ],
+    "type": "object"
+  }
+}

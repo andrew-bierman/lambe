@@ -1,0 +1,42 @@
+{
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "label": {
+        "description": "The new label, up to 128 characters. An empty or missing label restores a default made from the window's ID.",
+        "type": "string"
+      },
+      "session_id": {
+        "description": "The session to act on.",
+        "type": "string"
+      },
+      "window_id": {
+        "description": "The window to relabel.",
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "session_id",
+      "window_id"
+    ],
+    "type": "object"
+  },
+  "name": "session.set_window_label",
+  "output_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "revision": {
+        "description": "The session's revision after this call. It is unchanged if the call changed nothing that session.view shows, unless the method's notes say otherwise.",
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "revision"
+    ],
+    "type": "object"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "block_id": {
+        "description": "The block to relabel. Required.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "label": {
+        "description": "The new label, up to 128 characters. An empty or missing label restores a default made from the block's ID.",
+        "type": "string"
+      },
+      "session_id": {
+        "description": "The session to act on.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id"
+    ],
+    "type": "object"
+  },
+  "name": "session.set_block_label",
+  "output_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "revision": {
+        "description": "The session's revision after this call. It is unchanged if the call changed nothing that session.view shows, unless the method's notes say otherwise.",
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "revision"
+    ],
+    "type": "object"
+  }
+}
