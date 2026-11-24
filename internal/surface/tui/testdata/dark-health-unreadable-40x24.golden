@@ -1,10 +1,10 @@
 {default on #654399} {#ffffff on #654399 bold}lambe{default on #654399} {default on #28203a}  {#ff6b6b on #28203a bold}✖ unreadable 3m{default on #28203a}  {#ff6b6b on #28203a bold}⚠1{default on #28203a}  {#8de0bc on #28203a bold}2▶{default on #28203a} {#f3c582 on #28203a}1↻{default on #28203a}     
 {default on #28203a} {#ff6b6b on #28203a bold}✖ unreadable · invalid character '}' …{default on #28203a} 
- {#c5a7ff on default bold}1 Queue{default on default} {#c5a7ff on default bold}5{default on default} {#a79eb5 on default}│{default on default} {#a79eb5 on default}2 Attn{default on default} {#f3c582 on default bold}2{default on default} {#a79eb5 on default}│{default on default} {#a79eb5 on default}3 Hist{default on default} {#a79eb5 on default}5
+ {#c5a7ff on default bold}1 Queue{default on default} {#c5a7ff on default bold}5{default on default} {#a79eb5 on default}│{default on default} {#a79eb5 on default}2 Attn{default on default} {#f3c582 on default bold}3{default on default} {#a79eb5 on default}│{default on default} {#a79eb5 on default}3 Hist{default on default} {#a79eb5 on default}5
 {#c5a7ff on default bold}━━━━━━━━━━━{#493f5e on default}─────────────────────────────
 {#a79eb5 on #28203a bold}   ID      TITLE                     AGE
 {#c5a7ff on #342a4c}▌{#8de0bc on #342a4c bold}▶{default on #342a4c} {#fafafa on #342a4c bold}demo-42{default on #342a4c} {#fafafa on #342a4c bold}Verify the release bu…{default on #342a4c} {#a79eb5 on #342a4c}    8s
- {#ff6b6b on default bold}⚠{default on default} {#fafafa on default}demo-43{default on default} {#fafafa on default}Recheck the artifact …{default on default} {#ff6b6b on default}    4m
+ {#ff6b6b on default bold}⚠{default on default} {#fafafa on default}demo-43{default on default} {#fafafa on default}Recheck the artifact …{default on default} {#ff6b6b on default}    6m
  {#f3c582 on default}↻{default on default} {#fafafa on default}demo-44{default on default} {#fafafa on default}Retry the install smo…{default on default} {#a79eb5 on default} in 1m
  {#ff6b6b on default}✘{default on default} {#fafafa on default}demo-45{default on default} {#fafafa on default}Validate the migration{default on default} {#a79eb5 on default}    2m
  {#5fd38d on default}✔{default on default} {#fafafa on default}demo-46{default on default} {#fafafa on default}Check upgrade instruc…{default on default} {#a79eb5 on default}    5m

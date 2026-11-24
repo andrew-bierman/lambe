@@ -79,6 +79,27 @@
       "LastOutputAt": "0001-01-01T00:00:00Z",
       "LastActivityAt": "0001-01-01T00:00:00Z",
       "AgeSec": 3600
+    },
+    {
+      "IssueID": "w-6",
+      "Title": "Title of w-6",
+      "Phase": "running",
+      "Attempt": 2,
+      "Turn": 3,
+      "Thread": "",
+      "Workspace": "",
+      "WakeAt": "0001-01-01T00:00:00Z",
+      "LastGate": "",
+      "Workflow": "build",
+      "UpdatedAt": "2026-11-24T11:59:40Z",
+      "TailBytes": 4096,
+      "LastOutputAt": "2026-11-24T11:53:50Z",
+      "LastActivityAt": "0001-01-01T00:00:00Z",
+      "AgeSec": 20,
+      "Attention": {
+        "Reason": "stalled · silent 6m",
+        "AgeSec": 20
+      }
     }
   ],
   "History": [

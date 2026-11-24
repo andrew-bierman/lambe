@@ -39,9 +39,14 @@ func (m *Model) runsFor(showHistory, showAttention bool) []daemon.LiveRun {
 		}
 		runs := make([]daemon.LiveRun, 0, len(m.snapshot.Runs)+len(m.upcoming))
 		seen := make(map[string]bool, len(m.snapshot.Runs))
+		stall := time.Duration(0) // a stopped daemon's rows are history, never stalled
+		if m.alive {
+			stall = stallAfter
+		}
+		now := m.clock()
 		for _, run := range m.snapshot.Runs {
 			seen[run.IssueID] = true
-			if _, attention := daemon.NeedsAttention(run); !showAttention || attention {
+			if _, attention := daemon.NeedsAttention(run, now, stall); !showAttention || attention {
 				runs = append(runs, run)
 			}
 		}

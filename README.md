@@ -105,8 +105,8 @@ Press `:` for the command palette, `1` `2` `3` to switch views, `/` to filter.
   <img src="docs/assets/stalled.png" alt="A stalled run selected in the Queue view" width="900">
 </p>
 
-Attention gathers everything that needs you: retries, failed gates, and
-blocked tasks with the reason and dependency IDs. History keeps recent
+Attention gathers everything that needs you: retries, failed gates, stalled
+(silent) runs, and blocked tasks with the reason and dependency IDs. History keeps recent
 attempts and their outcomes.
 
 <p align="center">

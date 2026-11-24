@@ -75,8 +75,8 @@ func TestLayoutInvariants(t *testing.T) {
 
 func TestStalledRunsAreFlagged(t *testing.T) {
 	now := time.Now()
-	run := daemon.LiveRun{Progress: symphony.Progress{IssueID: "a-1", Phase: "running"}, LastOutputAt: now.Add(-5 * time.Minute)}
-	if got := stalledFor(run, true, now); got != 5*time.Minute {
+	run := daemon.LiveRun{Progress: symphony.Progress{IssueID: "a-1", Phase: "running"}, LastOutputAt: now.Add(-6 * time.Minute)}
+	if got := stalledFor(run, true, now); got != 6*time.Minute {
 		t.Fatalf("stalledFor = %v", got)
 	}
 	if stalledFor(run, false, now) != 0 {

@@ -1,10 +1,10 @@
  lambe   ▲ stale 2m  demo  ⚠ 1 stalled  2 active · 1 waiting
  ▲ stale · loop quiet for 2m · rows may be out of date
- 1 Queue 5 │ 2 Attention 2 │ 3 History 5
+ 1 Queue 5 │ 2 Attention 3 │ 3 History 5
 ━━━━━━━━━━━─────────────────────────────────────────────────
    ID      TITLE                          PHASE          AGE
 ▌▶ demo-42 Verify the release build       running         8s
- ⚠ demo-43 Recheck the artifact checksum  stalled         4m
+ ⚠ demo-43 Recheck the artifact checksum  stalled         6m
  ↻ demo-44 Retry the install smoke test   retry        in 1m
  ✘ demo-45 Validate the migration         escalated       2m
  ✔ demo-46 Check upgrade instructions     passed          5m

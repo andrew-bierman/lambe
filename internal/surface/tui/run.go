@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -13,7 +14,10 @@ import (
 )
 
 // Run starts the dashboard and blocks until the user quits.
-func Run(ctx context.Context, path, trackerPath string, queue func(string) (string, error), readiness func() ([]tracker.ReadinessRow, error), workflows ...QueueWorkflow) error {
+func Run(ctx context.Context, path string, stall time.Duration, trackerPath string, queue func(string) (string, error), readiness func() ([]tracker.ReadinessRow, error), workflows ...QueueWorkflow) error {
+	if stall > 0 {
+		stallAfter = stall
+	}
 	model := New(path)
 	model.trackerPath = trackerPath
 	model.queueTask = queue

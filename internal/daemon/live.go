@@ -52,10 +52,38 @@ type Attention struct {
 	AgeSec int64
 }
 
+// StalledFor is the one stall rule shared by the dashboard's Queue rows, its
+// Attention view and the brief JSON: how long an active run (running, gating,
+// preparing, claiming) has been silent when that is more than stallAfter, else
+// zero. Silence is the freshest of the last agent output and the last agent
+// event of any kind, so it needs only a snapshot written by any daemon version.
+// stallAfter <= 0 disables the rule; callers pass 0 when the daemon is
+// stopped, because a dead daemon's rows are history, not stalls.
+func StalledFor(run LiveRun, now time.Time, stallAfter time.Duration) time.Duration {
+	switch run.Phase {
+	case "running", "gating", "preparing", "claiming":
+	default:
+		return 0
+	}
+	last := run.LastOutputAt
+	if run.LastActivityAt.After(last) {
+		last = run.LastActivityAt
+	}
+	if stallAfter <= 0 || last.IsZero() {
+		return 0
+	}
+	if age := now.Sub(last); age > stallAfter {
+		return age
+	}
+	return 0
+}
+
 // NeedsAttention is the one rule for "a human has to act on this run": it
 // backs the dashboard's Attention view and the Attention field of the brief
-// JSON, so the two cannot disagree. The reason is plain language.
-func NeedsAttention(run LiveRun) (reason string, ok bool) {
+// JSON, so the two cannot disagree. The reason is plain language. A run that
+// is active but silent past stallAfter (see StalledFor) needs a human too;
+// phases that already say so (retry, deferred, ...) are never also stalled.
+func NeedsAttention(run LiveRun, now time.Time, stallAfter time.Duration) (reason string, ok bool) {
 	switch run.Phase {
 	case "retry":
 		return "retrying", true
@@ -68,7 +96,16 @@ func NeedsAttention(run LiveRun) (reason string, ok bool) {
 	case "stopped: gate red":
 		return "gate failed", true
 	}
+	if silent := StalledFor(run, now, stallAfter); silent > 0 {
+		return "stalled · silent " + shortAge(silent), true
+	}
 	return "", false
+}
+
+// shortAge renders a duration as whole minutes ("4m", "1h5m"), at least 1m.
+func shortAge(d time.Duration) string {
+	d = max(d.Round(time.Minute), time.Minute)
+	return strings.TrimSuffix(strings.Replace(d.String(), "m0s", "m", 1), "0s")
 }
 
 // LivePath returns the private projection path for one configured daemon.
