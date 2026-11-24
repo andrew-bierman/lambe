@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -79,11 +80,14 @@ type rexSetupEnv struct {
 	// Executable is the absolute path of this lambe binary, baked into the
 	// generated lambe.config.lua so Rex never depends on a login-shell PATH.
 	Executable string
+	// RunRex runs the rex CLI (config check, keymap); nil when it is not
+	// installed, in which case init.lua is written without verification.
+	RunRex rexRunner
 }
 
 func hostRexSetupEnv() rexSetupEnv {
 	home, _ := os.UserHomeDir()
-	return rexSetupEnv{Getenv: os.Getenv, Home: home, Executable: lambeExecutable()}
+	return rexSetupEnv{Getenv: os.Getenv, Home: home, Executable: lambeExecutable(), RunRex: hostRexRunner()}
 }
 
 // lambeExecutable prefers the `lambe` on PATH when it is this very binary
@@ -121,7 +125,7 @@ func (e rexSetupEnv) rexConfigDir() string {
 // runSetup dispatches `lambe setup TARGET`; only rex exists.
 func runSetup(args []string, env rexSetupEnv, out io.Writer) error {
 	if len(args) == 0 || args[0] != "rex" {
-		return usageError{errors.New("usage: lambe setup rex [--apply] [--uninstall] [--force] [--dir DIR]")}
+		return usageError{errors.New("usage: lambe setup rex [--apply] [--uninstall] [--force] [--no-init] [--keys] [--json] [--dir DIR]")}
 	}
 	return runSetupRex(args[1:], env, out)
 }
@@ -193,12 +197,40 @@ return {
 `, bin))
 }
 
-func setupRex(args []string, env rexSetupEnv, out *strings.Builder) error {
+// rexReport is the machine-readable result of `lambe setup rex --json`.
+type rexReport struct {
+	Mode    string          `json:"mode"` // dry-run or apply
+	Dir     string          `json:"dir"`
+	Plugin  int             `json:"plugin"`
+	Files   []rexReportFile `json:"files"`
+	Init    *rexReportFile  `json:"init,omitempty"`
+	Check   *rexCheckResult `json:"check,omitempty"`
+	Keys    *rexReportKeys  `json:"keys,omitempty"`
+	Next    []string        `json:"next,omitempty"`
+	Error   string          `json:"error,omitempty"`
+	Applied bool            `json:"applied"`
+}
+
+type rexReportFile struct {
+	Path   string `json:"path"`
+	Action string `json:"action"`
+	Note   string `json:"note,omitempty"`
+}
+
+type rexReportKeys struct {
+	Added   []string `json:"added"`
+	Skipped []string `json:"skipped"`
+}
+
+func setupRex(args []string, env rexSetupEnv, out *strings.Builder) (err error) {
 	fset := flag.NewFlagSet("setup rex", flag.ContinueOnError)
 	fset.SetOutput(io.Discard)
 	apply := fset.Bool("apply", false, "write the changes (default: dry run)")
-	uninstall := fset.Bool("uninstall", false, "remove the managed Lua files")
+	uninstall := fset.Bool("uninstall", false, "remove the managed Lua files and the init.lua block")
 	force := fset.Bool("force", false, "replace or remove files you modified")
+	noInit := fset.Bool("no-init", false, "do not add the managed block to init.lua")
+	keys := fset.Bool("keys", false, "also bind suggested keys (checked for conflicts with rex keymap)")
+	asJSON := fset.Bool("json", false, "print a machine-readable report")
 	dir := fset.String("dir", "", "Rex config directory (default: Rex's own)")
 	if err := fset.Parse(args); err != nil {
 		return usageError{err}
@@ -213,6 +245,25 @@ func setupRex(args []string, env rexSetupEnv, out *strings.Builder) error {
 	if err != nil {
 		return err
 	}
+	rep := &rexReport{Mode: "dry-run", Dir: *dir, Plugin: plugin, Files: []rexReportFile{}}
+	if *apply {
+		rep.Mode = "apply"
+	}
+	defer func() {
+		if !*asJSON {
+			return
+		}
+		if err != nil {
+			rep.Error = err.Error()
+		}
+		data, merr := json.MarshalIndent(rep, "", "  ")
+		if merr != nil {
+			return
+		}
+		out.Reset()
+		out.Write(data)
+		out.WriteByte('\n')
+	}()
 	items, err := planRexItems(*dir)
 	if err != nil {
 		return err
@@ -225,7 +276,7 @@ func setupRex(args []string, env rexSetupEnv, out *strings.Builder) error {
 	fmt.Fprintf(out, "lambe setup rex (%s)\nRex config directory: %s\n", mode, *dir)
 
 	if *uninstall {
-		return rexUninstall(out, *dir, items, *apply, *force)
+		return rexUninstall(out, rep, *dir, items, *apply, *force)
 	}
 
 	blocked := false
@@ -246,6 +297,7 @@ func setupRex(args []string, env rexSetupEnv, out *strings.Builder) error {
 		default:
 			it.verb = "update"
 		}
+		rep.Files = append(rep.Files, rexReportFile{Path: it.path, Action: it.verb})
 		switch it.verb {
 		case "refuse":
 			fmt.Fprintf(out, "  refuse  %s: not managed by lambe or edited since install; review it, or pass --force to replace it\n", it.path)
@@ -265,16 +317,67 @@ func setupRex(args []string, env rexSetupEnv, out *strings.Builder) error {
 	haveConfig := statErr == nil
 	if haveConfig {
 		fmt.Fprintf(out, "  keep    %s (your settings)\n", configPath)
+		rep.Files = append(rep.Files, rexReportFile{Path: configPath, Action: "keep", Note: "your settings"})
 	} else {
 		fmt.Fprintf(out, "  create  %s (your settings; bin = %s)\n", configPath, orDefault(env.Executable, "lambe"))
+		rep.Files = append(rep.Files, rexReportFile{Path: configPath, Action: "create", Note: "your settings"})
+	}
+
+	// Plan everything that can fail before writing anything.
+	var binds []string // nil keeps the keys already in the block
+	if *keys {
+		claims, kerr := rexKeymapClaims(env.RunRex)
+		if kerr != nil {
+			return kerr
+		}
+		var skipped []string
+		binds, skipped = rexPlanKeys(claims)
+		if binds == nil {
+			binds = []string{}
+		}
+		rep.Keys = &rexReportKeys{Added: []string{}, Skipped: skipped}
+		rep.Keys.Added = append(rep.Keys.Added, binds...)
+		for _, k := range skipped {
+			fmt.Fprintf(out, "  skip    key %s\n", k)
+		}
+	}
+	var initPlan *rexInitPlan
+	if !*noInit {
+		pl, perr := planRexInit(*dir, binds)
+		if perr != nil {
+			return perr
+		}
+		initPlan = &pl
+		rep.Init = &rexReportFile{Path: pl.path, Action: pl.verb, Note: pl.note}
+		if pl.note != "" {
+			fmt.Fprintf(out, "  %-7s %s: %s\n", pl.verb, pl.path, pl.note)
+		} else {
+			fmt.Fprintf(out, "  %-7s %s (managed block between the lambe-rex markers)\n", pl.verb, pl.path)
+		}
 	}
 
 	if *apply {
 		if err := writeRexItems(*dir, configPath, items, plugin, !haveConfig, env.Executable); err != nil {
 			return err
 		}
+		rep.Applied = true
+		if initPlan != nil && initPlan.verb != "keep" && initPlan.verb != "skip" {
+			res, cerr := commitRexInit(*initPlan, env.RunRex)
+			rep.Check = &res
+			if cerr != nil {
+				if res.Output != "" {
+					fmt.Fprintf(out, "rex config check said:\n%s\n", res.Output)
+				}
+				return cerr
+			}
+			if !res.Ran {
+				fmt.Fprintln(out, "  note    the rex CLI was not found; init.lua was written without `rex config check`")
+			} else {
+				fmt.Fprintln(out, "  checked init.lua with `rex config check`: ok")
+			}
+		}
 	}
-	printRexNextSteps(out, *dir)
+	printRexNextSteps(out, rep, *dir, initPlan != nil && initPlan.verb != "skip")
 	return nil
 }
 
@@ -357,7 +460,7 @@ func writeRexItems(dir, configPath string, items []rexItem, plugin int, writeCon
 	return nil
 }
 
-func rexUninstall(out *strings.Builder, dir string, items []rexItem, apply, force bool) error {
+func rexUninstall(out *strings.Builder, rep *rexReport, dir string, items []rexItem, apply, force bool) error {
 	var todo []rexItem
 	blocked := false
 	for _, it := range items {
@@ -365,6 +468,7 @@ func rexUninstall(out *strings.Builder, dir string, items []rexItem, apply, forc
 		case it.state == rexMissing:
 		case (it.state == rexModified || it.state == rexForeign) && !force:
 			fmt.Fprintf(out, "  refuse  %s: not managed by lambe or edited since install; pass --force to remove it\n", it.path)
+			rep.Files = append(rep.Files, rexReportFile{Path: it.path, Action: "refuse"})
 			blocked = true
 		default:
 			todo = append(todo, it)
@@ -373,40 +477,62 @@ func rexUninstall(out *strings.Builder, dir string, items []rexItem, apply, forc
 	if blocked {
 		return errors.New("refusing to remove modified files in " + dir)
 	}
-	if len(todo) == 0 {
+	removedBlock, initPath, err := removeRexInitBlock(dir, false)
+	if err != nil {
+		return err
+	}
+	if len(todo) == 0 && !removedBlock {
 		fmt.Fprintf(out, "  skip    %s: not installed\n", dir)
 		return nil
 	}
 	for _, it := range todo {
 		fmt.Fprintf(out, "  remove  %s\n", it.path)
+		rep.Files = append(rep.Files, rexReportFile{Path: it.path, Action: "remove"})
 		if apply {
 			if err := os.Remove(it.path); err != nil {
 				return fmt.Errorf("remove %s: %w", it.path, err)
 			}
 		}
 	}
+	if removedBlock {
+		fmt.Fprintf(out, "  edit    %s (remove the managed lambe-rex block)\n", initPath)
+		rep.Init = &rexReportFile{Path: initPath, Action: "remove-block"}
+		if apply {
+			if _, _, err := removeRexInitBlock(dir, true); err != nil {
+				return err
+			}
+		}
+	}
 	if apply {
 		_ = os.Remove(filepath.Join(dir, rexModuleDir)) // only if now empty
+		rep.Applied = true
 	}
-	fmt.Fprintf(out, "Kept %s (your settings). Remove the dofile line for lambe.lua from %s yourself (lambe never edits init.lua), then run: rex config reload\n",
-		filepath.Join(dir, rexConfigName), filepath.Join(dir, "init.lua"))
+	fmt.Fprintf(out, "Kept %s (your settings).\n", filepath.Join(dir, rexConfigName))
+	if !removedBlock {
+		fmt.Fprintf(out, "If %s still loads lambe.lua, remove that line yourself.\n", initPath)
+	}
+	fmt.Fprintln(out, "Then run: rex config reload")
+	rep.Next = []string{"rex config reload"}
 	return nil
 }
 
-// printRexNextSteps prints what lambe will not do itself: edit init.lua.
-func printRexNextSteps(out *strings.Builder, dir string) {
+// printRexNextSteps prints what is left for you. managed says init.lua carries
+// lambe's block, so no dofile line has to be added by hand.
+func printRexNextSteps(out *strings.Builder, rep *rexReport, dir string, managed bool) {
 	initLua := filepath.Join(dir, "init.lua")
-	loaded := false
-	if data, err := os.ReadFile(initLua); err == nil { // #nosec G304 -- operator-chosen config dir
-		loaded = bytes.Contains(data, []byte("lambe.lua"))
+	if !managed {
+		loaded := false
+		if data, err := os.ReadFile(initLua); err == nil { // #nosec G304 -- operator-chosen config dir
+			loaded = bytes.Contains(data, []byte("lambe.lua"))
+		}
+		if loaded {
+			fmt.Fprintf(out, "%s already loads lambe.lua; it is not touched.\n", initLua)
+		} else {
+			fmt.Fprintf(out, "Add this to %s:\n\n  dofile(%s)\n\n", initLua, strconv.Quote(filepath.Join(dir, rexShimName)))
+		}
 	}
-	if loaded {
-		fmt.Fprintf(out, "%s already loads lambe.lua; it is not touched.\n", initLua)
-	} else {
-		fmt.Fprintf(out, "%s is never edited by lambe. Add this to it:\n\n  dofile(%s)\n  -- optional key binding (pick a key you do not use):\n  -- rex.bind(\"cmd+shift+l\", \"lambe_open_run\")\n\n",
-			initLua, strconv.Quote(filepath.Join(dir, rexShimName)))
-	}
-	fmt.Fprintln(out, "Then run: rex config check && rex config reload   (on the machine that runs the Rex server)")
+	rep.Next = []string{"rex config reload", "rex do lambe_check"}
+	fmt.Fprintln(out, "Then run: rex config reload   (on the machine that runs the Rex server)")
 	fmt.Fprintln(out, "Verify with: rex do lambe_check")
 }
 
