@@ -53,3 +53,16 @@ func TestConstantMessageNotInterpolated(t *testing.T) {
 		t.Errorf("msg: got %v", rec["msg"])
 	}
 }
+
+func TestDefaultLoggerLevels(t *testing.T) {
+	log := Default()
+	if log == nil {
+		t.Fatal("Default() returned nil")
+	}
+	if !log.Enabled(nil, slog.LevelInfo) {
+		t.Error("Default() should enable info")
+	}
+	if log.Enabled(nil, slog.LevelDebug) {
+		t.Error("Default() should disable debug")
+	}
+}
