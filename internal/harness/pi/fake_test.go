@@ -39,6 +39,14 @@ const (
 	// scriptQuietTool starts a tool execution, stays silent past the silence
 	// window while the tool "runs", then ends the tool and settles.
 	scriptQuietTool = "quiet-tool"
+	// scriptRefuse answers prompt, steer, and abort with success:false.
+	scriptRefuse = "refuse"
+	// scriptMalformed emits garbage frames (invalid JSON, wrong shapes, an
+	// uncorrelated response) before a normal settled turn.
+	scriptMalformed = "malformed"
+	// scriptChatter acks the prompt and then emits events without pause until
+	// killed, so Close races an active emitter.
+	scriptChatter = "chatter"
 	// quietToolRuntime is how long the fake tool runs without any output.
 	quietToolRuntime = 1200 * time.Millisecond
 )
@@ -110,6 +118,10 @@ func runFake(script string) {
 			continue
 		}
 		fakeLog("recv %s", line)
+		if script == scriptRefuse && (cmd.Type == "prompt" || cmd.Type == "steer" || cmd.Type == "abort") {
+			respond(cmd.ID, false, "refused: "+cmd.Type, nil)
+			continue
+		}
 		switch cmd.Type {
 		case "get_state":
 			respond(cmd.ID, true, "", map[string]any{
@@ -240,6 +252,24 @@ func scriptEvents(script string) {
 		event("tool_execution_end", map[string]any{"toolCallId": "t1", "toolName": "bash"})
 		event("agent_end", map[string]any{"willRetry": false})
 		event("agent_settled", map[string]any{"aborted": false})
+	case scriptMalformed:
+		for _, raw := range []string{
+			"this is not json",
+			`{"type":`,
+			`[1,2,3]`,
+			`{}`,
+			`{"type":"response","id":"c999","success":true}`,
+		} {
+			fmt.Println(raw)
+		}
+		event("agent_start", nil)
+		event("agent_end", map[string]any{"willRetry": false})
+		event("agent_settled", map[string]any{"aborted": false})
+	case scriptChatter:
+		for {
+			event("agent_start", nil)
+			time.Sleep(2 * time.Millisecond)
+		}
 	case scriptSilentAck:
 		// Acked the prompt above, then goes silent forever.
 		blockForever()
