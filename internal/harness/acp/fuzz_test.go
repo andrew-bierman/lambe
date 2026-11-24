@@ -37,11 +37,10 @@ func FuzzSessionRestoreError(f *testing.F) {
 		f.Add(s.code, []byte(s.data), s.id)
 	}
 	f.Fuzz(func(t *testing.T, code int, data []byte, id string) {
-		var payload any
-		if err := json.Unmarshal(data, &payload); err != nil {
+		if !json.Valid(data) {
 			t.Skip()
 		}
-		orig := &acpsdk.RequestError{Code: code, Message: "m", Data: payload}
+		orig := &acpsdk.RequestError{Code: code, Message: "m", Data: json.RawMessage(data)}
 		got := sessionRestoreError(orig, id)
 		if got == nil {
 			t.Fatal("non-nil error became nil")

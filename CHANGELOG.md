@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `lambe enqueue --json` prints one object (`schema_version`, `issue`, `workflow`, `applied`, `would_add_label`) instead of prose; exit codes are unchanged.
 
+### Changed
+
+- Dependencies: `github.com/coder/acp-go-sdk` v0.13.5 to v0.20.0 (tool-call update fields are now `Patch` values, error data is raw JSON; no behavior change for supervised agents; verified against codex-acp and opencode).
+
 ### Fixed
 
 - Daemon: a SIGHUP config reload no longer races the heartbeat, tick, and state-surface goroutines; the running config is now published as an atomic snapshot that every reader loads.

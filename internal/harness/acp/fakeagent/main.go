@@ -91,15 +91,6 @@ func cancelled() acpsdk.PromptResponse {
 	return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}
 }
 
-// ptrStatus boxes a tool-call status.
-func ptrStatus(s acpsdk.ToolCallStatus) *acpsdk.ToolCallStatus { return &s }
-
-// ptrKind boxes a tool kind.
-func ptrKind(k acpsdk.ToolKind) *acpsdk.ToolKind { return &k }
-
-// ptrString boxes a string.
-func ptrString(s string) *string { return &s }
-
 // fakeAgent implements the acp-go-sdk Agent interface for one behavior.
 type fakeAgent struct {
 	behavior string
@@ -138,6 +129,10 @@ func (a *fakeAgent) Logout(context.Context, acpsdk.LogoutRequest) (acpsdk.Logout
 }
 
 func (a *fakeAgent) Cancel(context.Context, acpsdk.CancelNotification) error { return nil }
+
+func (a *fakeAgent) DeleteSession(context.Context, acpsdk.DeleteSessionRequest) (acpsdk.DeleteSessionResponse, error) {
+	return acpsdk.DeleteSessionResponse{}, acpsdk.NewMethodNotFound(acpsdk.AgentMethodSessionDelete)
+}
 
 func (a *fakeAgent) CloseSession(context.Context, acpsdk.CloseSessionRequest) (acpsdk.CloseSessionResponse, error) {
 	return acpsdk.CloseSessionResponse{}, nil
@@ -178,8 +173,8 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.
 		if err := sendUpdate(ctx, currentConn, p.SessionId, acpsdk.SessionUpdate{ToolCallUpdate: &acpsdk.SessionToolCallUpdate{
 			SessionUpdate: "tool_call_update",
 			ToolCallId:    "cancel-test",
-			Title:         ptrString("waiting for cancellation"),
-			Status:        ptrStatus(acpsdk.ToolCallStatusInProgress),
+			Title:         acpsdk.PatchSet("waiting for cancellation"),
+			Status:        acpsdk.PatchSet(acpsdk.ToolCallStatusInProgress),
 		}}); err != nil {
 			return acpsdk.PromptResponse{}, err
 		}
@@ -237,8 +232,8 @@ func (a *fakeAgent) turnWork(ctx context.Context, p acpsdk.PromptRequest) (acpsd
 	if err := sendUpdate(ctx, conn, sid, acpsdk.SessionUpdate{ToolCallUpdate: &acpsdk.SessionToolCallUpdate{
 		SessionUpdate: "tool_call_update",
 		ToolCallId:    tool,
-		Title:         ptrString("run tests"),
-		Status:        ptrStatus(acpsdk.ToolCallStatusCompleted),
+		Title:         acpsdk.PatchSet("run tests"),
+		Status:        acpsdk.PatchSet(acpsdk.ToolCallStatusCompleted),
 	}}); err != nil {
 		return acpsdk.PromptResponse{}, err
 	}
@@ -271,7 +266,7 @@ func (a *fakeAgent) turnQuietTool(ctx context.Context, p acpsdk.PromptRequest) (
 		return cancelled(), nil
 	}
 	if err := sendUpdate(ctx, currentConn, p.SessionId, acpsdk.SessionUpdate{ToolCallUpdate: &acpsdk.SessionToolCallUpdate{
-		SessionUpdate: "tool_call_update", ToolCallId: tool, Title: ptrString("long build"), Status: ptrStatus(acpsdk.ToolCallStatusCompleted),
+		SessionUpdate: "tool_call_update", ToolCallId: tool, Title: acpsdk.PatchSet("long build"), Status: acpsdk.PatchSet(acpsdk.ToolCallStatusCompleted),
 	}}); err != nil {
 		return acpsdk.PromptResponse{}, err
 	}
@@ -320,8 +315,8 @@ func (a *fakeAgent) turnStream(ctx context.Context, p acpsdk.PromptRequest) (acp
 		if err := sendUpdate(ctx, conn, p.SessionId, acpsdk.SessionUpdate{ToolCallUpdate: &acpsdk.SessionToolCallUpdate{
 			SessionUpdate: "tool_call_update",
 			ToolCallId:    acpsdk.ToolCallId(fmt.Sprintf("tool-%d", i)),
-			Title:         ptrString(fmt.Sprintf("stream step %d", i)),
-			Status:        ptrStatus(acpsdk.ToolCallStatusInProgress),
+			Title:         acpsdk.PatchSet(fmt.Sprintf("stream step %d", i)),
+			Status:        acpsdk.PatchSet(acpsdk.ToolCallStatusInProgress),
 		}}); err != nil {
 			return acpsdk.PromptResponse{}, err
 		}
@@ -346,8 +341,8 @@ func (a *fakeAgent) turnPermission(ctx context.Context, p acpsdk.PromptRequest) 
 		SessionId: p.SessionId,
 		ToolCall: acpsdk.ToolCallUpdate{
 			ToolCallId: "tool-perm",
-			Title:      ptrString("run dangerous tool"),
-			Kind:       ptrKind(acpsdk.ToolKindExecute),
+			Title:      acpsdk.PatchSet("run dangerous tool"),
+			Kind:       acpsdk.PatchSet(acpsdk.ToolKindExecute),
 		},
 		Options: []acpsdk.PermissionOption{
 			{OptionId: "allow", Kind: acpsdk.PermissionOptionKindAllowOnce, Name: "Allow"},
@@ -397,7 +392,7 @@ func (a *fakeAgent) LoadSession(ctx context.Context, p acpsdk.LoadSessionRequest
 		for _, update := range []acpsdk.SessionUpdate{
 			{AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{SessionUpdate: "agent_message_chunk", Content: acpsdk.TextBlock("old replayed summary")}},
 			{ToolCall: &acpsdk.SessionUpdateToolCall{SessionUpdate: "tool_call", ToolCallId: "historical-tool", Title: "historical tool", Status: acpsdk.ToolCallStatusInProgress}},
-			{ToolCallUpdate: &acpsdk.SessionToolCallUpdate{SessionUpdate: "tool_call_update", ToolCallId: "historical-tool", Title: ptrString("historical tool"), Status: ptrStatus(acpsdk.ToolCallStatusCompleted)}},
+			{ToolCallUpdate: &acpsdk.SessionToolCallUpdate{SessionUpdate: "tool_call_update", ToolCallId: "historical-tool", Title: acpsdk.PatchSet("historical tool"), Status: acpsdk.PatchSet(acpsdk.ToolCallStatusCompleted)}},
 			{AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{SessionUpdate: "agent_message_chunk", Content: acpsdk.TextBlock("old replayed tail")}},
 		} {
 			if err := sendUpdate(ctx, currentConn, p.SessionId, update); err != nil {
@@ -406,7 +401,7 @@ func (a *fakeAgent) LoadSession(ctx context.Context, p acpsdk.LoadSessionRequest
 		}
 		return acpsdk.LoadSessionResponse{}, nil
 	case "resume-missing":
-		return acpsdk.LoadSessionResponse{}, &acpsdk.RequestError{Code: -32002, Message: "Resource not found", Data: map[string]string{"sessionId": string(p.SessionId)}}
+		return acpsdk.LoadSessionResponse{}, acpsdk.NewRequestError(-32002, "Resource not found", map[string]string{"sessionId": string(p.SessionId)})
 	case "resume-empty-rollout":
 		return acpsdk.LoadSessionResponse{}, acpsdk.NewInternalError(map[string]string{"details": "no rollout found for thread id " + string(p.SessionId)})
 	case "resume-internal-error":

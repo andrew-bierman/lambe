@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -62,7 +63,8 @@ func TestClientCallbacksRefuseUnadvertisedCapabilities(t *testing.T) {
 			if rpc.Code != -32601 {
 				t.Errorf("code = %d, want -32601 method not found", rpc.Code)
 			}
-			data, _ := rpc.Data.(map[string]any)
+			var data map[string]any
+			_ = json.Unmarshal(rpc.Data, &data)
 			if data["method"] != method {
 				t.Errorf("error data = %v, want method %q", rpc.Data, method)
 			}
@@ -95,7 +97,7 @@ func TestRequestPermissionAlwaysDenies(t *testing.T) {
 			sink := &recordingSink{}
 			cb := &clientCallbacks{sink: sink}
 			req := acpsdk.RequestPermissionRequest{Options: tc.options}
-			req.ToolCall.Title = &title
+			req.ToolCall.Title = acpsdk.PatchSet(title)
 			resp, err := cb.RequestPermission(t.Context(), req)
 			if err != nil {
 				t.Fatal(err)

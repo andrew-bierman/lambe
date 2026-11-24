@@ -266,6 +266,16 @@ func (c *clientCallbacks) WriteTextFile(context.Context, acpsdk.WriteTextFileReq
 	return acpsdk.WriteTextFileResponse{}, acpsdk.NewMethodNotFound("fs/writeTextFile")
 }
 
+// CreateElicitation is unsupported: lambe advertises no elicitation capability.
+func (c *clientCallbacks) CreateElicitation(context.Context, acpsdk.CreateElicitationRequest) (acpsdk.CreateElicitationResponse, error) {
+	return acpsdk.CreateElicitationResponse{}, acpsdk.NewMethodNotFound("elicitation/create")
+}
+
+// CompleteElicitation ignores the notification: lambe never starts an elicitation.
+func (c *clientCallbacks) CompleteElicitation(context.Context, acpsdk.CompleteElicitationNotification) error {
+	return nil
+}
+
 // CreateTerminal is unsupported: lambe advertises no terminal capability.
 func (c *clientCallbacks) CreateTerminal(context.Context, acpsdk.CreateTerminalRequest) (acpsdk.CreateTerminalResponse, error) {
 	return acpsdk.CreateTerminalResponse{}, acpsdk.NewMethodNotFound("terminal/create")
@@ -316,10 +326,7 @@ func (c *clientCallbacks) RequestPermission(_ context.Context, params acpsdk.Req
 			break
 		}
 	}
-	toolTitle := ""
-	if params.ToolCall.Title != nil {
-		toolTitle = *params.ToolCall.Title
-	}
+	toolTitle, _ := params.ToolCall.Title.Value()
 	c.sink.handlePermissionDenied(toolTitle)
 	return acpsdk.RequestPermissionResponse{Outcome: outcome}, nil
 }
@@ -465,9 +472,7 @@ func sessionRestoreError(err error, sessionID string) error {
 				SessionID string `json:"sessionId"`
 				Details   string `json:"details"`
 			}
-			if encoded, merr := json.Marshal(rpcErr.Data); merr == nil {
-				_ = json.Unmarshal(encoded, &data)
-			}
+			_ = json.Unmarshal(rpcErr.Data, &data) // absent or non-object data leaves it zero
 			// shortcut: codex-acp 2.6 reports empty rollouts as InternalError; remove that case when it uses resource-not-found.
 			if (rpcErr.Code == -32002 && data.SessionID == sessionID) || (rpcErr.Code == -32603 && data.Details == "no rollout found for thread id "+sessionID) {
 				return fmt.Errorf("%w: %w", ErrSessionNotFound, err)
