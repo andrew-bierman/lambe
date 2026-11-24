@@ -195,10 +195,11 @@ press Enter to queue it for the running supervisor's next poll. The demo adds
 the task to its in-memory queue. Pick **Show activity chart** for a breakdown
 of current runs and recent attempt outcomes.
 
-The TUI exits with Ctrl-C or `q`. Keybindings:
+The TUI exits with Ctrl-C or `q` (from run details, `q` first returns to the list). Press `?` for a scrollable help overlay listing every key and command for the current view; it is generated from the same key table as the footer hints. Keybindings:
 
 - `j`/`k` or `↑`/`↓` — move through the run list
-- `:` or `Ctrl-P` — search commands, inspect a run, or open a shell in its workspace or the Beads tracker
+- `?` — help overlay for the current view (`Esc` closes it)
+- `:` or `Ctrl-P` — fuzzy-search commands (each shows its key hint), inspect a run, or open a shell in its workspace or the Beads tracker
 - `1` / `2` / `3` — open Queue, Attention, or History directly
 - `a` — show retries, deferred or interrupted runs, and failed gates
 - `h` — switch between the run queue and recent attempt history

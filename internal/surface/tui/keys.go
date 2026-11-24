@@ -17,23 +17,28 @@ const (
 type keyMap struct {
 	focus *focusArea
 
-	Quit      key.Binding
-	Focus     key.Binding
-	OpenRun   key.Binding
-	Back      key.Binding
-	Help      key.Binding
-	Filter    key.Binding
-	History   key.Binding
-	Attention key.Binding
-	Commands  key.Binding
-	ScrollUp  key.Binding
-	ScrollDn  key.Binding
-	PageUp    key.Binding
-	PageDown  key.Binding
-	GoTop     key.Binding
-	GoBottom  key.Binding
-	ListUp    key.Binding
-	ListDown  key.Binding
+	Quit    key.Binding
+	Focus   key.Binding
+	OpenRun key.Binding
+	Back    key.Binding
+	Help    key.Binding
+	Filter  key.Binding
+	// FilterApply and FilterCancel only apply while the filter prompt is open.
+	FilterApply  key.Binding
+	FilterCancel key.Binding
+	Views        key.Binding
+	Close        key.Binding
+	History      key.Binding
+	Attention    key.Binding
+	Commands     key.Binding
+	ScrollUp     key.Binding
+	ScrollDn     key.Binding
+	PageUp       key.Binding
+	PageDown     key.Binding
+	GoTop        key.Binding
+	GoBottom     key.Binding
+	ListUp       key.Binding
+	ListDown     key.Binding
 }
 
 func defaultKeyMap(focus *focusArea) keyMap {
@@ -41,40 +46,44 @@ func defaultKeyMap(focus *focusArea) keyMap {
 		focus: focus,
 		Quit: key.NewBinding(
 			key.WithKeys("q", "ctrl+c"),
-			key.WithHelp("q", "quit"),
+			key.WithHelp("q", "back out of details, then quit"),
 		),
 		Focus: key.NewBinding(
 			key.WithKeys("tab"),
-			key.WithHelp("tab", "focus"),
+			key.WithHelp("tab", "switch list / details"),
 		),
-		OpenRun: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "details")),
-		Back:    key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "runs")),
+		OpenRun: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open details")),
+		Back:    key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back to runs")),
 		Help: key.NewBinding(
 			key.WithKeys("?"),
-			key.WithHelp("?", "help"),
+			key.WithHelp("?", "this help"),
 		),
-		Commands:  key.NewBinding(key.WithKeys(":", "ctrl+p"), key.WithHelp(":", "commands")),
-		Attention: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "attention")),
-		History:   key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "history")),
+		FilterApply:  key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "apply filter")),
+		FilterCancel: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear filter")),
+		Views:        key.NewBinding(key.WithKeys("1", "2", "3"), key.WithHelp("1-3", "queue / attn / history")),
+		Close:        key.NewBinding(key.WithKeys("esc", "q"), key.WithHelp("esc", "close help, palette or chart")),
+		Commands:     key.NewBinding(key.WithKeys(":", "ctrl+p"), key.WithHelp(": / ctrl+p", "command palette")),
+		Attention:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "attention view")),
+		History:      key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "history view")),
 		Filter: key.NewBinding(
 			key.WithKeys("/"),
-			key.WithHelp("/", "filter"),
+			key.WithHelp("/", "filter runs"),
 		),
 		ScrollUp: key.NewBinding(
 			key.WithKeys("up", "k"),
-			key.WithHelp("↑/k", "scroll"),
+			key.WithHelp("k/↑", "scroll up"),
 		),
 		ScrollDn: key.NewBinding(
 			key.WithKeys("down", "j"),
-			key.WithHelp("↓/j", "scroll"),
+			key.WithHelp("j/↓", "scroll down"),
 		),
 		PageUp: key.NewBinding(
 			key.WithKeys("pgup", "K", "u", "ctrl+u"),
-			key.WithHelp("u/pgup", "page up"),
+			key.WithHelp("u/pgup", "half page up"),
 		),
 		PageDown: key.NewBinding(
 			key.WithKeys("pgdown", "J", "d", "ctrl+d"),
-			key.WithHelp("d/pgdn", "page down"),
+			key.WithHelp("d/pgdn", "half page down"),
 		),
 		GoTop: key.NewBinding(
 			key.WithKeys("home", "g"),
@@ -82,32 +91,15 @@ func defaultKeyMap(focus *focusArea) keyMap {
 		),
 		GoBottom: key.NewBinding(
 			key.WithKeys("end", "G"),
-			key.WithHelp("G", "latest"),
+			key.WithHelp("G", "bottom / latest output"),
 		),
 		ListUp: key.NewBinding(
 			key.WithKeys("up", "k"),
-			key.WithHelp("↑/k", "run"),
+			key.WithHelp("k/↑", "previous run"),
 		),
 		ListDown: key.NewBinding(
 			key.WithKeys("down", "j"),
-			key.WithHelp("↓/j", "run"),
+			key.WithHelp("j/↓", "next run"),
 		),
-	}
-}
-
-// ShortHelp implements help.KeyMap. Hints depend on which pane has focus.
-func (k keyMap) ShortHelp() []key.Binding {
-	if k.focus != nil && *k.focus == focusDetail {
-		return []key.Binding{k.Back, k.Commands, k.History, k.ScrollUp, k.GoBottom, k.Focus, k.Help, k.Quit}
-	}
-	return []key.Binding{k.OpenRun, k.Commands, k.Attention, k.History, k.Filter, k.ListDown, k.Help, k.Quit}
-}
-
-// FullHelp implements help.KeyMap.
-func (k keyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{
-		{k.ListUp, k.ListDown, k.Focus, k.Filter, k.History, k.Attention},
-		{k.ScrollUp, k.ScrollDn, k.PageUp, k.PageDown},
-		{k.GoTop, k.GoBottom, k.Help, k.Quit},
 	}
 }

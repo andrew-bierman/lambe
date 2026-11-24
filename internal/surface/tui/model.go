@@ -84,6 +84,8 @@ type Model struct {
 	queueWorkflows []QueueWorkflow
 	queuePending   bool
 	showActivity   bool
+	showHelp       bool
+	helpVP         viewport.Model
 	readiness      func() ([]tracker.ReadinessRow, error)
 	upcoming       []daemon.LiveRun
 	readinessErr   error
@@ -190,6 +192,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.layout()
 		m.refreshDetail(follow)
+		if m.showHelp {
+			m.layoutHelp()
+		}
 		return m, nil
 
 	case snapshotMsg:
@@ -277,11 +282,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case tea.KeyMsg:
+		if m.showHelp {
+			return m, m.updateHelp(msg)
+		}
 		if m.showActivity {
 			switch msg.Type {
 			case tea.KeyCtrlC:
 				return m, tea.Quit
 			case tea.KeyEsc, tea.KeyEnter:
+				m.showActivity = false
+			}
+			if key.Matches(msg, m.keys.Close) {
 				m.showActivity = false
 			}
 			if key.Matches(msg, m.keys.Commands) {
@@ -302,7 +313,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.MouseMsg:
-		if m.palette != nil || m.showActivity {
+		if m.palette != nil || m.showActivity || m.showHelp {
 			return m, nil
 		}
 		if m.list.FilterState() != list.Filtering && (msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown) {
@@ -334,6 +345,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch {
+	case m.focus == focusDetail && msg.String() == "q":
+		m.setFocus(focusList) // back out before quitting
+		return m, nil
 	case key.Matches(msg, m.keys.Quit):
 		return m, tea.Quit
 	case key.Matches(msg, m.keys.Focus):
@@ -367,14 +381,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.setHistory(!m.showHistory)
 		return m, nil
 	case key.Matches(msg, m.keys.Help):
-		follow := !m.showHistory && !m.showAttention && m.detail.AtBottom()
-		m.help.ShowAll = !m.help.ShowAll
-		m.layout()
-		if follow {
-			m.detail.GotoBottom()
-		} else {
-			m.detail.SetYOffset(m.detail.YOffset)
-		}
+		m.openHelp()
 		return m, nil
 	case key.Matches(msg, m.keys.Filter):
 		if m.width < splitWidth {
@@ -461,16 +468,6 @@ func (m *Model) setQueueView(history, attention bool) {
 		return
 	}
 	m.showHistory, m.showAttention = history, attention
-	if attention {
-		m.keys.Attention.SetHelp("a", "queue")
-	} else {
-		m.keys.Attention.SetHelp("a", "attention")
-	}
-	if history {
-		m.keys.History.SetHelp("h", "queue")
-	} else {
-		m.keys.History.SetHelp("h", "history")
-	}
 	m.setFocus(focusList)
 	m.list.ResetSelected()
 	m.selectedID = ""
@@ -485,6 +482,9 @@ func (m *Model) setQueueView(history, attention bool) {
 func (m *Model) View() string {
 	if m.width == 0 || m.height == 0 {
 		return "Initializing..."
+	}
+	if m.showHelp {
+		return m.renderHelp()
 	}
 	if m.showActivity {
 		return m.renderActivity()
