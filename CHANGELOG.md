@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-25
+
 ### Added
 
 - `lambe enqueue --json` prints one object (`schema_version`, `issue`, `workflow`, `applied`, `would_add_label`) instead of prose; exit codes are unchanged.
@@ -14,12 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- ACP agent teardown no longer always waits the full 3 s after the agent exits: it stops waiting as soon as the SDK has read the agent's stdout to EOF (thanks @harryhawwy69, #131). If a descendant keeps the pipe open the 3 s bound still applies.
 - Dependencies: `github.com/coder/acp-go-sdk` v0.13.5 to v0.20.0 (tool-call update fields are now `Patch` values, error data is raw JSON; no behavior change for supervised agents; verified against codex-acp and opencode).
 
 ### Fixed
 
 - Daemon: a SIGHUP config reload no longer races the heartbeat, tick, and state-surface goroutines; the running config is now published as an atomic snapshot that every reader loads.
 - A config file or `WORKFLOW.md` larger than 1 MiB is now rejected up front instead of being handed to the YAML parser, whose duplicate-key handling is quadratic on hostile input.
+
+### Contributors
+
+Thanks to @harryhawwy69 (#98, #126, #130, #131) and @avaldivieso-meraki (#85).
 
 ## [0.12.0] - 2026-11-24
 
@@ -317,7 +324,8 @@ Thanks to @harryhawwy69 (#97, #99, #100, #128, #129) and @avaldivieso-meraki for
   exposed via the `lambe` binary (`run`, `status`, `version`).
 - Documentation and CI.
 
-[Unreleased]: https://github.com/andrew-bierman/lambe/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/andrew-bierman/lambe/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/andrew-bierman/lambe/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/andrew-bierman/lambe/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/andrew-bierman/lambe/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/andrew-bierman/lambe/compare/v0.10.1...v0.11.0
