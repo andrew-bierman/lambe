@@ -37,7 +37,12 @@ return function(T)
       local last = argv[#argv]
       for i, a in ipairs(argv) do
         if a == "doctor" then return stub.doctor end
-        if a == "logs" and argv[i + 1] == "-json" then return { code = 0, stdout = encode(stub.snapshot) } end
+        if a == "logs" and argv[i + 1] == "-json" then
+          if argv[i + 2] == "-brief" and stub.old_lambe then
+            return { code = 2, stderr = "flag provided but not defined: -brief\n" }
+          end
+          return { code = 0, stdout = encode(stub.snapshot) }
+        end
       end
       return nil, "unexpected command " .. tostring(last)
     end
@@ -93,12 +98,23 @@ return function(T)
     T.eq(table.concat(window_command(stub, 1), " "), BIN .. " logs -issue ac-1 -follow", "command")
   end)
 
+  T.test("an older lambe without -brief falls back to plain -json once", function()
+    local stub = boot("p21", { bin = BIN })
+    stub.old_lambe = true
+    stub.answers = { "ac-1", "ac-1" }
+    T.ok(stub.run("lambe_open_run"))
+    T.eq(table.concat(stub.execs[1].argv, " "), BIN .. " logs -json -brief", "first try")
+    T.eq(table.concat(stub.execs[2].argv, " "), BIN .. " logs -json", "fallback")
+    T.ok(stub.run("lambe_open_run"))
+    T.eq(table.concat(stub.execs[3].argv, " "), BIN .. " logs -json", "later reads skip the probe")
+  end)
+
   T.test("config and state dir reach both the snapshot read and the terminal", function()
     local stub = boot("p21", { bin = BIN, config = "/etc/l.toml", state_dir = "/var/s" })
     stub.answers = { "ac-1" }
     T.ok(stub.run("lambe_open_run"))
     T.eq(stub.execs[1].opts.env.LAMBE_STATE_DIR, "/var/s", "exec env option")
-    T.eq(table.concat(stub.execs[1].argv, " "), BIN .. " logs -json -config /etc/l.toml", "snapshot argv")
+    T.eq(table.concat(stub.execs[1].argv, " "), BIN .. " logs -json -brief -config /etc/l.toml", "snapshot argv")
     T.eq(table.concat(window_command(stub, 1), " "),
       "env LAMBE_STATE_DIR=/var/s " .. BIN .. " logs -issue ac-1 -follow -config /etc/l.toml", "terminal argv")
   end)
@@ -219,7 +235,7 @@ return function(T)
     host.getenv = function(name) return env[name] end
     stub.answers = { "ac-1" }
     T.ok(stub.run("lambe_open_run"))
-    T.eq(table.concat(stub.execs[1].argv, " "), '/bin/zsh -l -c exec "$@" lambe lambe logs -json', "wrapped")
+    T.eq(table.concat(stub.execs[1].argv, " "), '/bin/zsh -l -c exec "$@" lambe lambe logs -json -brief', "wrapped")
     env.SHELL = nil
     stub.answers = { "ac-1" }
     T.ok(stub.run("lambe_open_run"))

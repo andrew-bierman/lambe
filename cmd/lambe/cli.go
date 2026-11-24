@@ -204,14 +204,17 @@ examples:
   lambe service uninstall
 `},
 	{"setup", "install editor/terminal integrations (rex)", `usage:
-  lambe setup rex [--apply] [--uninstall] [--force] [--dir DIR]
+  lambe setup rex [--apply] [--uninstall] [--force] [--no-init] [--keys] [--json] [--dir DIR]
 
 Dry run by default: nothing is written without --apply.
 
 flags:
   --apply       write the changes
-  --uninstall   remove the managed lambe.lua
+  --uninstall   remove the managed lambe.lua and the init.lua block
   --force       replace or remove a lambe.lua you modified
+  --no-init     leave init.lua alone (print the line to add instead)
+  --keys        bind suggested keys under a prefix (skips keys already bound)
+  --json        print the plan or result as JSON
   --dir DIR     Rex config directory (default: Rex's own)
 
 examples:
@@ -219,14 +222,17 @@ examples:
   lambe setup rex --apply
 `},
 	{"setup rex", "", `usage:
-  lambe setup rex [--apply] [--uninstall] [--force] [--dir DIR]
+  lambe setup rex [--apply] [--uninstall] [--force] [--no-init] [--keys] [--json] [--dir DIR]
 
 Dry run by default: nothing is written without --apply.
 
 flags:
   --apply       write the changes
-  --uninstall   remove the managed lambe.lua
+  --uninstall   remove the managed lambe.lua and the init.lua block
   --force       replace or remove a lambe.lua you modified
+  --no-init     leave init.lua alone (print the line to add instead)
+  --keys        bind suggested keys under a prefix (skips keys already bound)
+  --json        print the plan or result as JSON
   --dir DIR     Rex config directory (default: Rex's own)
 
 examples:
