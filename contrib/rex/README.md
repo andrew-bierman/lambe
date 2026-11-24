@@ -58,15 +58,10 @@ its own settings, so the picker never disagrees with the dashboard.
 `LAMBE_REX_BIN`, `LAMBE_REX_CONFIG`, and `LAMBE_REX_STATE_DIR` in the Rex
 server's environment take precedence.
 
-For a headless stand-in for the palette (no app, no focus change):
-
-```sh
-LAMBE_REX_LUA=~/.config/rex/lambe.lua rex do contrib/rex/check.lua
-```
-
-`check.lua` loads the installed shim with a stubbed `rex`, answers each picker
-with its first row, and prints `PASS` plus the rows. It needs a live Lambe
-snapshot.
+`rex do lambe_check` runs in the server's own environment and returns a report
+(plugin version, API revision, whether pickers are available, the binary in
+use, and `lambe doctor` output); it fails if `lambe doctor` fails. Add
+`--json` for machine-readable output.
 
 ## `lambe setup rex`
 
@@ -172,3 +167,21 @@ it calls `dofile` on `lambe.lua`.
 
 **`lambe tui -demo` rejects `-config`.** The demo never takes a config; it
 uses sample data.
+
+## Developing
+
+The Lua lives in `lua/`; `lambe setup rex` embeds and installs it. The tests
+need only `luajit` (Rex runs Lua 5.1, which luajit implements):
+
+```sh
+luajit contrib/rex/test/run.lua                  # all specs
+UPDATE_GOLDEN=1 luajit contrib/rex/test/run.lua  # rewrite test/golden/rows.txt
+```
+
+`test/rexstub.lua` is a strict stand-in for the `rex` table: it rejects invalid
+action names, picker items, and exec arguments, models the restricted APIs
+while a config loads, and exposes version profiles `p16` (API 13), `p19`
+(API 14, no `rex.ui`), and `p21` (API 18). All `rex.*` access in the plugin
+goes through `lua/lambe/host.lua`, so the stub covers the whole surface. CI
+runs the suite in the `rex-lua` job; `go test ./contrib/...` runs it too when
+luajit is installed.

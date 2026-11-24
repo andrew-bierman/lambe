@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `lambe status -json` (and the state API) emit `[]`, never `null`, for empty `runs`, `needs_human` and `gate_rejections`.
 
+### Added
+
+- A luajit test suite for the Rex integration (`luajit contrib/rex/test/run.lua`, CI job `rex-lua`) with a strict `rex` stub, version profiles for Rex preview.16, .19, and .21, and golden picker rows. `lambe_check` now returns a machine-readable report (plugin version, Rex API revision, picker availability, binary, doctor output) and fails when `lambe doctor` fails.
+
+### Removed
+
+- `contrib/rex/check.lua`, replaced by the hermetic suite and the live `lambe_check` action.
+
 ## [0.11.1] - 2026-11-22
 
 ### Fixed

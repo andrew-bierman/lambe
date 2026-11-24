@@ -173,20 +173,22 @@ local function register_all()
     keywords = "lambe doctor check setup troubleshoot path",
     args = { config = "string?" },
     run = function(_, args)
-      local revision = host.api_revision()
-      local picker, why = host.picker_support()
-      local lines = {
-        "lambe-rex v" .. version.VERSION,
-        "rex api revision: " .. (revision and tostring(revision) or "unknown"),
-        "pickers: " .. (picker and "available" or ("unavailable: " .. why)),
-        "lambe binary: " .. exec.bin(),
-        "",
+      local picker, note = host.picker_support()
+      local report = {
+        version = version.VERSION,
+        api_revision = host.api_revision(),
+        pickers = picker,
+        picker_note = note,
+        bin = exec.bin(),
       }
       local r = exec.run(exec.command({ "doctor" }, args.config, true), 30)
       host.log(r.ok and "info" or "warn", "Lambe doctor exit " .. tostring(r.code))
-      lines[#lines + 1] = r.stdout .. r.stderr
-      local report = table.concat(lines, "\n")
-      if not r.ok then error(report, 0) end
+      report.doctor = { ok = r.ok, code = r.code, output = r.stdout .. r.stderr }
+      -- A failed check must fail the caller (exit status of `rex do`), and
+      -- the message carries the whole report.
+      if not r.ok then
+        error(string.format("Lambe: lambe doctor failed (exit %s) using %s\n%s", tostring(r.code), report.bin, report.doctor.output), 0)
+      end
       return report
     end,
   }

@@ -1,0 +1,40 @@
+== alive picker_items
+  ac-1 | Fix the login redirect | ● build · running · attempt 1 · turn 3 | terminal | ac-1
+  ac-2 | ac-2 | ● build · gating · attempt 2 · turn 4 | terminal | ac-2
+  ac-3 | Old cleanup | ○ review · archived · stopped: gate escalation · attempt 3 · turn 9 | clock | ac-3
+== alive workflow_items
+  build | build | 3 runs, current and archived | tag | 
+  review | review | 1 run, current and archived | tag | 
+== stopped_daemon picker_items
+  ac-9 | Wedged run | ◌ build · daemon stopped · running · attempt 0 · turn 0 | terminal | ac-9
+  ac-8 | Finished | ● build · stopped: done · attempt 1 · turn 2 | terminal | ac-8
+== stopped_daemon workflow_items
+  build | build | 2 runs, current and archived | tag | 
+== legacy_no_alive picker_items
+  x-1 | Legacy build | ● legacy-blocked · attempt 0 · turn 0 | terminal | x-1
+== legacy_no_alive workflow_items
+  (none)
+== unicode picker_items
+  ac-7 | Résumé ünïcode · 日本語 titles | ● plan · running · attempt 1 · turn 1 | terminal | ac-7
+== unicode workflow_items
+  plan | plan | 1 run, current and archived | tag | 
+== empty picker_items
+  (none)
+== empty workflow_items
+  (none)
+== two_workflows picker_items
+  a-1 | A | ● build · running · attempt 1 · turn 1 | terminal | a-1
+  a-2 | B | ● review · running · attempt 1 · turn 1 | terminal | a-2
+  a-3 | C | ● build · running · attempt 1 · turn 1 | terminal | a-3
+  a-4 | D | ○ review · archived · stopped: done · attempt 1 · turn 1 | clock | a-4
+== two_workflows workflow_items
+  build | build | 2 runs, current and archived | tag | 
+  review | review | 2 runs, current and archived | tag | 
+== two_workflows picker_items(build)
+  a-1 | A | ● build · running · attempt 1 · turn 1 | terminal | a-1
+  a-3 | C | ● build · running · attempt 1 · turn 1 | terminal | a-3
+== run_title
+  ac-1 · build · running
+  ac-3 · review · stopped: gate escalation
+  nope
+  ac-1
