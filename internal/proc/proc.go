@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Package proc provides the process-supervision primitives every agent
 // driver builds on: spawning children in their own process groups, an
 // LF-strict JSONL frame reader, the SIGTERM → bounded grace → SIGKILL group

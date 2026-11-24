@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Package logging builds the daemon's slog logger and the per-operation
 // enrichment helpers.
 //
