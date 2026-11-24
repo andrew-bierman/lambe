@@ -11,11 +11,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/andrew-bierman/lambe/internal/config"
+	"github.com/andrew-bierman/lambe/internal/surface/rex"
 	"github.com/andrew-bierman/lambe/internal/symphony"
 	"github.com/andrew-bierman/lambe/internal/tracker"
 )
@@ -450,4 +452,66 @@ func TestRunSIGHUPKeepsConfigOnInvalidReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireLogOrder(t, logs, "reload requested", "config reload rejected, keeping running config", "lambe daemon stopped")
+}
+
+// clearProbe is a Rex output writer that, at the moment the shutdown clear
+// sequence is written, records the surrounding teardown state.
+type clearProbe struct {
+	stateDir string
+	cfg      *config.Config
+	mu       sync.Mutex
+	cleared  bool
+	descGone bool
+	lockHeld bool
+}
+
+func (p *clearProbe) Write(b []byte) (int, error) {
+	if strings.Contains(string(b), "state=clear") {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		p.cleared = true
+		_, err := os.Stat(StateAPIPath(p.stateDir, p.cfg))
+		p.descGone = os.IsNotExist(err)
+		probe, lockErr := AcquireStateLock(filepath.Join(p.stateDir, InstanceLockName(p.cfg)))
+		if probe != nil {
+			_ = probe.Release()
+		}
+		p.lockHeld = errors.Is(lockErr, ErrLockHeld)
+	}
+	return len(b), nil
+}
+
+// TestRunShutdownClearsRexSurfaceAfterStateAPIBeforeLockRelease pins the
+// teardown order: the state surface descriptor is removed first, then the Rex
+// badges are cleared and only then does the
+// instance lock return.
+func TestRunShutdownClearsRexSurfaceAfterStateAPIBeforeLockRelease(t *testing.T) {
+	t.Parallel()
+	stateDir := t.TempDir()
+	cfg := stateAPIConfig(t.TempDir(), true)
+	probe := &clearProbe{stateDir: stateDir, cfg: cfg}
+	opts := testDaemonOptions(stateDir, cfg, nil)
+	opts.Wire = func(a *Assembly) error {
+		a.Trackers = []tracker.Tracker{newFakeTracker()}
+		a.Surface = rex.NewAdapter(rex.Availability{Available: true}, &fakeRexClient{}, probe)
+		return nil
+	}
+	cancel, runDone := startTestDaemon(t, opts)
+	waitForDescriptor(t, StateAPIPath(stateDir, cfg), 15*time.Second)
+	cancel()
+	if err := waitRun(t, runDone); err != nil {
+		t.Fatal(err)
+	}
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	if !probe.cleared {
+		t.Fatal("shutdown never cleared the Rex surface")
+	}
+	if !probe.descGone {
+		t.Error("clear ran while the state descriptor was still advertised")
+	}
+	if !probe.lockHeld {
+		t.Error("clear ran after the instance lock was released")
+	}
+	requireLockFree(t, stateDir, cfg)
 }
