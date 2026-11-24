@@ -72,10 +72,6 @@ func stalledFor(run daemon.LiveRun, live bool, now time.Time) time.Duration {
 	return 0
 }
 
-func (i runItem) FilterValue() string {
-	return strings.Join([]string{i.run.IssueID, i.run.Title, i.run.Phase}, " ")
-}
-
 // Model is the Bubble Tea dashboard model.
 type Model struct {
 	path           string
@@ -95,10 +91,11 @@ type Model struct {
 	sessionContext context.Context
 	agentSession   agentSessionMsg
 
-	list    list.Model
-	detail  viewport.Model
-	help    help.Model
-	spinner spinner.Model
+	list        list.Model
+	filterTerms []filterTerm // parsed active filter, for match highlighting
+	detail      viewport.Model
+	help        help.Model
+	spinner     spinner.Model
 
 	snapshot        daemon.LiveSnapshot
 	alive           bool
@@ -153,6 +150,7 @@ func New(path string) *Model {
 	m.list.SetShowPagination(false)
 	m.list.SetShowFilter(false) // the table draws its own filter prompt
 	m.list.FilterInput.Prompt = "/ "
+	m.list.Filter = filterRuns
 	m.list.DisableQuitKeybindings()
 
 	m.detail = viewport.New(0, 0)
@@ -474,7 +472,6 @@ func (m *Model) setQueueView(history, attention bool) {
 		m.keys.History.SetHelp("h", "history")
 	}
 	m.setFocus(focusList)
-	m.list.ResetFilter()
 	m.list.ResetSelected()
 	m.selectedID = ""
 	m.setRuns(m.visibleRuns())

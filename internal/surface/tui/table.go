@@ -147,11 +147,13 @@ func (m *Model) tableHeader(c tableCols) string {
 
 func (m *Model) filterHeader(width int) string {
 	style := lipgloss.NewStyle().Background(colBarBg).Width(width).MaxWidth(width)
+	count := dimStyle.Render(fmt.Sprintf("  (%d of %d)", len(m.list.VisibleItems()), len(m.list.Items())))
 	if m.list.FilterState() == list.Filtering {
-		return style.Render(ansi.Truncate(m.list.FilterInput.View(), width, ""))
+		// The input pads itself to its width, so reserve room for the count on the right.
+		return style.Render(ansi.Truncate(m.list.FilterInput.View(), max(0, width-lipgloss.Width(count)), "") + count)
 	}
 	text := lipgloss.NewStyle().Foreground(accentColor).Bold(true).Render("/ "+m.list.FilterValue()) +
-		dimStyle.Render("  esc clears")
+		count + dimStyle.Render("  esc clears")
 	return style.Render(ansi.Truncate(text, width, "…"))
 }
 
@@ -181,19 +183,19 @@ func (m *Model) renderRow(item runItem, c tableCols, selected bool, now time.Tim
 	if stalled {
 		age, ageStyle = ageText(stalledFor(item.run, true, now)), redStyle
 	}
-	titleCell := st(titleStyle).Render(pad(title, c.title, false))
+	titleCell := m.cell(title, c.title, false, st(titleStyle), fTitle)
 	if suffix := fmt.Sprintf(" ×%d", item.attempts); item.attempts > 1 && c.title > len(suffix)+8 {
-		titleCell = st(titleStyle).Render(pad(title, c.title-len(suffix), false)) + st(dimStyle).Render(suffix)
+		titleCell = m.cell(title, c.title-len(suffix), false, st(titleStyle), fTitle) + st(dimStyle).Render(suffix)
 	}
 	parts := []string{
 		marker + st(phaseStyle).Render(icon) + st(lipgloss.NewStyle()).Render(" "),
-		st(valueStyle.Bold(selected)).Render(pad(item.run.IssueID, c.id, false)),
+		m.cell(item.run.IssueID, c.id, false, st(valueStyle.Bold(selected)), fID),
 		st(lipgloss.NewStyle()).Render(" "),
 		titleCell,
 	}
 	if c.showPhase {
 		parts = append(parts, st(lipgloss.NewStyle()).Render(" "),
-			st(phaseStyle.Bold(false)).Render(pad(phaseWord(item.run.Phase, stalled), phaseColWidth, false)))
+			m.cell(phaseWord(item.run.Phase, stalled), phaseColWidth, false, st(phaseStyle.Bold(false)), fPhase))
 	}
 	parts = append(parts, st(lipgloss.NewStyle()).Render(" "), st(ageStyle).Render(pad(age, ageColWidth, true)))
 	row := strings.Join(parts, "")
@@ -203,7 +205,7 @@ func (m *Model) renderRow(item runItem, c tableCols, selected bool, now time.Tim
 func (m *Model) emptyMessage() []string {
 	switch {
 	case m.list.FilterState() != list.Unfiltered:
-		return []string{"No runs match the filter."}
+		return []string{"No runs match /" + m.list.FilterValue(), "Try phase:stalled, wf:NAME or id:PREFIX. esc clears."}
 	case m.showHistory:
 		return []string{"No past attempts yet.", "Finished runs land here."}
 	case m.showAttention:
@@ -219,6 +221,10 @@ func (m *Model) renderTable(width, height int) string {
 		return ""
 	}
 	now := clock()
+	m.filterTerms = nil
+	if m.list.FilterState() != list.Unfiltered {
+		m.filterTerms = parseFilter(m.list.FilterValue())
+	}
 	cols := resolveCols(width, m.idWidth())
 	var lines []string
 	if m.colHeader {

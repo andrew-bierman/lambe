@@ -1,0 +1,30 @@
+ lambe   ● running  demo  ⚠ 1 stalled  2 active · 1 waiting                        updated 12:00:00
+ 1 Queue 7 │ 2 Attention 3 │ 3 History 5
+━━━━━━━━━━━─────────────────────────────────────────────────────────────────────────────────────────
+/ stalled  (1 of 7)  esc clears                            │ demo-43  ⚠ stalled  silent 4m
+▌⚠ demo-43 Recheck the artifact checksum   stalled       4m│ Recheck the artifact checksum
+                                                           │ attempt 1 · turn 0
+                                                           │ ── Agent output ──────────────────────
+                                                           │ Build finished. Verifying the release
+                                                           │ manifest.
+                                                           │
+                                                           │
+                                                           │
+                                                           │
+                                                           │
+                                                           │
+                                                           │
+                                                           │
+                                                           │
+                                                           │
+                                                           │
+                                                           │
+                                                           │
+                                                           │
+                                                           │
+                                                           │
+                                                           │
+                                                           │
+                                                           │
+                                                           │
+ enter open  : cmd  ? help  q quit  1-3 views  / filter  j/k move                               1/1
