@@ -335,6 +335,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.live = view
 	view.start()
 	defer view.close()
+	defer d.asm.Registry.ClearSurface()
 
 	// The state surface binds after the instance lock is held and the
 	// trackers are open: its descriptor advertises a listener only this
@@ -435,7 +436,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 				}
 			}
 		}
-		l.Observe = view.progress
+		l.Observe = func(p symphony.Progress) {
+			view.progress(p)
+			d.asm.Registry.ObservePhase(p.IssueID, p.Phase)
+		}
 		rejections := NewGateRejectionLog(GateRejectionLogPath(d.opts.StateDir, d.opts.Config))
 		l.OnGateRed = func(issue string, attempt int, output string) {
 			if err := rejections.Record(issue, attempt, output, time.Now()); err != nil {

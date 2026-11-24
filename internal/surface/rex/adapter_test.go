@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -154,5 +155,48 @@ func TestAdapterUnknownEventIgnored(t *testing.T) {
 	a := newTestAdapter(true, &fakeClient{}, &bytes.Buffer{})
 	if err := a.Handle(context.Background(), testIgnoredEvent{}); err != nil {
 		t.Fatalf("unknown event should be ignored, got %v", err)
+	}
+}
+
+func TestAdapterEmitsPerRunBlockedAndClears(t *testing.T) {
+	var out bytes.Buffer
+	a := newTestAdapter(true, &fakeClient{}, &out)
+	ctx := context.Background()
+	evs := []RunEvent{
+		RunStateEvent{State: RunStateBlocked, Block: BlockGateEscalated, RunID: "ac-1", Msg: "ac-1: gate escalation"},
+		RunStateEvent{State: RunStateRunning, RunID: "ac-2"},
+		RunClearedEvent{RunID: "ac-1"},
+		RunClearedEvent{},
+	}
+	for _, ev := range evs {
+		if err := a.Handle(ctx, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := out.String()
+	for _, want := range []string{
+		"state=blocked:kind=permission:id=lambe/ac-1:",
+		"state=working:id=lambe/ac-2:",
+		"state=clear:id=lambe/ac-1\x1b\\",
+		"state=clear:id=lambe\x1b\\",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output %q missing %q", got, want)
+		}
+	}
+}
+
+func TestAdapterSkipsBadgesWhenOutputIsNotATerminal(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	a := NewAdapter(Availability{Available: true}, &fakeClient{}, f)
+	if err := a.Handle(context.Background(), RunStateEvent{State: RunStateRunning}); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := f.Stat(); fi.Size() != 0 {
+		t.Errorf("a regular file received %d bytes of escape sequences", fi.Size())
 	}
 }

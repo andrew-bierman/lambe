@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 )
 
@@ -26,10 +27,25 @@ type RunStartedEvent struct {
 type RunStateEvent struct {
 	// State is the run's new state.
 	State RunState
+	// RunID is the run's issue id. When set the badge goes to the per-run
+	// record "lambe/<RunID>"; when empty it goes to the root record.
+	RunID string
+	// Block says why a RunStateBlocked run needs a human.
+	Block Block
+	// Msg is the badge's one-line message; when empty it is the state name.
+	Msg string
+}
+
+// RunClearedEvent removes a run's badge record (or every lambe record when
+// RunID is empty), for a run or daemon that has exited.
+type RunClearedEvent struct {
+	// RunID is the run whose record to remove; empty clears them all.
+	RunID string
 }
 
 func (RunStartedEvent) runEvent() {}
 func (RunStateEvent) runEvent()   {}
+func (RunClearedEvent) runEvent() {}
 
 // Adapter wires run lifecycle events to the two Rex surfaces: OSC 7501
 // status badges on the writer (lambe's terminal) and one reused Rex session
@@ -42,7 +58,8 @@ type Adapter struct {
 	available bool
 	// client creates and reads Rex sessions.
 	client Client
-	// out receives OSC 7501 escape sequences.
+	// out receives OSC 7501 escape sequences; nil when the writer is not a
+	// terminal.
 	out io.Writer
 	// sessions records the session in use for each agent name.
 	sessions map[string]Session
@@ -51,6 +68,13 @@ type Adapter struct {
 // NewAdapter returns an Adapter for the given availability. When av reports
 // Rex absent the adapter silently no-ops every event.
 func NewAdapter(av Availability, client Client, out io.Writer) *Adapter {
+	// Under launchd or systemd the daemon's stdout is a log file, where
+	// escape sequences are just noise; only a terminal gets badges.
+	if f, ok := out.(*os.File); ok {
+		if fi, err := f.Stat(); err != nil || fi.Mode()&os.ModeCharDevice == 0 {
+			out = nil
+		}
+	}
 	return &Adapter{
 		available: av.Available,
 		client:    client,
@@ -71,7 +95,12 @@ func (a *Adapter) Handle(ctx context.Context, ev RunEvent) error {
 	case RunStartedEvent:
 		return a.startRun(ctx, e)
 	case RunStateEvent:
-		return a.emitState(e.State)
+		return a.emitState(e)
+	case RunClearedEvent:
+		if a.out == nil {
+			return nil
+		}
+		return Clear(a.out, e.RunID)
 	default:
 		return nil
 	}
@@ -110,8 +139,15 @@ func (a *Adapter) startRun(ctx context.Context, ev RunStartedEvent) error {
 }
 
 // emitState maps a run state to its badge and writes the escape sequence.
-func (a *Adapter) emitState(state RunState) error {
-	return EmitStatus(a.out, MapRunState(state), state.String())
+func (a *Adapter) emitState(e RunStateEvent) error {
+	if a.out == nil {
+		return nil
+	}
+	msg := e.Msg
+	if msg == "" {
+		msg = e.State.String()
+	}
+	return Emit(a.out, Report{Status: MapRunState(e.State), Block: e.Block, ID: e.RunID, Title: e.RunID, Msg: msg})
 }
 
 // Sessions returns the sessions created so far, keyed by agent name.
