@@ -57,7 +57,7 @@ tree without --tracker PATH.
 
 flags:
   --config FILE       where to write the config (default: the user config path)
-  --harness NAME      agent backend: pi, codex, or acp (default pi)
+  --harness pi|codex|acp  agent backend (default pi)
   --tracker PATH      adopt the Beads tracker at PATH (needed to use a tracker above the current directory)
   --non-interactive   never prompt; refuse instead of asking
 
@@ -173,7 +173,7 @@ flags:
   --force         replace a different existing unit
   --label NAME    launchd label / systemd unit name (isolated installs)
   --root DIR      write the unit under DIR instead of $HOME; never call launchctl/systemctl
-  --manager NAME  launchd or systemd (default: by OS)
+  --manager launchd|systemd  service manager (default: by OS)
 
 examples:
   lambe service install --dry-run
@@ -187,7 +187,7 @@ Exits 1 if the service is not installed or not running.
 flags:
   --label NAME    launchd label / systemd unit name
   --root DIR      look under DIR instead of $HOME
-  --manager NAME  launchd or systemd (default: by OS)
+  --manager launchd|systemd  service manager (default: by OS)
 
 examples:
   lambe service status
@@ -198,7 +198,7 @@ examples:
 flags:
   --label NAME    launchd label / systemd unit name
   --root DIR      remove from under DIR instead of $HOME
-  --manager NAME  launchd or systemd (default: by OS)
+  --manager launchd|systemd  service manager (default: by OS)
 
 examples:
   lambe service uninstall
@@ -293,6 +293,18 @@ examples:
   lambe version
   lambe version --json
 `},
+	{"completion", "print a shell completion script (bash, zsh, fish)", `usage:
+  lambe completion bash|zsh|fish
+
+Prints the completion script for your shell on stdout. Homebrew and the
+deb/rpm/apk packages install it for you; see docs/REFERENCE.md for manual
+installation.
+
+examples:
+  source <(lambe completion bash)
+  lambe completion zsh > "${fpath[1]}/_lambe"
+  lambe completion fish > ~/.config/fish/completions/lambe.fish
+`},
 	{"help", "show help for a command", `usage:
   lambe help [COMMAND [SUBCOMMAND]]
 
@@ -354,7 +366,7 @@ func helpRequested(args []string) bool {
 // isCommand reports whether name is a dispatchable command.
 func isCommand(name string) bool {
 	switch name {
-	case "init", "run", "status", "state-dir", "claims", "doctor", "service", "setup", "mcp", "logs", "enqueue", "tui", "version":
+	case "init", "run", "status", "state-dir", "claims", "doctor", "service", "setup", "mcp", "logs", "enqueue", "tui", "version", "completion":
 		return true
 	}
 	return false
@@ -443,6 +455,8 @@ func dispatch(name string, args []string, in io.Reader, out io.Writer) error {
 		return runStateDir(args, dir, source, out)
 	case "mcp":
 		return runMCP(args)
+	case "completion":
+		return runCompletion(args, out)
 	}
 	return usageError{fmt.Errorf("unknown command %q", name)}
 }
