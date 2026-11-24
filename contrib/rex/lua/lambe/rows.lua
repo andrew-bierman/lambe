@@ -2,6 +2,9 @@
 -- rex.* calls, so every function is testable on its own.
 local M = {}
 
+-- rex.ui.pick accepts at most 2000 items.
+M.MAX_ITEMS = 2000
+
 -- One picker row per issue: current runs first, then history, deduplicated
 -- so an issue with an archived earlier attempt still opens its live view.
 -- A stopped daemon's last rows are marked, not presented as live. When
@@ -44,6 +47,7 @@ function M.picker_items(snapshot, workflow)
   end
   add(snapshot.Runs, false)
   add(snapshot.History, true)
+  while #items > M.MAX_ITEMS do items[#items] = nil end
   return items
 end
 
