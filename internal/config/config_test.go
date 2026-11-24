@@ -645,3 +645,69 @@ func TestBdLimits(t *testing.T) {
 		}
 	}
 }
+
+func writeConfig(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestLoadRejectsUnknownKeysWithSuggestion(t *testing.T) {
+	cases := []struct{ name, yaml, want string }{
+		{"typo in section", "supervisor:\n  silence_timout: 5m\n", `unknown key "supervisor.silence_timout" (did you mean "supervisor.silence_timeout"?)`},
+		{"unknown top level", "bogus_key: 1\n", `unknown key "bogus_key"`},
+		{"misspelled top level", "harnes: pi\n", `did you mean "harness"?`},
+		{"tracker item", "trackers:\n  - name: a\n    type: repo\n    pth: .\n", `trackers[0].pth" (did you mean "path"?)`},
+		{"workflow item", "workflows:\n  - name: a\n    lable: x\n    path: p\n", `workflows[0].lable" (did you mean "label"?)`},
+		{"section scalar", "supervisor: 5\n", `unknown key "supervisor"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(Options{File: writeConfig(t, tc.yaml), Env: []string{}})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadReportsTypeErrorsWithTheBadValue(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+		env  []string
+		want string
+	}{
+		{"int", "supervisor:\n  attempt_cap: banana\n", nil, `supervisor.attempt_cap: expected an integer, got "banana"`},
+		{"bool", "supervisor:\n  auto_reclaim: maybe\n", nil, `supervisor.auto_reclaim: expected true or false, got "maybe"`},
+		{"duration", "supervisor:\n  silence_timeout: soon\n", nil, `supervisor.silence_timeout: expected a duration`},
+		{"env", "", []string{"LAMBE_SUPERVISOR_TICK_SECONDS=fast"}, `supervisor.tick_seconds: expected an integer, got "fast"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := Options{Env: tc.env}
+			if tc.yaml != "" {
+				opts.File = writeConfig(t, tc.yaml)
+			}
+			if opts.Env == nil {
+				opts.Env = []string{}
+			}
+			_, err := Load(opts)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsEveryKnownKey(t *testing.T) {
+	body := "harness: pi\nmachine: m\nactor: a\nworkflow_path: /w/WORKFLOW.md\nworkspace:\n  root: /ws\nlabels: [x]\n" +
+		"acp:\n  agent: opencode\ngate:\n  check_timeout: 2m\nstateapi:\n  enable: true\n  addr: 127.0.0.1:0\n" +
+		"supervisor:\n  tick_seconds: 5\n  attempt_cap: 3\n  silence_timeout: 5m\n  stall_after: 4m\n  auto_reclaim: true\n  bd_max_concurrency: 2\n"
+	if _, err := Load(Options{File: writeConfig(t, body), Env: []string{}}); err != nil {
+		t.Fatalf("known keys rejected: %v", err)
+	}
+}

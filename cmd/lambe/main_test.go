@@ -153,12 +153,10 @@ func TestInitNonInteractive(t *testing.T) {
 	}
 }
 
-func TestInitDetectsParentTracker(t *testing.T) {
+func TestInitAdoptsAncestorTrackerOnlyWithFlag(t *testing.T) {
 	home := isolatedConfigDir(t)
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".beads"), 0o750); err != nil {
-		t.Fatal(err)
-	}
+	fakeBeadsStore(t, root)
 	sub := filepath.Join(root, "sub", "deep")
 	if err := os.MkdirAll(sub, 0o750); err != nil {
 		t.Fatal(err)
@@ -166,7 +164,7 @@ func TestInitDetectsParentTracker(t *testing.T) {
 	t.Chdir(sub)
 
 	var out bytes.Buffer
-	if err := runInit([]string{"-non-interactive"}, strings.NewReader(""), &out); err != nil {
+	if err := runInit([]string{"-non-interactive", "-tracker", root}, strings.NewReader(""), &out); err != nil {
 		t.Fatalf("runInit: %v", err)
 	}
 	cfg, err := config.Load(config.Options{File: filepath.Join(home, "lambe", "config.yaml")})
@@ -177,7 +175,130 @@ func TestInitDetectsParentTracker(t *testing.T) {
 		t.Errorf("tracker path: got %+v, want %s", cfg.Trackers, root)
 	}
 	if _, err := os.Stat(filepath.Join(root, "WORKFLOW.md")); err != nil {
-		t.Errorf("WORKFLOW.md should land next to the detected tracker: %v", err)
+		t.Errorf("WORKFLOW.md should land next to the adopted tracker: %v", err)
+	}
+}
+
+// fakeBeadsStore makes dir look like a bd-initialized project.
+func fakeBeadsStore(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, ".beads"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".beads", "metadata.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// snapshotTree lists every path under root, so a test can prove nothing
+// was written.
+func snapshotTree(t *testing.T, root string) []string {
+	t.Helper()
+	var paths []string
+	if err := filepath.WalkDir(root, func(p string, _ os.DirEntry, err error) error {
+		paths = append(paths, p)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return paths
+}
+
+// The P0 regression: a stub or real ~/.beads above the project must never
+// make init write WORKFLOW.md or formulas into $HOME.
+func TestInitNeverWritesOutsideProjectTree(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, home string)
+		args  []string
+		stdin string
+	}{
+		{"stub home beads is ignored", func(t *testing.T, home string) {
+			mustNil(t, os.MkdirAll(filepath.Join(home, ".beads"), 0o750))
+			mustNil(t, os.WriteFile(filepath.Join(home, ".beads", "machine-id"), []byte("x"), 0o600))
+		}, []string{"-non-interactive"}, ""},
+		{"real home store, non-interactive", func(t *testing.T, home string) { fakeBeadsStore(t, home) }, []string{"-non-interactive"}, ""},
+		{"real home store, interactive yes still refused", func(t *testing.T, home string) { fakeBeadsStore(t, home) }, nil, "y\n"},
+		{"real ancestor store, interactive no", func(t *testing.T, home string) { fakeBeadsStore(t, filepath.Join(home, "work")) }, nil, "n\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			cfgDir, cfgErr := os.UserConfigDir()
+			mustNil(t, cfgErr)
+			project := filepath.Join(home, "work", "project")
+			mustNil(t, os.MkdirAll(project, 0o750))
+			tc.setup(t, home)
+			t.Chdir(project)
+			before := snapshotTree(t, home)
+
+			var out bytes.Buffer
+			err := runInit(tc.args, strings.NewReader(tc.stdin), &out)
+			stubOnly := strings.HasPrefix(tc.name, "stub")
+			if err == nil && !stubOnly {
+				t.Fatalf("init adopted an ancestor tracker silently:\n%s", out.String())
+			}
+			// Everything lambe may write lands in the project or the config dir.
+			for _, p := range snapshotTree(t, home) {
+				if slicesContains(before, p) || strings.HasPrefix(p, project) || strings.HasPrefix(p, cfgDir) || strings.HasPrefix(cfgDir, p) {
+					continue
+				}
+				t.Errorf("init wrote outside the project tree: %s", p)
+			}
+			if _, statErr := os.Stat(filepath.Join(cfgDir, "lambe", "config.yaml")); err != nil && statErr == nil {
+				t.Errorf("a refused init must not write config")
+			}
+		})
+	}
+}
+
+func mustNil(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func slicesContains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+func TestInitInteractiveConfirmationAdoptsNonHomeAncestor(t *testing.T) {
+	isolatedConfigDir(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := filepath.Join(home, "work")
+	fakeBeadsStore(t, root)
+	project := filepath.Join(root, "project")
+	mustNil(t, os.MkdirAll(project, 0o750))
+	t.Chdir(project)
+	var out bytes.Buffer
+	if err := runInit(nil, strings.NewReader("y\n"), &out); err != nil {
+		t.Fatalf("runInit: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "adopt it and write") || !strings.Contains(out.String(), root) {
+		t.Errorf("prompt must name the path:\n%s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "WORKFLOW.md")); err != nil {
+		t.Errorf("confirmed adoption should write next to the tracker: %v", err)
+	}
+}
+
+func TestInitTrackerFlagRequiresBeadsDir(t *testing.T) {
+	isolatedConfigDir(t)
+	t.Chdir(t.TempDir())
+	var out bytes.Buffer
+	err := runInit([]string{"-non-interactive", "-tracker", t.TempDir()}, strings.NewReader(""), &out)
+	var u usageError
+	if !errors.As(err, &u) {
+		t.Fatalf("want usage error, got %v", err)
 	}
 }
 
@@ -406,31 +527,6 @@ func TestDaemonOptionsUseConfiguredIdentity(t *testing.T) {
 	}
 	if opts := daemonOptions(cfg, ""); opts.Actor != "lambe@studio" {
 		t.Fatalf("derived actor = %q, want lambe@studio", opts.Actor)
-	}
-}
-
-func TestInitNamesAncestorTracker(t *testing.T) {
-	isolatedConfigDir(t)
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".beads"), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	sub := filepath.Join(root, "sub")
-	if err := os.MkdirAll(sub, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	t.Chdir(sub)
-	resolved, err := os.Getwd() // t.TempDir may sit behind a symlink
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	if err := runInit([]string{"-non-interactive"}, strings.NewReader(""), &out); err != nil {
-		t.Fatalf("runInit: %v", err)
-	}
-	want := "using the Beads tracker at " + filepath.Dir(resolved)
-	if !strings.Contains(out.String(), want) {
-		t.Errorf("init should name the ancestor tracker %q, got:\n%s", want, out.String())
 	}
 }
 

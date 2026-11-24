@@ -343,6 +343,7 @@ func runInit(args []string, in io.Reader, out io.Writer) error {
 	configFile := fs.String("config", "", "path to write the lambe config to (env LAMBE_CONFIG)")
 	harness := fs.String("harness", "pi", "agent backend: pi, codex, or acp")
 	nonInteractive := fs.Bool("non-interactive", false, "skip all prompts and use defaults")
+	trackerFlag := fs.String("tracker", "", "adopt the Beads tracker at this path (required to use one above the current directory)")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -350,23 +351,22 @@ func runInit(args []string, in io.Reader, out io.Writer) error {
 		return err
 	}
 	if _, err := daemon.HarnessCommand(&config.Config{Harness: *harness}); err != nil {
-		return err
+		return usageError{err}
 	}
 
-	trackerDir, found := detectTrackerDir(".")
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	trackerDir, found, err := resolveInitTracker(cwd, *trackerFlag, *nonInteractive, in, out)
+	if err != nil {
+		return err
+	}
 	if !found {
-		var err error
-		trackerDir, err = os.Getwd()
-		if err != nil {
-			return err
-		}
 		trackerDir, found, err = maybeInitTracker(trackerDir, *nonInteractive, in, out)
 		if err != nil {
 			return err
 		}
-	} else if cwd, err := os.Getwd(); err == nil && trackerDir != cwd {
-		// A stray ancestor .beads (for example in $HOME) would otherwise be adopted silently.
-		say(out, "using the Beads tracker at %s (found above the current directory)\n", trackerDir)
 	}
 	absTracker, err := filepath.Abs(trackerDir)
 	if err != nil {
@@ -432,23 +432,77 @@ func runInit(args []string, in io.Reader, out io.Writer) error {
 	return nil
 }
 
-// detectTrackerDir walks up from start looking for a .beads directory,
-// returning the containing directory and whether one was found.
-func detectTrackerDir(start string) (string, bool) {
-	dir, err := filepath.Abs(start)
-	if err != nil {
-		return "", false
-	}
-	for {
-		if info, err := os.Stat(filepath.Join(dir, ".beads")); err == nil && info.IsDir() {
-			return dir, true
+// hasBeadsDir reports whether dir/.beads exists as a directory.
+func hasBeadsDir(dir string) bool {
+	info, err := os.Stat(filepath.Join(dir, ".beads"))
+	return err == nil && info.IsDir()
+}
+
+// isBeadsStore reports whether dir/.beads holds a real Beads store rather
+// than a stub: bd creates metadata.json, config.yaml or a database there,
+// while a global ~/.beads only carries machine bookkeeping.
+func isBeadsStore(dir string) bool {
+	for _, marker := range []string{"metadata.json", "config.yaml", "dolt", "beads.db", "issues.jsonl"} {
+		if _, err := os.Stat(filepath.Join(dir, ".beads", marker)); err == nil {
+			return true
 		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", false
-		}
-		dir = parent
 	}
+	return false
+}
+
+// sameDir reports whether a and b name the same directory.
+func sameDir(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ai, aerr := os.Stat(a)
+	bi, berr := os.Stat(b)
+	return aerr == nil && berr == nil && os.SameFile(ai, bi)
+}
+
+// resolveInitTracker picks the tracker directory for `lambe init` without
+// ever writing outside cwd on its own. A .beads in cwd is used (a bare one
+// is fine, except the home directory's, which must be a real store). A real
+// store in an ancestor is adopted only with --tracker PATH, or after an
+// interactive confirmation that names the path (never for $HOME). With
+// nothing found it returns cwd and found=false. Nothing is written here.
+func resolveInitTracker(cwd, explicit string, nonInteractive bool, in io.Reader, out io.Writer) (dir string, found bool, err error) {
+	home, _ := os.UserHomeDir()
+	if explicit != "" {
+		abs, err := filepath.Abs(explicit)
+		if err != nil {
+			return "", false, err
+		}
+		if !hasBeadsDir(abs) {
+			return "", false, usageError{fmt.Errorf("--tracker %s: no .beads directory there; run `bd init` in it first", abs)}
+		}
+		return abs, true, nil
+	}
+	if hasBeadsDir(cwd) && (home == "" || !sameDir(cwd, home) || isBeadsStore(cwd)) {
+		return cwd, true, nil
+	}
+	for dir := filepath.Dir(cwd); ; dir = filepath.Dir(dir) {
+		if hasBeadsDir(dir) && isBeadsStore(dir) {
+			return adoptAncestor(cwd, dir, home, nonInteractive, in, out)
+		}
+		if dir == filepath.Dir(dir) {
+			return cwd, false, nil
+		}
+	}
+}
+
+func adoptAncestor(cwd, ancestor, home string, nonInteractive bool, in io.Reader, out io.Writer) (string, bool, error) {
+	refuse := usageError{fmt.Errorf("found a Beads tracker at %s, outside %s; lambe init will not write there on its own. Re-run with --tracker %s to adopt it, or run `bd init` here for a separate tracker", ancestor, cwd, ancestor)}
+	if nonInteractive || (home != "" && sameDir(ancestor, home)) {
+		return "", false, refuse
+	}
+	say(out, "found a Beads tracker at %s, outside %s.\nadopt it and write WORKFLOW.md and .beads/formulas under %s? [y/N] ", ancestor, cwd, ancestor)
+	line, _ := bufio.NewReader(in).ReadString('\n')
+	if answer := strings.ToLower(strings.TrimSpace(line)); answer != "y" && answer != "yes" {
+		say(out, "\n")
+		return "", false, refuse
+	}
+	return ancestor, true, nil
 }
 
 // maybeInitTracker offers to create a missing tracker with bd init. It
