@@ -54,6 +54,10 @@ brew install andrew-bierman/tap/lambe        # macOS and Linux (also installs be
 go install github.com/andrew-bierman/lambe/cmd/lambe@latest
 ```
 
+**Supported platforms.** macOS and Linux on amd64 and arm64 (the release
+targets). Windows is not supported: the daemon relies on launchd/systemd and
+Unix process groups. WSL2 with the Linux binaries is untested.
+
 Each [release](https://github.com/andrew-bierman/lambe/releases) also has
 `.deb`, `.rpm`, and `.apk` packages for amd64 and arm64. They install
 `/usr/bin/lambe` and an example unit under `/usr/share/doc/lambe/examples/`;
