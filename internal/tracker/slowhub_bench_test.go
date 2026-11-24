@@ -86,7 +86,7 @@ func TestSlowHubClaimToAttempt(t *testing.T) {
 				if i%2 == 0 {
 					_ = l.Heartbeat(t.Context(), "ac-92ca")
 				} else {
-					_, _ = l.Dispatchable(t.Context(), DispatchQuery{Statuses: []string{StatusInProgress}})
+					_, _ = l.Dispatchable(t.Context(), DispatchQuery{Statuses: []Status{StatusInProgress}})
 				}
 			}
 		}()

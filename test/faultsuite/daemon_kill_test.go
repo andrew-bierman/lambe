@@ -157,7 +157,7 @@ func TestFault_DaemonKill9_AssembledDaemon(t *testing.T) {
 		if err != nil {
 			t.Fatalf("open hook tracker: %v", err)
 		}
-		issues, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{"ready"}})
+		issues, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []tracker.Status{"ready"}})
 		if err != nil {
 			t.Fatalf("hook front read: %v", err)
 		}

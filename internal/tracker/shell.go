@@ -161,7 +161,7 @@ func (t *ShellTransport) List(ctx context.Context, q DispatchQuery) (Result, err
 	if len(q.Statuses) == 1 && q.Statuses[0] == StatusReady {
 		args = append(args, "--ready")
 	} else if len(q.Statuses) > 0 {
-		args = append(args, "--status", strings.Join(q.Statuses, ","))
+		args = append(args, "--status", joinStatuses(q.Statuses))
 	}
 	if q.Unlimited {
 		args = append(args, "--limit", "0")
@@ -203,7 +203,7 @@ func (t *ShellTransport) Create(ctx context.Context, r CreateRequest) (Result, e
 		args = append(args, "--metadata", string(m))
 	}
 	if r.Status != "" {
-		args = append(args, "--status", r.Status)
+		args = append(args, "--status", r.Status.String())
 	}
 	if r.Ephemeral {
 		args = append(args, "--ephemeral")
@@ -224,7 +224,7 @@ func (t *ShellTransport) Update(ctx context.Context, r UpdateRequest) (Result, e
 		args = append(args, "--assignee", r.Assignee)
 	}
 	if r.Status != "" {
-		args = append(args, "--status", r.Status)
+		args = append(args, "--status", r.Status.String())
 	}
 	for _, kv := range sortedPairs(r.Metadata) {
 		args = append(args, "--set-metadata", kv[0]+"="+kv[1])

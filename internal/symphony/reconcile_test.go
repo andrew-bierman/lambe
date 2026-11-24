@@ -10,7 +10,7 @@ import (
 func TestStatusActive(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		status string
+		status tracker.Status
 		want   bool
 	}{
 		{status: "open", want: true},

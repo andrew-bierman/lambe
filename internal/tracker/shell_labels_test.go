@@ -20,7 +20,7 @@ func TestShellTransportListPassesLabelFilter(t *testing.T) {
 	tr := NewShellTransport(script, dir, "lambe@test")
 
 	_, err := tr.List(context.Background(), DispatchQuery{
-		Statuses: []string{StatusReady},
+		Statuses: []Status{StatusReady},
 		Labels:   []string{"lambe:babysit", "priority:high"},
 	})
 	if err != nil {
@@ -50,7 +50,7 @@ func TestShellTransportListOmitsLabelWhenEmpty(t *testing.T) {
 	writeExecutable(t, script, "#!/bin/sh\necho \"$@\" > "+outFile+"\necho '[]'\n")
 	tr := NewShellTransport(script, dir, "lambe@test")
 
-	_, err := tr.List(context.Background(), DispatchQuery{Statuses: []string{StatusReady}})
+	_, err := tr.List(context.Background(), DispatchQuery{Statuses: []Status{StatusReady}})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}

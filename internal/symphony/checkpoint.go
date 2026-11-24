@@ -181,7 +181,7 @@ func (l *Loop) Restore(ctx context.Context, actor string) error {
 }
 
 func (l *Loop) discoverLegacy(ctx context.Context) error {
-	issues, err := l.Tracker.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}})
+	issues, err := l.Tracker.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []tracker.Status{tracker.StatusInProgress}})
 	if err != nil {
 		return err
 	}

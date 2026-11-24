@@ -262,7 +262,7 @@ func TestBDBatchFlushClosesAndComments(t *testing.T) {
 	if got := l.BufferedWrites(); got != 0 {
 		t.Fatalf("buffer after flush: %d ops remain", got)
 	}
-	closed, err := l.Dispatchable(t.Context(), DispatchQuery{Statuses: []string{"closed"}, IDs: []string{a, b}})
+	closed, err := l.Dispatchable(t.Context(), DispatchQuery{Statuses: []Status{"closed"}, IDs: []string{a, b}})
 	if err != nil {
 		t.Fatalf("read closed: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestBDBatchFailureRollsBackAndKeepsBuffer(t *testing.T) {
 		t.Fatalf("buffer after failed flush: got %d ops, want 2 (rolled back, retry-safe)", got)
 	}
 	// Nothing was applied: the good close must not have landed.
-	open, err := l.Dispatchable(t.Context(), DispatchQuery{Statuses: []string{"open"}, IDs: []string{a}})
+	open, err := l.Dispatchable(t.Context(), DispatchQuery{Statuses: []Status{"open"}, IDs: []string{a}})
 	if err != nil {
 		t.Fatalf("read open: %v", err)
 	}

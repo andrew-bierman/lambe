@@ -617,7 +617,7 @@ func TestFilteredTrackerSkipsForeignMachines(t *testing.T) {
 		Machine: "boxy",
 		Labels:  MetadataLabelSource{Tracker: tr},
 	}
-	got, err := filtered.Dispatchable(context.Background(), tracker.DispatchQuery{Statuses: []string{"ready"}})
+	got, err := filtered.Dispatchable(context.Background(), tracker.DispatchQuery{Statuses: []tracker.Status{"ready"}})
 	if err != nil {
 		t.Fatalf("dispatchable: %v", err)
 	}

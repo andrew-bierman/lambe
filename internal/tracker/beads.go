@@ -62,8 +62,8 @@ func (j issueJSON) toIssue() Issue {
 		Identifier:   j.ID,
 		Title:        j.Title,
 		Description:  j.Description,
-		Status:       j.Status,
-		State:        j.Status,
+		Status:       ParseStatus(j.Status),
+		State:        State(j.Status),
 		Assignee:     j.Assignee,
 		Revision:     j.Revision,
 		Priority:     j.Priority,
@@ -183,8 +183,8 @@ func decodeIssues(res Result) ([]Issue, error) {
 // Attempt beads are blocked once recorded, but a record caught before its
 // status flip is still open or in progress, so the record-set read spans all
 // three.
-func recordStatuses() []string {
-	return []string{StatusOpen, StatusInProgress, StatusBlocked}
+func recordStatuses() []Status {
+	return []Status{StatusOpen, StatusInProgress, StatusBlocked}
 }
 
 // ListByMetadata implements Tracker: one query returns every non-terminal

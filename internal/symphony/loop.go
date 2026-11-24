@@ -341,11 +341,11 @@ func (m *BeadsMaterializer) pouredRootOpen(ctx context.Context, entry materializ
 	}
 	res := string(result.Data)
 	var payload struct {
-		Status string `json:"status"`
+		Status tracker.Status `json:"status"`
 	}
 	if strings.HasPrefix(strings.TrimSpace(res), "[") {
 		var rows []struct {
-			Status string `json:"status"`
+			Status tracker.Status `json:"status"`
 		}
 		if err := json.Unmarshal([]byte(res), &rows); err != nil {
 			return entry.RootID, true, err
@@ -363,7 +363,7 @@ func (m *BeadsMaterializer) pouredRootOpen(ctx context.Context, entry materializ
 	if payload.Status == "" {
 		return entry.RootID, true, errors.New("materialized root lookup omitted status")
 	}
-	return entry.RootID, payload.Status != "closed", nil
+	return entry.RootID, payload.Status != tracker.StatusClosed, nil
 }
 
 // run executes the bd CLI in the tracker directory. The first argv element
@@ -535,7 +535,7 @@ type Loop struct {
 	Spaces           *WorkspaceManager
 	Formulas         []Formula
 	Materializer     FormulaMaterializer
-	DispatchStatuses []string
+	DispatchStatuses []tracker.Status
 	// DispatchLabels restricts the dispatch read to issues carrying every
 	// listed label (opt-in work lane). An empty slice dispatches every
 	// ready issue.
@@ -589,7 +589,7 @@ func NewLoop(tr tracker.Tracker, loader *Loader, runner AgentRunner, gates GateE
 		Runner:            runner,
 		Gates:             gates,
 		Spaces:            spaces,
-		DispatchStatuses:  []string{tracker.StatusReady},
+		DispatchStatuses:  []tracker.Status{tracker.StatusReady},
 		RetryCap:          DefaultRetryBackoff,
 		ContinuationDelay: ContinuationRetry,
 		FailureDelay:      nil,

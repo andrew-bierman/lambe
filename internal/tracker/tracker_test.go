@@ -99,7 +99,7 @@ func TestDispatchableEmptyQueryMakesNoCall(t *testing.T) {
 func TestDispatchableByStatusesAndByIDsAreDistinctReads(t *testing.T) {
 	ft := &fakeTransport{}
 	b := NewBeads(ft, "lambe@test")
-	if _, err := b.Dispatchable(t.Context(), DispatchQuery{Statuses: []string{"open", "ready"}}); err != nil {
+	if _, err := b.Dispatchable(t.Context(), DispatchQuery{Statuses: []Status{"open", "ready"}}); err != nil {
 		t.Fatalf("by statuses: %v", err)
 	}
 	if _, err := b.Dispatchable(t.Context(), DispatchQuery{IDs: []string{"x-1"}}); err != nil {
@@ -250,7 +250,7 @@ func TestHTTPTransportConstructor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tr.List(t.Context(), DispatchQuery{Statuses: []string{"open"}}); !errors.Is(err, ErrUnsupported) {
+	if _, err := tr.List(t.Context(), DispatchQuery{Statuses: []Status{"open"}}); !errors.Is(err, ErrUnsupported) {
 		t.Errorf("List before daemon wiring: got %v, want ErrUnsupported", err)
 	}
 }

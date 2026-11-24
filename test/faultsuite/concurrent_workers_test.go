@@ -62,7 +62,7 @@ func TestFault_ConcurrentWorkersWithLiveTrackerPolling(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 5 {
-		issues, err := env.Dispatchable(ctx, tracker.DispatchQuery{IDs: ids, Statuses: []string{tracker.StatusClosed}})
+		issues, err := env.Dispatchable(ctx, tracker.DispatchQuery{IDs: ids, Statuses: []tracker.Status{tracker.StatusClosed}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -80,7 +80,7 @@ func TestFault_ConcurrentWorkersWithLiveTrackerPolling(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	issues, err := env.Dispatchable(ctx, tracker.DispatchQuery{IDs: ids, Statuses: []string{tracker.StatusClosed}})
+	issues, err := env.Dispatchable(ctx, tracker.DispatchQuery{IDs: ids, Statuses: []tracker.Status{tracker.StatusClosed}})
 	if err != nil {
 		t.Fatal(err)
 	}

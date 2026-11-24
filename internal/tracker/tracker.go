@@ -63,37 +63,18 @@ func (e *TruncatedError) Error() string {
 // Unwrap makes errors.Is(err, ErrJournalTruncated) true.
 func (e *TruncatedError) Unwrap() error { return ErrJournalTruncated }
 
-// The issue statuses lambe reads and writes. bd's "ready" is a
-// pseudo-status (the dispatchable front), not a stored value.
-const (
-	// StatusReady is bd's pseudo-status selecting the dispatchable front.
-	StatusReady = "ready"
-	// StatusOpen is the open pool a claim is released back to.
-	StatusOpen = "open"
-	// StatusInProgress marks a claimed issue under active work.
-	StatusInProgress = "in_progress"
-	// StatusBlocked hides an issue from the dispatch front while keeping it
-	// readable through metadata queries.
-	StatusBlocked = "blocked"
-	// StatusClosed is bd's terminal status.
-	// StatusDeferred is bd's snoozed state; it returns to open lazily
-	// on the next dispatch-front read once the defer time passes.
-	StatusDeferred = "deferred"
-	StatusClosed   = "closed"
-)
-
 // BlockerRef names one blocking issue, normalized from tracker metadata.
 type BlockerRef struct {
 	ID         string
 	Identifier string
-	State      string
+	State      State
 }
 
 // Issue is one schedulable work item from the tracker.
 type Issue struct {
 	ID       string
 	Title    string
-	Status   string
+	Status   Status
 	Assignee string
 	Revision string
 	Metadata map[string]string
@@ -102,7 +83,7 @@ type Issue struct {
 	// Description is the issue body, when available.
 	Description string
 	// State is the provider-native state name.
-	State string
+	State State
 	// Priority is lower-is-higher; 0 means unset.
 	Priority int
 	// Labels are normalized to lowercase.
@@ -124,7 +105,7 @@ type Issue struct {
 // Exactly one dimension is normally set; the zero query matches nothing and
 // short-circuits without touching the tracker.
 type DispatchQuery struct {
-	Statuses []string
+	Statuses []Status
 	IDs      []string
 	Metadata map[string]string
 	// Labels filters by issue labels (AND semantics: must carry every

@@ -320,7 +320,7 @@ func TestBuildReportListsEscalationsAgainstBdTracker(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	park := func(title, label, status string) string {
+	park := func(title, label string, status tracker.Status) string {
 		t.Helper()
 		issue, err := local.EnsureIssue(ctx, title, tracker.IssueSpec{Title: title, Priority: 2, Labels: []string{label}})
 		if err != nil {
@@ -354,7 +354,7 @@ func TestBuildReportListsEscalationsAgainstBdTracker(t *testing.T) {
 			}
 		}
 	}
-	_, err = local.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusBlocked, gate.StatusNeedsHuman}})
+	_, err = local.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []tracker.Status{tracker.StatusBlocked, gate.StatusNeedsHuman}})
 	var exitErr *tracker.ExitError
 	if !errors.As(err, &exitErr) || !strings.Contains(exitErr.Stderr, `Error: invalid status "needs-human" in multi-status filter`) {
 		t.Fatalf("unconfigured status error = %v, want wrapped native invalid-status error on stderr", err)

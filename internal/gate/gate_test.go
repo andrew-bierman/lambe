@@ -58,13 +58,13 @@ type fakeHub struct {
 	commentErr error
 	// statuses is the IssueStatus answer per issue; an absent issue
 	// reports "" (not terminal).
-	statuses map[string]string
+	statuses map[string]tracker.Status
 	// statusErr injects an IssueStatus read failure.
 	statusErr error
 }
 
 func newFakeHub() *fakeHub {
-	return &fakeHub{tombstones: map[string]bool{}, statuses: map[string]string{}}
+	return &fakeHub{tombstones: map[string]bool{}, statuses: map[string]tracker.Status{}}
 }
 
 func (h *fakeHub) Comment(_ context.Context, issue, body string) error {
@@ -114,7 +114,7 @@ func (h *fakeHub) IsTombstoned(_ context.Context, issue string) (bool, error) {
 	return h.tombstones[issue], nil
 }
 
-func (h *fakeHub) IssueStatus(_ context.Context, issue string) (string, error) {
+func (h *fakeHub) IssueStatus(_ context.Context, issue string) (tracker.Status, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.statusErr != nil {
@@ -807,7 +807,7 @@ func (m *memTracker) ListByMetadata(context.Context, string, string) ([]tracker.
 }
 
 // status reads the current tracker status for an issue.
-func (m *memTracker) status(id string) string {
+func (m *memTracker) status(id string) tracker.Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.issues[id].Status
@@ -1337,7 +1337,7 @@ func TestBdIntegration(t *testing.T) {
 
 	rigDir := t.TempDir()
 	runBd(t, rigDir, "init")
-	runBd(t, rigDir, "config", "set", "status.custom", gate.StatusNeedsHuman)
+	runBd(t, rigDir, "config", "set", "status.custom", gate.StatusNeedsHuman.String())
 
 	hub, err := gate.NewBdHub("", rigDir, "lambe-integration")
 	if err != nil {
@@ -1417,7 +1417,7 @@ func TestBdIntegration(t *testing.T) {
 		t.Fatalf("verdict = %d, want red at cap", outcome.Verdict)
 	}
 	show = runBd(t, rigDir, "show", capID, "--json")
-	if !strings.Contains(show, gate.StatusNeedsHuman) {
+	if !strings.Contains(show, gate.StatusNeedsHuman.String()) {
 		t.Fatalf("issue not in needs-human:\n%s", show)
 	}
 	// Dispatch stops: the needs-human status removes the issue from the
