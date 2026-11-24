@@ -3,6 +3,9 @@
 package proc_test
 
 import (
+	"bytes"
+	"runtime/pprof"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -77,5 +80,37 @@ func TestWatchdogStopPreventsExpiry(t *testing.T) {
 	case r := <-fired:
 		t.Fatalf("watchdog fired after Stop: %v", r)
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestWatchdogLoserTimerDoesNotParkBehindCallback pins that when both timers
+// fire together, only one goroutine runs the (possibly long) expiry callback:
+// the other returns immediately instead of waiting out the kill ladder.
+func TestWatchdogLoserTimerDoesNotParkBehindCallback(t *testing.T) {
+	var calls atomic.Int32
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	wd := proc.NewWatchdog(50*time.Millisecond, 50*time.Millisecond, func(proc.ExpiryReason) {
+		calls.Add(1)
+		entered <- struct{}{}
+		<-release
+	})
+	defer wd.Stop()
+	defer close(release)
+	<-entered
+	time.Sleep(300 * time.Millisecond) // the second timer has fired by now
+
+	var buf bytes.Buffer
+	if err := pprof.Lookup("goroutine").WriteTo(&buf, 2); err != nil {
+		t.Fatal(err)
+	}
+	inExpire := 0
+	for _, g := range strings.Split(buf.String(), "\n\n") {
+		if strings.Contains(g, "(*Watchdog).expire") {
+			inExpire++
+		}
+	}
+	if inExpire != 1 || calls.Load() != 1 {
+		t.Fatalf("goroutines in expire = %d, callbacks = %d; want 1 and 1", inExpire, calls.Load())
 	}
 }

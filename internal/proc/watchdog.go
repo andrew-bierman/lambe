@@ -3,7 +3,6 @@
 package proc
 
 import (
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -40,7 +39,6 @@ type Watchdog struct {
 	onExpire     func(ExpiryReason)
 	silence      *time.Timer
 	deadline     *time.Timer
-	expireOnce   sync.Once
 	fired        atomic.Bool
 }
 
@@ -79,10 +77,13 @@ func (w *Watchdog) Stop() {
 }
 
 func (w *Watchdog) expire(reason ExpiryReason) {
-	w.expireOnce.Do(func() {
-		w.fired.Store(true)
-		if w.onExpire != nil {
-			w.onExpire(reason)
-		}
-	})
+	// First timer wins. The loser returns at once: parking it behind the
+	// winner's callback (a kill ladder that can run for seconds) would leave a
+	// stuck timer goroutine for the ladder's whole duration.
+	if !w.fired.CompareAndSwap(false, true) {
+		return
+	}
+	if w.onExpire != nil {
+		w.onExpire(reason)
+	}
 }
