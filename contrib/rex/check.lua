@@ -1,4 +1,4 @@
--- Headless check of lambe.lua against a real `lambe logs -json` snapshot.
+-- Headless check of the lambe.lua shim and its modules against a real `lambe logs -json` snapshot.
 --
 --   LAMBE_REX_LUA=~/.config/rex/lambe.lua rex do contrib/rex/check.lua
 --
@@ -11,6 +11,7 @@
 -- `rex do lambe_check` to test the server's own environment.
 
 local path = os.getenv("LAMBE_REX_LUA") or (os.getenv("HOME") .. "/.config/rex/lambe.lua")
+local dir = path:match("^(.*)/[^/]*$") or "."
 local real = rex
 local actions, opened, focused, queued, picks = {}, {}, {}, {}, {}
 local labeled = {} -- window labels the stubbed session already shows
@@ -43,10 +44,17 @@ local stub = setmetatable({
   log = function(level, message) print(level .. ": " .. tostring(message)) end,
   layout = { block = function(a) return a end }, -- keep the options readable
   client = { queue = function(name) queued[#queued + 1] = name end },
+  call = function() return { api_revision = 18 } end, -- pretend the server has rex.ui
 }, { __index = real })
 
 rex = stub
-dofile(path) -- the actions keep using the stub until the script ends
+-- Load the shim the way `lambe setup rex` installs it: its directory placeholder
+-- filled in, the modules and lambe.config.lua beside it. The actions keep using
+-- the stub until the script ends.
+local handle = assert(io.open(path, "r"))
+local source = handle:read("*a"):gsub('"@LAMBE_DIR@"', function() return string.format("%q", dir) end)
+handle:close()
+assert(loadstring(source, "@" .. path))()
 
 local function check(ok, message) if not ok then error("check failed: " .. message, 0) end end
 local function command(window) return table.concat(window.layout.options.command, " ") end

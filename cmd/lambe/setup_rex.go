@@ -9,8 +9,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -34,11 +37,12 @@ const (
 	rexForeign                      // someone else's file
 )
 
-// rexManagedContent returns the script with its managed header: a version and
-// the SHA-256 of everything after the header line.
-func rexManagedContent(body []byte) []byte {
+// rexManagedContent returns a script with its managed header: the header
+// format version, the plugin version, and the SHA-256 of everything after the
+// header line.
+func rexManagedContent(body []byte, plugin int) []byte {
 	sum := sha256.Sum256(body)
-	header := fmt.Sprintf("%sv%d sha256=%s\n", rexManagedPrefix, rexManagedVersion, hex.EncodeToString(sum[:]))
+	header := fmt.Sprintf("%sv%d plugin=%d sha256=%s\n", rexManagedPrefix, rexManagedVersion, plugin, hex.EncodeToString(sum[:]))
 	return append([]byte(header), body...)
 }
 
@@ -72,11 +76,33 @@ func classifyRexFile(existing []byte, found bool, shipped []byte) rexFileState {
 type rexSetupEnv struct {
 	Getenv func(string) string
 	Home   string
+	// Executable is the absolute path of this lambe binary, baked into the
+	// generated lambe.config.lua so Rex never depends on a login-shell PATH.
+	Executable string
 }
 
 func hostRexSetupEnv() rexSetupEnv {
 	home, _ := os.UserHomeDir()
-	return rexSetupEnv{Getenv: os.Getenv, Home: home}
+	return rexSetupEnv{Getenv: os.Getenv, Home: home, Executable: lambeExecutable()}
+}
+
+// lambeExecutable prefers the `lambe` on PATH when it is this very binary
+// (a stable path that survives upgrades), else the running executable.
+func lambeExecutable() string {
+	self, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if onPath, err := exec.LookPath("lambe"); err == nil {
+		a, errA := os.Stat(onPath)
+		b, errB := os.Stat(self)
+		if errA == nil && errB == nil && os.SameFile(a, b) {
+			if abs, err := filepath.Abs(onPath); err == nil {
+				return abs
+			}
+		}
+	}
+	return self
 }
 
 // rexConfigDir resolves Rex's config directory the way `rex config` documents
@@ -100,7 +126,7 @@ func runSetup(args []string, env rexSetupEnv, out io.Writer) error {
 	return runSetupRex(args[1:], env, out)
 }
 
-// runSetupRex installs, updates, or removes the managed lambe.lua. The
+// runSetupRex installs, updates, or removes the managed Lua files. The
 // default is a dry run; init.lua is only ever read.
 func runSetupRex(args []string, env rexSetupEnv, out io.Writer) error {
 	var report strings.Builder // writes to a Builder cannot fail
@@ -111,12 +137,65 @@ func runSetupRex(args []string, env rexSetupEnv, out io.Writer) error {
 	return err
 }
 
+const (
+	rexShimName   = "lambe.lua"
+	rexModuleDir  = "lambe"
+	rexConfigName = "lambe.config.lua"
+)
+
+// rexItem is one managed file: where it goes, what it should hold, what is
+// there now, and what setup will do about it.
+type rexItem struct {
+	path     string
+	body     []byte // shipped body; nil for a stale file that will be removed
+	existing []byte
+	state    rexFileState
+	verb     string
+}
+
+// luaString quotes s as a Lua 5.1 string literal.
+func luaString(s string) string { return strconv.Quote(s) }
+
+// rexShimBody is the shim with the Rex config directory filled in.
+func rexShimBody(dir string) ([]byte, error) {
+	shim, err := rexcontrib.Shim()
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Contains(shim, []byte(rexcontrib.ShimDirPlaceholder)) {
+		return nil, errors.New("embedded lambe.lua has no directory placeholder")
+	}
+	return bytes.Replace(shim, []byte(rexcontrib.ShimDirPlaceholder), []byte(luaString(dir)), 1), nil
+}
+
+// rexConfigBody is the generated lambe.config.lua. It belongs to the user
+// from then on: setup creates it once and never overwrites it.
+func rexConfigBody(executable string) []byte {
+	bin := luaString(executable)
+	if executable == "" {
+		bin = `""`
+	}
+	return []byte(fmt.Sprintf(`-- Lambe settings for Rex. Yours to edit: `+"`lambe setup rex`"+` creates this file
+-- once and never overwrites it. Empty strings mean Lambe's defaults.
+-- Environment variables LAMBE_REX_BIN, LAMBE_REX_CONFIG, and
+-- LAMBE_REX_STATE_DIR in the Rex server's environment take precedence.
+return {
+  -- The lambe binary. Absolute, so Rex's minimal PATH does not matter.
+  bin = %s,
+  -- Path passed as `+"`-config`"+` to every live invocation.
+  config = "",
+  -- LAMBE_STATE_DIR of the daemon whose runs the actions read.
+  state_dir = "",
+}
+`, bin))
+}
+
 func setupRex(args []string, env rexSetupEnv, out *strings.Builder) error {
 	fset := flag.NewFlagSet("setup rex", flag.ContinueOnError)
 	fset.SetOutput(io.Discard)
 	apply := fset.Bool("apply", false, "write the changes (default: dry run)")
-	uninstall := fset.Bool("uninstall", false, "remove the managed lambe.lua")
-	force := fset.Bool("force", false, "replace or remove a lambe.lua you modified")
+	uninstall := fset.Bool("uninstall", false, "remove the managed Lua files")
+	force := fset.Bool("force", false, "replace or remove files you modified")
 	dir := fset.String("dir", "", "Rex config directory (default: Rex's own)")
 	if err := fset.Parse(args); err != nil {
 		return usageError{err}
@@ -127,16 +206,14 @@ func setupRex(args []string, env rexSetupEnv, out *strings.Builder) error {
 	if *dir == "" {
 		*dir = env.rexConfigDir()
 	}
-	target := filepath.Join(*dir, "lambe.lua")
-	shipped := rexcontrib.LambeLua
-	wanted := rexManagedContent(shipped)
-
-	existing, err := os.ReadFile(target) // #nosec G304 -- operator-chosen config dir
-	found := err == nil
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("read %s: %w", target, err)
+	plugin, err := rexcontrib.Version()
+	if err != nil {
+		return err
 	}
-	state := classifyRexFile(existing, found, shipped)
+	items, err := planRexItems(*dir)
+	if err != nil {
+		return err
+	}
 
 	mode := "dry run; pass --apply to write"
 	if *apply {
@@ -145,29 +222,52 @@ func setupRex(args []string, env rexSetupEnv, out *strings.Builder) error {
 	fmt.Fprintf(out, "lambe setup rex (%s)\nRex config directory: %s\n", mode, *dir)
 
 	if *uninstall {
-		return rexUninstall(out, target, state, *apply, *force)
+		return rexUninstall(out, *dir, items, *apply, *force)
 	}
 
-	var verb string
-	switch {
-	case state == rexMissing:
-		verb = "create"
-	case (state == rexModified || state == rexForeign) && !*force:
-		fmt.Fprintf(out, "  refuse  %s: not managed by lambe or edited since install; review it, or pass --force to replace it\n", target)
-		return errors.New("refusing to overwrite " + target)
-	case state == rexModified || state == rexForeign:
-		verb = "replace"
-	case bytes.Equal(existing, wanted):
-		verb = "keep"
-	default:
-		verb = "update"
-	}
-	fmt.Fprintf(out, "  %-7s %s (managed, v%d)\n", verb, target, rexManagedVersion)
-	if *apply && verb != "keep" {
-		if err := os.MkdirAll(*dir, 0o750); err != nil {
-			return fmt.Errorf("create %s: %w", *dir, err)
+	blocked := false
+	for i := range items {
+		it := &items[i]
+		switch {
+		case it.body == nil: // stale managed file from an older version
+			it.verb = "remove"
+		case it.state == rexMissing:
+			it.verb = "create"
+		case (it.state == rexModified || it.state == rexForeign) && !*force:
+			it.verb = "refuse"
+			blocked = true
+		case it.state == rexModified || it.state == rexForeign:
+			it.verb = "replace"
+		case bytes.Equal(it.existing, rexManagedContent(it.body, plugin)):
+			it.verb = "keep"
+		default:
+			it.verb = "update"
 		}
-		if err := writeFileAtomic(target, wanted); err != nil {
+		switch it.verb {
+		case "refuse":
+			fmt.Fprintf(out, "  refuse  %s: not managed by lambe or edited since install; review it, or pass --force to replace it\n", it.path)
+		case "remove":
+			fmt.Fprintf(out, "  remove  %s (no longer shipped)\n", it.path)
+		default:
+			fmt.Fprintf(out, "  %-7s %s (managed, v%d)\n", it.verb, it.path, plugin)
+		}
+	}
+	if blocked {
+		fmt.Fprintln(out, "Settings belong in lambe.config.lua, not in these files; nothing was written.")
+		return errors.New("refusing to overwrite files in " + *dir)
+	}
+
+	configPath := filepath.Join(*dir, rexConfigName)
+	_, statErr := os.Stat(configPath)
+	haveConfig := statErr == nil
+	if haveConfig {
+		fmt.Fprintf(out, "  keep    %s (your settings)\n", configPath)
+	} else {
+		fmt.Fprintf(out, "  create  %s (your settings; bin = %s)\n", configPath, orDefault(env.Executable, "lambe"))
+	}
+
+	if *apply {
+		if err := writeRexItems(*dir, configPath, items, plugin, !haveConfig, env.Executable); err != nil {
 			return err
 		}
 	}
@@ -175,23 +275,118 @@ func setupRex(args []string, env rexSetupEnv, out *strings.Builder) error {
 	return nil
 }
 
-func rexUninstall(out *strings.Builder, target string, state rexFileState, apply, force bool) error {
-	switch {
-	case state == rexMissing:
-		fmt.Fprintf(out, "  skip    %s: not installed\n", target)
-		return nil
-	case (state == rexModified || state == rexForeign) && !force:
-		fmt.Fprintf(out, "  refuse  %s: not managed by lambe or edited since install; pass --force to remove it\n", target)
-		return errors.New("refusing to remove " + target)
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
 	}
-	fmt.Fprintf(out, "  remove  %s\n", target)
-	if apply {
-		if err := os.Remove(target); err != nil {
-			return fmt.Errorf("remove %s: %w", target, err)
+	return s
+}
+
+// planRexItems reads the current state of every managed file: the shim, each
+// shipped module, and any managed module an older version shipped that this
+// one no longer does. Files lambe did not write are never listed as stale.
+func planRexItems(dir string) ([]rexItem, error) {
+	shim, err := rexShimBody(dir)
+	if err != nil {
+		return nil, err
+	}
+	modules, err := rexcontrib.Modules()
+	if err != nil {
+		return nil, err
+	}
+	var items []rexItem
+	for _, name := range slices.Sorted(maps.Keys(modules)) {
+		items = append(items, rexItem{path: filepath.Join(dir, rexModuleDir, name), body: modules[name]})
+	}
+	items = append(items, rexItem{path: filepath.Join(dir, rexShimName), body: shim}) // last: it loads the rest
+	for i := range items {
+		data, err := os.ReadFile(items[i].path) // #nosec G304 -- operator-chosen config dir
+		found := err == nil
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("read %s: %w", items[i].path, err)
+		}
+		items[i].existing = data
+		items[i].state = classifyRexFile(data, found, items[i].body)
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, rexModuleDir))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("read %s: %w", filepath.Join(dir, rexModuleDir), err)
+	}
+	for _, e := range entries {
+		if _, shipped := modules[e.Name()]; shipped || e.IsDir() {
+			continue
+		}
+		path := filepath.Join(dir, rexModuleDir, e.Name())
+		data, err := os.ReadFile(path) // #nosec G304 -- operator-chosen config dir
+		if err != nil {
+			continue
+		}
+		if classifyRexFile(data, true, nil) == rexManaged {
+			items = append(items, rexItem{path: path, existing: data, state: rexManaged})
 		}
 	}
-	fmt.Fprintf(out, "Remove the dofile line for it from %s yourself (lambe never edits init.lua), then run: rex config reload\n",
-		filepath.Join(filepath.Dir(target), "init.lua"))
+	return items, nil
+}
+
+// writeRexItems writes modules before the shim, so the shim never points at
+// modules that are not there yet, and removes stale managed modules last.
+func writeRexItems(dir, configPath string, items []rexItem, plugin int, writeConfig bool, executable string) error {
+	if err := os.MkdirAll(filepath.Join(dir, rexModuleDir), 0o750); err != nil {
+		return fmt.Errorf("create %s: %w", dir, err)
+	}
+	if writeConfig {
+		if err := writeFileAtomic(configPath, rexConfigBody(executable)); err != nil {
+			return err
+		}
+	}
+	for _, it := range items {
+		switch it.verb {
+		case "create", "update", "replace":
+			if err := writeFileAtomic(it.path, rexManagedContent(it.body, plugin)); err != nil {
+				return err
+			}
+		case "remove":
+			if err := os.Remove(it.path); err != nil {
+				return fmt.Errorf("remove %s: %w", it.path, err)
+			}
+		}
+	}
+	return nil
+}
+
+func rexUninstall(out *strings.Builder, dir string, items []rexItem, apply, force bool) error {
+	var todo []rexItem
+	blocked := false
+	for _, it := range items {
+		switch {
+		case it.state == rexMissing:
+		case (it.state == rexModified || it.state == rexForeign) && !force:
+			fmt.Fprintf(out, "  refuse  %s: not managed by lambe or edited since install; pass --force to remove it\n", it.path)
+			blocked = true
+		default:
+			todo = append(todo, it)
+		}
+	}
+	if blocked {
+		return errors.New("refusing to remove modified files in " + dir)
+	}
+	if len(todo) == 0 {
+		fmt.Fprintf(out, "  skip    %s: not installed\n", dir)
+		return nil
+	}
+	for _, it := range todo {
+		fmt.Fprintf(out, "  remove  %s\n", it.path)
+		if apply {
+			if err := os.Remove(it.path); err != nil {
+				return fmt.Errorf("remove %s: %w", it.path, err)
+			}
+		}
+	}
+	if apply {
+		_ = os.Remove(filepath.Join(dir, rexModuleDir)) // only if now empty
+	}
+	fmt.Fprintf(out, "Kept %s (your settings). Remove the dofile line for lambe.lua from %s yourself (lambe never edits init.lua), then run: rex config reload\n",
+		filepath.Join(dir, rexConfigName), filepath.Join(dir, "init.lua"))
 	return nil
 }
 
@@ -206,9 +401,10 @@ func printRexNextSteps(out *strings.Builder, dir string) {
 		fmt.Fprintf(out, "%s already loads lambe.lua; it is not touched.\n", initLua)
 	} else {
 		fmt.Fprintf(out, "%s is never edited by lambe. Add this to it:\n\n  dofile(%s)\n  -- optional key binding (pick a key you do not use):\n  -- rex.bind(\"cmd+shift+l\", \"lambe_open_run\")\n\n",
-			initLua, strconv.Quote(filepath.Join(dir, "lambe.lua")))
+			initLua, strconv.Quote(filepath.Join(dir, rexShimName)))
 	}
 	fmt.Fprintln(out, "Then run: rex config check && rex config reload   (on the machine that runs the Rex server)")
+	fmt.Fprintln(out, "Verify with: rex do lambe_check")
 }
 
 // writeFileAtomic writes data to path via a temp file in the same directory.

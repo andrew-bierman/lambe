@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Rex palette actions now raise failures with the reason (lambe not found, no runs yet, a picker that could not show) instead of only logging them, and say once that the pickers need Rex preview.21 (API revision 17) instead of silently opening the dashboard on older servers. `lambe setup rex` now installs a small managed `lambe.lua` shim plus a `lambe/` module directory, and creates `lambe.config.lua` (with the absolute `lambe` path) for your settings so editing them no longer makes updates refuse. Re-run `lambe setup rex --apply` to migrate an older single-file install (an unedited one updates cleanly; if you edited its `override` variables, move them into `lambe.config.lua` and pass `--force`).
 - CLI help and errors: `lambe --help`, `-h`, `help [COMMAND]` and `--version` print to stdout and exit 0; every command has `-h` usage with examples; usage errors exit 2 with a one-line reason and a `run 'lambe help CMD'` hint (unknown commands say so); one-shot commands print `lambe: message` instead of JSON log lines (`run` and `mcp` keep structured logs). Exit codes are documented in docs/REFERENCE.md.
 - `lambe doctor --label NAME` replaces `-service-label` (still accepted, prints a deprecation note). `LAMBE_CONFIG` sets the default `--config`.
 
