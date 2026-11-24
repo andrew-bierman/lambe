@@ -43,6 +43,7 @@ func TestHelpAndVersionExitZeroOnStdout(t *testing.T) {
 		{[]string{"doctor", "-h"}, "--label"},
 		{[]string{"logs", "-h"}, "--follow"},
 		{[]string{"enqueue", "-h"}, "--workflow"},
+		{[]string{"enqueue", "-h"}, "--json"},
 		{[]string{"tui", "-h"}, "--demo"},
 		{[]string{"mcp", "-h"}, "examples:"},
 		{[]string{"service", "-h"}, "examples:"},
