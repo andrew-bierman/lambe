@@ -55,7 +55,7 @@ return function(T)
     T.load_shim()
     stub.finish_load()
     for _, name in ipairs({ "lambe_dashboard", "lambe_demo", "lambe_launch", "lambe_open_run",
-      "lambe_open_workflow_run", "lambe_switch_host", "lambe_check" }) do
+      "lambe_open_workflow_run", "lambe_needs_you", "lambe_switch_host", "lambe_check" }) do
       T.ok(stub.actions[name], "missing action " .. name)
       T.ok(stub.actions[name].description, name .. " has no description")
     end
@@ -86,7 +86,7 @@ return function(T)
     stub.answers = { "ac-1" }
     local ok, err = stub.run("lambe_open_run")
     T.ok(ok, tostring(err))
-    T.eq(stub.prompts[1].title, "Open Lambe run on mini", "picker title")
+    T.eq(stub.prompts[1].title, "Open Lambe run on mini · 1 need you", "picker title")
     T.eq(#stub.windows, 1, "windows")
     T.eq(stub.windows[1].label, "Lambe · ac-1", "window label contract")
     T.eq(stub.windows[1].blocks[1].label, "ac-1 · build · running", "pane title")
@@ -156,14 +156,14 @@ return function(T)
   T.test("servers below API revision 17 say so once and open the dashboard", function()
     for profile, revision in pairs({ p16 = 13, p19 = 14 }) do
       local stub = boot(profile)
-      for _, name in ipairs({ "lambe_open_run", "lambe_launch", "lambe_open_workflow_run" }) do
+      for _, name in ipairs({ "lambe_open_run", "lambe_launch", "lambe_open_workflow_run", "lambe_needs_you" }) do
         local ok, message = stub.run(name)
         T.ok(ok, tostring(message))
         T.contains(message, "preview.21", profile .. " " .. name)
         T.contains(message, "API revision " .. revision, profile .. " " .. name)
         T.contains(message, "opened the dashboard", profile .. " " .. name)
       end
-      T.eq(#stub.windows, 3, profile .. " dashboards")
+      T.eq(#stub.windows, 4, profile .. " dashboards")
       T.eq(stub.windows[1].label, "Lambe dashboard", profile .. " label")
       local warns = 0
       for _, entry in ipairs(stub.logs) do if entry[1] == "warn" then warns = warns + 1 end end
@@ -251,6 +251,46 @@ return function(T)
     T.ok(ok3, tostring(report3))
     T.eq(report3.pickers, false, "pickers unavailable on p19")
     T.contains(report3.picker_note, "preview.21", "why")
+  end)
+
+  T.test("Needs You lists only runs waiting on a human and opens the chosen one", function()
+    local stub = boot("p21", nil, fixtures.attention)
+    stub.answers = { "n-5" }
+    local ok, err = stub.run("lambe_needs_you")
+    T.ok(ok, tostring(err))
+    T.eq(stub.prompts[1].title, "Lambe runs that need you on mini", "title")
+    local ids = {}
+    for _, it in ipairs(stub.prompts[1].items) do ids[#ids + 1] = it.id end
+    T.eq(table.concat(ids, ","), "n-2,n-3,n-4,n-5", "only attention rows")
+    T.eq(stub.windows[1].label, "Lambe · n-5", "opened")
+  end)
+
+  T.test("Needs You with nothing to do says so without a picker or an error", function()
+    local stub = boot("p21", nil, fixtures.alive_quiet)
+    local ok, message = stub.run("lambe_needs_you")
+    T.ok(ok, tostring(message))
+    T.eq(message, "Nothing needs you right now.", "message")
+    T.eq(#stub.prompts, 0, "no prompt")
+  end)
+
+  T.test("Needs You degrades like the other pickers on old servers", function()
+    local stub = boot("p19", nil, fixtures.attention)
+    local ok, message = stub.run("lambe_needs_you")
+    T.ok(ok, tostring(message))
+    T.contains(message, "preview.21", "message")
+    T.eq(stub.windows[1].label, "Lambe dashboard", "dashboard")
+  end)
+
+  T.test("empty states explain what to do", function()
+    local stub = boot("p21", nil, fixtures.stopped_daemon)
+    stub.snapshot = { Alive = false, Runs = {}, History = {} }
+    local ok, err = stub.run("lambe_open_run")
+    T.eq(ok, false, "raised")
+    T.contains(err, "daemon is stopped", "stopped daemon")
+    stub.snapshot = fixtures.alive
+    ok, err = stub.run("lambe_open_run", { workflow = "nope" })
+    T.eq(ok, false, "raised")
+    T.contains(err, "no runs for workflow `nope`", "workflow")
   end)
 
   T.test("Switch Host asks the app for its host picker", function()

@@ -46,17 +46,31 @@ local function without_picker(config, why)
   return message
 end
 
--- Pick one run; `workflow` (optional) narrows the list. Returns the issue
--- id and the snapshot it was picked from, or nil when the user cancelled.
-local function choose_run(config, workflow)
+-- Pick one run; `workflow` (optional) narrows the list and `only_attention`
+-- keeps the runs that need a human. Returns the issue id and the snapshot
+-- it was picked from; nil when the user cancelled; and, as a third result,
+-- a message when there was nothing to pick (for only_attention) so the
+-- caller can report it without failing.
+local function choose_run(config, workflow, only_attention)
   local snapshot = snapshot_mod.read(config)
-  local items = rows.picker_items(snapshot, workflow)
+  local items = rows.picker_items(snapshot, workflow, only_attention)
   if #items == 0 then
-    errors.fail("no runs yet; start `lambe run` and queue an issue first")
+    local message = rows.empty_message(snapshot, workflow, only_attention)
+    if only_attention then return nil, snapshot, message end
+    errors.fail(message)
   end
   local where = (snapshot.Machine ~= nil and snapshot.Machine ~= "") and (" on " .. snapshot.Machine) or ""
-  local title = "Open Lambe run" .. where .. (workflow ~= nil and workflow ~= "" and (" · " .. workflow) or "")
-  local chosen, reason, detail = host.pick{ title = title, placeholder = "Filter runs", items = items }
+  local title = (only_attention and "Lambe runs that need you" or "Open Lambe run") .. where
+  if workflow ~= nil and workflow ~= "" then title = title .. " · " .. workflow end
+  if not only_attention then
+    local n = rows.attention_count(snapshot)
+    if n > 0 then title = title .. " · " .. n .. " need you" end
+  end
+  local chosen, reason, detail = host.pick{
+    title = title,
+    placeholder = only_attention and "Filter runs that need you" or "Filter runs",
+    items = items,
+  }
   chosen = errors.picked(chosen, reason, detail, "run picker")
   if chosen == nil then return nil end
   return chosen, snapshot
@@ -125,6 +139,22 @@ local function register_all()
         return open_run(issue, args.config, snapshot)
       end
       open_run(issue, args.config)
+    end,
+  }
+
+  host.action{
+    name = "lambe_needs_you",
+    title = "Lambe: Needs You…",
+    category = "Lambe",
+    description = "List only the runs waiting on a human (gate escalation, failed gates, interrupted, retrying), then follow the chosen one",
+    keywords = "lambe needs you attention blocked escalation stuck review human",
+    args = { config = "string?" },
+    run = function(_, args)
+      local ok, why = host.picker_support()
+      if not ok then return without_picker(args.config, why) end
+      local issue, snapshot, message = choose_run(args.config, nil, true)
+      if issue == nil then return message end
+      return open_run(issue, args.config, snapshot)
     end,
   }
 

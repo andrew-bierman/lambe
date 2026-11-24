@@ -33,6 +33,25 @@ M.two_workflows = {
   History = { run("a-4", "D", "review", "stopped: done", 1, 1) },
 }
 
+-- Runs needing a human, by phase and by an explicit Attention field.
+M.attention = {
+  Alive = true, Machine = "mini",
+  Runs = {
+    run("n-1", "Quiet worker", "build", "running", 1, 2),
+    { IssueID = "n-2", Title = "Stalled", Workflow = "build", Phase = "running", Attempt = 1, Turn = 4,
+      Attention = { Reason = "no activity", AgeSec = 840 } },
+    run("n-3", "Retrying", "build", "retry", 3, 5),
+    run("n-4", "Sleeping", "build", "deferred", 2, 1),
+  },
+  History = {
+    run("n-5", "Gate failed", "review", "stopped: gate red", 1, 6),
+    run("n-6", "Done", "review", "stopped: done", 1, 3),
+    run("n-3", "Retrying (older attempt)", "build", "stopped: done", 2, 5),
+  },
+}
+
+M.alive_quiet = { Alive = true, Runs = { run("q-1", "Quiet", "build", "running", 1, 1) }, History = {} }
+
 function M.many(n)
   local history = {}
   for i = 1, n do history[i] = run("h-" .. i, "History " .. i, "build", "stopped: done", 1, 1) end
