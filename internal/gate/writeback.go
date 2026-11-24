@@ -18,7 +18,7 @@ const (
 	StatusClosed = tracker.StatusClosed
 	// StatusNeedsHuman parks an issue for human attention. bd requires
 	// custom statuses to be configured; see BdHub.EnsureNeedsHumanStatus.
-	StatusNeedsHuman = "needs-human"
+	StatusNeedsHuman = tracker.StatusNeedsHuman
 )
 
 // MetaTombstone marks an issue whose green completion was cleaned up, so
@@ -65,7 +65,7 @@ type Hub interface {
 	// close-race reconcile read: when a guarded close loses its race, the
 	// runner re-reads the status to decide whether the race winner
 	// already moved the issue terminal.
-	IssueStatus(ctx context.Context, issue string) (string, error)
+	IssueStatus(ctx context.Context, issue string) (tracker.Status, error)
 }
 
 // BdHub implements Hub (and KV) over the bd CLI in one tracker directory.
@@ -104,7 +104,7 @@ func (h *BdHub) run(ctx context.Context, args ...string) error {
 // EnsureNeedsHumanStatus configures bd's custom statuses to accept the
 // needs-human value. It is idempotent.
 func (h *BdHub) EnsureNeedsHumanStatus(ctx context.Context) error {
-	return h.run(ctx, "config", "set", "status.custom", StatusNeedsHuman)
+	return h.run(ctx, "config", "set", "status.custom", StatusNeedsHuman.String())
 }
 
 // Comment implements Hub.
@@ -216,7 +216,7 @@ func (h *BdHub) Put(ctx context.Context, issue, key, value string) error {
 
 // IssueStatus implements Hub: bd show, decoding either the single-object
 // or one-element-array shape, mirroring metadata.
-func (h *BdHub) IssueStatus(ctx context.Context, issue string) (string, error) {
+func (h *BdHub) IssueStatus(ctx context.Context, issue string) (tracker.Status, error) {
 	res, err := h.tr.Show(ctx, issue)
 	if err != nil {
 		return "", fmt.Errorf("show %s: %w", issue, err)
@@ -234,7 +234,7 @@ func (h *BdHub) IssueStatus(ctx context.Context, issue string) (string, error) {
 
 // issueStatusJSON mirrors the status field of bd's issue JSON.
 type issueStatusJSON struct {
-	Status string `json:"status"`
+	Status tracker.Status `json:"status"`
 }
 
 // issueMetaJSON mirrors the metadata field of bd's issue JSON.

@@ -26,7 +26,7 @@ func ListOrphanClaims(ctx context.Context, tr tracker.Tracker, stateDir string, 
 	if err != nil || len(recorded) == 0 {
 		return nil, err
 	}
-	active, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}})
+	active, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []tracker.Status{tracker.StatusInProgress}})
 	if err != nil {
 		return nil, fmt.Errorf("read in-progress claims: %w", err)
 	}

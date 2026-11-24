@@ -47,7 +47,7 @@ type CreateRequest struct {
 	Priority  int
 	Labels    []string
 	Metadata  map[string]string
-	Status    string // initial status; empty keeps bd's default (open)
+	Status    Status // initial status; empty keeps bd's default (open)
 	Ephemeral bool
 }
 
@@ -58,7 +58,7 @@ type UpdateRequest struct {
 	Claim       bool    // atomic claim (ignores IfAssignee)
 	IfAssignee  *string // guarded write; mismatch is bd exit 13
 	Assignee    string
-	Status      string
+	Status      Status
 	Metadata    map[string]string
 	DeferUntil  *time.Time // set with DeferReason to snooze; the time is the wake timer
 	DeferClear  bool       // remove an existing defer
@@ -83,7 +83,7 @@ const (
 // grammar is deliberately narrow: metadata is not settable here, so
 // metadata writes (attempt re-puts) stay single-op Update calls.
 type BatchFields struct {
-	Status   string
+	Status   Status
 	Priority *int
 	Title    string
 	Assignee string
@@ -159,7 +159,7 @@ func (o BatchOp) Render() (string, error) {
 		var sb strings.Builder
 		sb.WriteString("update " + o.ID)
 		if o.Fields.Status != "" {
-			sb.WriteString(" status=" + o.Fields.Status)
+			sb.WriteString(" status=" + o.Fields.Status.String())
 		}
 		if o.Fields.Priority != nil {
 			sb.WriteString(" priority=" + strconv.Itoa(*o.Fields.Priority))

@@ -27,7 +27,7 @@ func newFakeTracker(issues ...tracker.Issue) *fakeTracker {
 	return ft
 }
 
-func (f *fakeTracker) set(id, status string) {
+func (f *fakeTracker) set(id string, status tracker.Status) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	issue := f.issues[id]

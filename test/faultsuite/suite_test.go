@@ -263,7 +263,7 @@ func (g commandGate) Evaluate(ctx context.Context, req symphony.GateRequest) (sy
 
 // readyFront returns the ids currently on the ready dispatch front.
 func readyFront(ctx context.Context, tr tracker.Tracker) ([]string, error) {
-	issues, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{"ready"}})
+	issues, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []tracker.Status{"ready"}})
 	if err != nil {
 		return nil, err
 	}

@@ -10,7 +10,7 @@ import (
 // StatusActive reports whether a tracker status keeps a run alive. Anything
 // else (closed, done, removed, canceled, …) is terminal: reconciliation
 // stops the run and triggers terminal workspace cleanup.
-func StatusActive(status string) bool {
+func StatusActive(status tracker.Status) bool {
 	switch status {
 	case "", tracker.StatusOpen, tracker.StatusReady, tracker.StatusInProgress:
 		return true

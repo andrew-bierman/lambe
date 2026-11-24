@@ -209,7 +209,7 @@ func (t TrackerOrphans) Orphans(ctx context.Context) ([]Orphan, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	issues, err := t.Tracker.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}})
+	issues, err := t.Tracker.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []tracker.Status{tracker.StatusInProgress}})
 	if err != nil {
 		return nil, fmt.Errorf("read in-progress sessions: %w", err)
 	}

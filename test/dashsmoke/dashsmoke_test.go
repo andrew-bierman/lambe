@@ -195,7 +195,7 @@ func seedTracker(t *testing.T, bin string) *seededTracker {
 	// The parked status must be accepted by bd before the daemon's own
 	// idempotent EnsureNeedsHumanStatus runs; the escalation path writes
 	// this same configuration.
-	cfg := exec.Command(bin, "config", "set", "status.custom", gate.StatusNeedsHuman) //nolint:gosec // G204: fixed seeded bd command
+	cfg := exec.Command(bin, "config", "set", "status.custom", gate.StatusNeedsHuman.String()) //nolint:gosec // G204: fixed seeded bd command
 	cfg.Dir = project
 	if out, err := cfg.CombinedOutput(); err != nil {
 		t.Fatalf("configure needs-human status: %v: %s", err, out)

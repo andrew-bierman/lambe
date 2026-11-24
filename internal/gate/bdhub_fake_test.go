@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/andrew-bierman/lambe/internal/gate"
+	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
 // fakeBd writes a bd stand-in that appends its argv to a log and then runs
@@ -161,7 +162,7 @@ func TestBdHubReadsDecodeBothShowShapes(t *testing.T) {
 	tests := []struct {
 		name       string
 		show       string
-		wantStatus string
+		wantStatus tracker.Status
 		wantTomb   bool
 		wantKey    string
 		wantErr    bool

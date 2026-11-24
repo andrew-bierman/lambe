@@ -291,7 +291,7 @@ func RunHeartbeats(ctx context.Context, c HeartbeatConfig) {
 func beatRound(ctx context.Context, tr tracker.Tracker, actor string, labels []string, orphans *symphony.OrphanRegistry, log *slog.Logger, bound time.Duration) (slow bool) {
 	roundCtx, roundCancel := context.WithTimeout(ctx, bound)
 	defer roundCancel()
-	issues, err := tr.Dispatchable(roundCtx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}, Labels: labels})
+	issues, err := tr.Dispatchable(roundCtx, tracker.DispatchQuery{Statuses: []tracker.Status{tracker.StatusInProgress}, Labels: labels})
 	if err != nil {
 		log.Warn("heartbeat dispatch read failed", "category", ErrorCategory(err), "error", err)
 		return roundCtx.Err() != nil && ctx.Err() == nil

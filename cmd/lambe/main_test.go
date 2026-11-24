@@ -371,7 +371,7 @@ func TestDaemonOptionsGateClosesOwnClaim(t *testing.T) {
 	if err != nil || outcome.Verdict != symphony.GateGreen {
 		t.Fatalf("completion: %+v, error: %v", outcome, err)
 	}
-	closed, err := local.Dispatchable(ctx, tracker.DispatchQuery{IDs: []string{issue.ID}, Statuses: []string{tracker.StatusClosed}})
+	closed, err := local.Dispatchable(ctx, tracker.DispatchQuery{IDs: []string{issue.ID}, Statuses: []tracker.Status{tracker.StatusClosed}})
 	if err != nil || len(closed) != 1 || closed[0].Status != tracker.StatusClosed {
 		t.Fatalf("completed issue: %+v, error: %v", closed, err)
 	}

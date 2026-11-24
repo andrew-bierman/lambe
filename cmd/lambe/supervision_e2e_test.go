@@ -186,7 +186,7 @@ func (r *supervisionRig) waitClosed(within time.Duration) {
 	// Poll the tracker slowly: bd takes an exclusive embedded-database lock,
 	// and a tight poll starves the daemon under test.
 	r.waitFor(within, 3*time.Second, "issue closed through its gate", func() bool {
-		got, err := r.local.Dispatchable(context.Background(), tracker.DispatchQuery{IDs: []string{r.issueID}, Statuses: []string{tracker.StatusClosed}})
+		got, err := r.local.Dispatchable(context.Background(), tracker.DispatchQuery{IDs: []string{r.issueID}, Statuses: []tracker.Status{tracker.StatusClosed}})
 		return err == nil && len(got) == 1
 	})
 }
@@ -210,7 +210,7 @@ func (r *supervisionRig) waitFor(within, every time.Duration, what string, ok fu
 }
 
 func (r *supervisionRig) closedCount() int {
-	got, _ := r.local.Dispatchable(context.Background(), tracker.DispatchQuery{Statuses: []string{tracker.StatusClosed}})
+	got, _ := r.local.Dispatchable(context.Background(), tracker.DispatchQuery{Statuses: []tracker.Status{tracker.StatusClosed}})
 	n := 0
 	for _, i := range got {
 		if i.ID == r.issueID {

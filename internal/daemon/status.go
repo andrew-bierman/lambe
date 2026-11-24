@@ -107,7 +107,7 @@ func BuildReport(ctx context.Context, tr tracker.Tracker, labels, routeLabels []
 	attempts, attemptsErr := readAttempts(ctx, tr)
 	rep.AttemptsUnreadable = attemptsErr != nil
 
-	issues, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusInProgress}, Labels: labels})
+	issues, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []tracker.Status{tracker.StatusInProgress}, Labels: labels})
 	if err != nil {
 		return rep, fmt.Errorf("read active runs: %w", err)
 	}
@@ -125,7 +125,7 @@ func BuildReport(ctx context.Context, tr tracker.Tracker, labels, routeLabels []
 	// front. "ready" is a bd pseudo-status only valid as a sole filter, so
 	// the multi-status read must not include it; a deferred run's issue
 	// stays open until its wake fires.
-	deferred, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []string{tracker.StatusOpen, tracker.StatusDeferred}, Labels: labels})
+	deferred, err := tr.Dispatchable(ctx, tracker.DispatchQuery{Statuses: []tracker.Status{tracker.StatusOpen, tracker.StatusDeferred}, Labels: labels})
 	if err == nil {
 		now := time.Now()
 		for _, issue := range deferred {
@@ -139,10 +139,10 @@ func BuildReport(ctx context.Context, tr tracker.Tracker, labels, routeLabels []
 		sort.Slice(rep.Deferred, func(i, j int) bool { return rep.Deferred[i].WakeAt.Before(rep.Deferred[j].WakeAt) })
 	}
 
-	query := tracker.DispatchQuery{Statuses: []string{tracker.StatusBlocked, gate.StatusNeedsHuman}, Labels: labels, Unlimited: true}
+	query := tracker.DispatchQuery{Statuses: []tracker.Status{tracker.StatusBlocked, gate.StatusNeedsHuman}, Labels: labels, Unlimited: true}
 	parked, err := tr.Dispatchable(ctx, query)
 	var exitErr *tracker.ExitError
-	if errors.As(err, &exitErr) && strings.HasPrefix(exitErr.Stderr, `Error: invalid status "`+gate.StatusNeedsHuman+`" `) {
+	if errors.As(err, &exitErr) && strings.HasPrefix(exitErr.Stderr, `Error: invalid status "`+gate.StatusNeedsHuman.String()+`" `) {
 		// Beads rejects the entire filter when the custom status is unconfigured.
 		query.Statuses = query.Statuses[:1]
 		parked, err = tr.Dispatchable(ctx, query)

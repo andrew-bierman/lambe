@@ -61,7 +61,7 @@ func runEnqueue(args []string, out io.Writer) error {
 		return err
 	}
 	ctx := context.Background()
-	issues, err := local.Dispatchable(ctx, tracker.DispatchQuery{IDs: []string{id}, Statuses: []string{tracker.StatusOpen}})
+	issues, err := local.Dispatchable(ctx, tracker.DispatchQuery{IDs: []string{id}, Statuses: []tracker.Status{tracker.StatusOpen}})
 	if err != nil {
 		return err
 	}

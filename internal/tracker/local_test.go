@@ -109,7 +109,7 @@ func TestBDTwoReadDispatchReturnsDispatchable(t *testing.T) {
 	a := mkIssue(t, l, "alpha")
 	b := mkIssue(t, l, "beta")
 
-	byStatus, err := l.Dispatchable(t.Context(), DispatchQuery{Statuses: []string{"open"}})
+	byStatus, err := l.Dispatchable(t.Context(), DispatchQuery{Statuses: []Status{"open"}})
 	if err != nil {
 		t.Fatalf("dispatch by statuses: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestBDDeferUntilPastReentersReady(t *testing.T) {
 	}
 
 	// The ready-front read lazily wakes the issue whose until has passed.
-	ready, err := l.Dispatchable(t.Context(), DispatchQuery{Statuses: []string{"ready"}})
+	ready, err := l.Dispatchable(t.Context(), DispatchQuery{Statuses: []Status{"ready"}})
 	if err != nil {
 		t.Fatalf("ready read: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestBDAttemptFlowCallsAndVisibility(t *testing.T) {
 	if d := after["show"] - before["show"]; d != 0 {
 		t.Errorf("shows = %d, want 0", d)
 	}
-	ready, err := l.Dispatchable(t.Context(), DispatchQuery{Statuses: []string{StatusReady}})
+	ready, err := l.Dispatchable(t.Context(), DispatchQuery{Statuses: []Status{StatusReady}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,7 +465,7 @@ func BenchmarkBDOperations(b *testing.B) {
 	})
 	b.Run("list", func(b *testing.B) {
 		for b.Loop() {
-			if _, err := l.shell.List(ctx, DispatchQuery{Statuses: []string{"open"}}); err != nil {
+			if _, err := l.shell.List(ctx, DispatchQuery{Statuses: []Status{"open"}}); err != nil {
 				b.Fatal(err)
 			}
 		}
