@@ -243,17 +243,20 @@ examples:
   lambe mcp --config ./lambe.yaml
 `},
 	{"logs", "show agent output", `usage:
-  lambe logs [--config FILE] [--issue ID] [--follow] [--json]
+  lambe logs [--config FILE] [--issue ID] [--follow] [--json [--brief]]
 
 flags:
   --config FILE   ` + configFlagHelp + `
   --issue ID      show one issue
   --follow        follow live output
   --json          print the shared live snapshot as JSON
+  --brief         with --json: leave out agent output (far smaller) and add each
+                  run's AgeSec and Attention {Reason, AgeSec}, plus LambeVersion
 
 examples:
   lambe logs --issue lambe-abc --follow
   lambe logs --json
+  lambe logs --json --brief
 `},
 	{"enqueue", "queue a task onto a named workflow", `usage:
   lambe enqueue [--config FILE] --workflow NAME [--apply] ISSUE_ID

@@ -41,7 +41,7 @@ func (m *Model) runsFor(showHistory, showAttention bool) []daemon.LiveRun {
 		seen := make(map[string]bool, len(m.snapshot.Runs))
 		for _, run := range m.snapshot.Runs {
 			seen[run.IssueID] = true
-			if !showAttention || needsAttention(run.Phase) {
+			if _, attention := daemon.NeedsAttention(run); !showAttention || attention {
 				runs = append(runs, run)
 			}
 		}
@@ -77,14 +77,6 @@ func (m *Model) historyGroups() [][]daemon.LiveRun {
 	return daemon.GroupHistory(m.historyAttempts(), func(r daemon.LiveRun) daemon.AttemptKey {
 		return daemon.AttemptKey{Issue: r.IssueID, Attempt: r.Attempt, Phase: r.Phase, At: r.UpdatedAt}
 	})
-}
-
-func needsAttention(phase string) bool {
-	switch phase {
-	case "retry", "deferred", "interrupted", "stopped: gate escalation", "stopped: gate red":
-		return true
-	}
-	return false
 }
 
 // setRuns replaces the list contents while preserving the selected issue.
