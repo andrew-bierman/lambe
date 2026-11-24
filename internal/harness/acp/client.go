@@ -259,12 +259,22 @@ func (c *clientCallbacks) WaitForTerminalExit(context.Context, acpsdk.WaitForTer
 // the supervisor can see why the agent's tool call will not proceed.
 func (c *clientCallbacks) RequestPermission(_ context.Context, params acpsdk.RequestPermissionRequest) (acpsdk.RequestPermissionResponse, error) {
 	outcome := acpsdk.RequestPermissionOutcome{Cancelled: &acpsdk.RequestPermissionOutcomeCancelled{}}
-	for _, opt := range params.Options {
-		if opt.Kind == acpsdk.PermissionOptionKindRejectAlways ||
-			opt.Kind == acpsdk.PermissionOptionKindRejectOnce {
-			outcome = acpsdk.RequestPermissionOutcome{
-				Selected: &acpsdk.RequestPermissionOutcomeSelected{OptionId: opt.OptionId},
+	// Prefer reject-always wherever it appears: an agent that offers both
+	// reject kinds should not fall back to reject-once just because it listed
+	// that option first.
+	for _, kind := range []acpsdk.PermissionOptionKind{
+		acpsdk.PermissionOptionKindRejectAlways,
+		acpsdk.PermissionOptionKindRejectOnce,
+	} {
+		for _, opt := range params.Options {
+			if opt.Kind == kind {
+				outcome = acpsdk.RequestPermissionOutcome{
+					Selected: &acpsdk.RequestPermissionOutcomeSelected{OptionId: opt.OptionId},
+				}
+				break
 			}
+		}
+		if outcome.Selected != nil {
 			break
 		}
 	}
