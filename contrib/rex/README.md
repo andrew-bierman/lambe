@@ -25,6 +25,25 @@ not show) are raised as errors with the reason, so the palette or `rex do`
 shows them. Cancelling a picker is silent. For scripts,
 `rex do lambe_open_run issue=ac-123` skips the picker.
 
+## Compatibility
+
+The plugin gates on the Rex **API revision** the server reports
+(`rex api call server.version`), never on the preview name. Install it on every
+Rex host; each host is judged by its own server.
+
+| Rex preview | API revision | Dashboard, demo, check | Run output (tab or split) | Pickers (Open Run, Needs You, by Workflow) | Verified |
+| --- | --- | --- | --- | --- | --- |
+| preview.16 | 13 | yes | yes | no, falls back to the dashboard | schemas not captured; stub profile `p16` approximates revision 14 |
+| preview.19 | 14 | yes | yes | no, falls back to the dashboard | schemas captured from a real server, stub profile `p19` |
+| preview.21 | 18 | yes | yes | yes (`rex.ui` needs revision 17) | schemas captured from a real server, stub profile `p21` |
+
+Revisions 14 and 18 accept the same arguments for every `session.*` method the
+plugin calls (the captured schemas are identical); what changes at 17 is
+`rex.ui`. The plugin also needs a `lambe` binary from a release that has
+`lambe logs -json`; with `-brief` (much smaller, and it carries each run's
+`Attention` reason) it is used automatically, and an older binary is read
+through plain `-json`, where "needs you" is derived from the run's phase.
+
 ## Install
 
 On the machine that runs the Rex server:
@@ -158,12 +177,64 @@ app does not need `lambe.lua` installed.
 
 ## Daemon status
 
-When the daemon runs inside a Rex terminal, it can publish an OSC program
-status badge to that pane. Rex detection only observes: Lambe never starts a
-Rex server to look for one. A daemon under launchd or systemd keeps
-supervising when Rex closes; open a dashboard tab to follow it.
+When `lambe run` runs in a Rex terminal, it reports run status to Rex with
+OSC 7501 (the Program Status Protocol). Rex shows it in the session picker and
+on the tab headers of unfocused tabs. Each run reports under its own record,
+`lambe/<issue>`, titled with the issue id, so several runs never overwrite one
+another:
+
+| Run is | Badge | Message |
+| --- | --- | --- |
+| working (any active phase) | `working` | `ISSUE: phase` |
+| waiting to retry | `idle` | `ISSUE: waiting to retry` |
+| interrupted | `blocked`, kind `question` | `ISSUE: interrupted, needs a human` |
+| stopped on an escalated gate | `blocked`, kind `permission` | `ISSUE: gate escalation, needs a human` |
+| stopped on a red gate, or failed | `error` | `ISSUE: gate failed` |
+| stopped otherwise (done, gate green) | `done` | `ISSUE: reason` |
+
+Rex's protocol only knows the kinds `permission`, `question` and `auth`, so
+lambe's own reasons (needs-human, gate-escalated, stalled) travel in the
+message. A run that is only slow (stalled) is defined but not reported yet,
+because the daemon has no stall signal. When the daemon exits it clears every
+`lambe/...` record. Badges are written only when the daemon's output is a
+terminal: under launchd or systemd stdout is a log file and nothing is emitted.
+The daemon also keeps one Rex session per agent, named `lambe-<agent>`, and
+reuses it across runs and restarts.
+
+Rex detection only observes: Lambe never starts a Rex server to look for one.
+A daemon under launchd or systemd keeps supervising when Rex closes; open a
+dashboard tab to follow it.
+
+## Errors
+
+Failures are raised with `error(msg, 0)`, so the palette, `rex do` and the CLI
+all show the message. Cancelling a picker is the only silent outcome.
+
+| Message starts with | Meaning | What to do |
+| --- | --- | --- |
+| `Lambe: could not start `lambe`` | The binary is not where `bin` says, or is not on the login shell's `PATH` | Set `bin` in `lambe.config.lua` or `LAMBE_REX_BIN` to an absolute path |
+| `Lambe: `lambe logs -json -brief` failed (...)` | The snapshot command exited non-zero; the reason follows (exit 127 means not found, `timed out` means it took more than 15 s) | Run the same command in a terminal; check `config` and `state_dir` |
+| `Lambe: `lambe logs -json ...` printed no snapshot` | The output was not JSON | Update lambe; look for a wrapper script printing extra text |
+| `Lambe: the run picker needs Rex preview.21 or newer ...; opened the dashboard instead` | Server API revision is below 17 | Update Rex on that host (see Compatibility) |
+| `Lambe: run picker failed (no_client)` / `(failed: ...)` / `(busy)` / `(timeout)` / `(unsupported)` | Rex could not show the prompt: no app connected, a prompt already open, no answer in time, or a client without prompt support | Connect the Rex app to that host and run the action from the palette |
+| `Lambe: placement must be `tab` or `split`` | Bad `placement` setting or argument | Use `tab` or `split` |
+| `Lambe: lambe doctor failed (exit N) using BIN` | `lambe doctor` reported a problem; its output follows | Fix what the output names, then rerun **Check Setup** |
+| `Lambe: no runs yet; ...` / `no runs recorded and the daemon is stopped; ...` / `no runs for workflow `X` yet` | Nothing to list | Start the daemon (`lambe run`, `lambe service install`) or queue an issue |
+| `Nothing needs you right now.` | Not an error; **Needs You** found no run that needs a human | none |
 
 ## Troubleshooting
+
+### Reading `lambe_check`
+
+`rex do lambe_check --json` (or **Lambe: Check Setup**) returns:
+
+| Field | Healthy value | If not |
+| --- | --- | --- |
+| `version` | the plugin version `lambe setup rex` installed | an older number than your binary's means you should rerun `lambe setup rex --apply` |
+| `api_revision` | a number; 17 or more for pickers | `nil` means the server did not answer `server.version`; restart the Rex server |
+| `pickers` / `picker_note` | `true`, or `false` with the reason | the note names the missing revision |
+| `bin` | the absolute path you expect | `lambe` alone means the login-shell lookup is in use; set `bin` |
+| `doctor.ok`, `doctor.output` | `true` | the action fails and prints `lambe doctor`'s output; fix what it lists |
 
 **`Lambe: could not start lambe` or exit 127.** Rex starts programs with a
 minimal `PATH`, so a bare `lambe` in `~/.local/bin` is only found through the
@@ -214,6 +285,13 @@ UPDATE_GOLDEN=1 luajit contrib/rex/test/run.lua  # rewrite test/golden/rows.txt
 action names, picker items, and exec arguments, models the restricted APIs
 while a config loads, and exposes version profiles `p16` (API 13), `p19`
 (API 14, no `rex.ui`), and `p21` (API 18). All `rex.*` access in the plugin
-goes through `lua/lambe/host.lua`, so the stub covers the whole surface. CI
+goes through `lua/lambe/host.lua`, so the stub covers the whole surface.
+The arguments of `rex.session.*` and `rex.call` methods are checked against
+schemas captured from real servers: `testdata/api/revN/METHOD.json` holds
+`rex api describe METHOD --json` (name, input and output schema) for API
+revision N, and `go run ./contrib/rex/internal/gen` renders them into
+`test/apischema.lua`, which a Go test keeps in sync. To add a revision, capture
+the methods read-only (`rex -S HOST api describe METHOD --json`) into a new
+`revN/` directory and rerun the generator. CI
 runs the suite in the `rex-lua` job; `go test ./contrib/...` runs it too when
 luajit is installed.
