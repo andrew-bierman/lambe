@@ -437,7 +437,7 @@ func TestRunSIGHUPKeepsConfigOnInvalidReload(t *testing.T) {
 		}
 		waitForLog(t, logs, wantMsg)
 	}
-	// A valid reload is deliberately not driven: reload swaps d.opts.Config
+	// A valid reload is deliberately not driven: reload swaps the running config
 	// while the heartbeat goroutine reads it, a known data race under -race.
 	write("trackers: [unterminated\n")
 	hup("config reload rejected, keeping running config")
@@ -514,4 +514,45 @@ func TestRunShutdownClearsRexSurfaceAfterStateAPIBeforeLockRelease(t *testing.T)
 		t.Error("clear ran after the instance lock was released")
 	}
 	requireLockFree(t, stateDir, cfg)
+}
+
+// TestReloadValidConfigRacesWithBackgroundReaders drives a valid reload
+// repeatedly while the heartbeat goroutine re-reads the interval; under
+// -race it fails if reload publishes the new config unsynchronized.
+func TestReloadValidConfigRacesWithBackgroundReaders(t *testing.T) {
+	stateDir := t.TempDir()
+	trackerDir := t.TempDir()
+	cfgFile := filepath.Join(t.TempDir(), "lambe.yaml")
+	body := "supervisor:\n  heartbeat_interval: 1ms\ntrackers:\n  - name: main\n    type: repo\n    path: " + trackerDir + "\n"
+	if err := os.WriteFile(cfgFile, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(config.Options{File: cfgFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := &syncBuffer{}
+	opts := testDaemonOptions(stateDir, cfg, logs)
+	opts.ConfigPath = cfgFile
+	d, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() { runDone <- d.Run(ctx) }()
+	waitForLog(t, logs, daemonRunningMsg)
+
+	for range 200 {
+		d.reload()
+		_ = d.StateSource() // reads the config on the caller's goroutine too
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err := waitRun(t, runDone); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.config(); got == cfg {
+		t.Error("reload did not publish the new config")
+	}
 }
