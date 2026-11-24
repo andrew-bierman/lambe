@@ -4,27 +4,83 @@ on:
   push:
     tags:
       - "v*"
+  # Manual run = dry run: a goreleaser --snapshot build that publishes nothing.
+  workflow_dispatch:
+
+# Never run two releases at once, and never cancel one halfway through.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
-  contents: write
-  id-token: write # cosign keyless signing
-  attestations: write # build provenance
+  contents: read
 
 jobs:
-  release:
+  # A tag on a red or unmerged commit must not ship. Wait for CI on the tagged SHA.
+  gate:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      checks: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
+      - name: Tagged commit is on master
+        run: |
+          git fetch --no-tags origin master
+          git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD \
+            || { echo "::error::$GITHUB_SHA is not on master; refusing to release"; exit 1; }
+      - name: CI is green for the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          # Latest run per job name; require check, test and all four build jobs to succeed.
+          for _ in $(seq 1 80); do
+            runs=$(gh api "repos/${REPO}/commits/${GITHUB_SHA}/check-runs?per_page=100" --paginate \
+              --jq '.check_runs[] | select(.app.slug == "github-actions") | select(.name | test("^(check|test|build \\()")) | {name, conclusion, started_at}' \
+              | jq -s 'group_by(.name) | map(max_by(.started_at))')
+            echo "$runs" | jq -r '.[] | "\(.name): \(.conclusion // "pending")"'
+            if echo "$runs" | jq -e 'any(.[]; .conclusion != null and .conclusion != "success" and .conclusion != "skipped")' > /dev/null; then
+              echo "::error::CI failed for $GITHUB_SHA; refusing to release"; exit 1
+            fi
+            if echo "$runs" | jq -e '(map(.name) | index("check") != null and index("test") != null) and ([.[] | select(.name | startswith("build"))] | length) == 4 and all(.[]; .conclusion == "success")' > /dev/null; then
+              echo "CI is green for $GITHUB_SHA"; exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::timed out waiting for CI on $GITHUB_SHA"; exit 1
+
+  release:
+    needs: gate
+    # Run after a green gate (tag push) or with the gate skipped (manual dry run).
+    if: ${{ !cancelled() && (needs.gate.result == 'success' || needs.gate.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write # cosign keyless signing
+      attestations: write # build provenance
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.27.x"
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
       - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
       - name: Release notes from CHANGELOG.md
+        if: github.event_name == 'push'
         run: scripts/changelog-section.sh "${GITHUB_REF_NAME}" > "${RUNNER_TEMP}/notes.md"
       - name: Homebrew tap deploy key
+        if: github.event_name == 'push'
         env:
           HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
@@ -34,9 +90,11 @@ jobs:
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           version: "v2.20.2"
-          args: release --clean --release-notes=${{ runner.temp }}/notes.md
+          # Dry run: snapshot (no publish, no tap push) and no signing.
+          args: ${{ github.event_name == 'push' && format('release --clean --release-notes={0}/notes.md', runner.temp) || 'release --snapshot --clean --skip=sign' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      - if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-checksums: dist/checksums.txt
