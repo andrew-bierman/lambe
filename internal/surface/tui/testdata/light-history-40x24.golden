@@ -4,8 +4,8 @@
 {#645b73 on #ebe1ff bold}   ID      TITLE                     AGE
 {#6941a5 on #e3d8fb}▌{#b6242b on #e3d8fb}✘{default on #e3d8fb} {#20182b on #e3d8fb bold}demo-45{default on #e3d8fb} {#20182b on #e3d8fb bold}Validate the migration{default on #e3d8fb} {#645b73 on #e3d8fb}    2m
  {#1b7f3b on default}✔{default on default} {#20182b on default}demo-46{default on default} {#20182b on default}Check upgrade instruc…{default on default} {#645b73 on default}    5m
- {#805000 on default}↻{default on default} {#20182b on default}demo-44{default on default} {#20182b on default}Retry the install smo…
- {#1b7f3b on default}✔{default on default} {#20182b on default}demo-41{default on default} {#20182b on default}Publish the chang…{#645b73 on default} ×3{default on default} {#645b73 on default}   20m
+ {#805000 on default}↻{default on default} {#20182b on default}demo-44{default on default} {#20182b on default}Retry the install smo…{default on default} {#645b73 on default}   15m
+ {#1b7f3b on default}✔{default on default} {#20182b on default}demo-41{default on default} {#20182b on default}Publish the change…{#645b73 on default} ×3{default on default} {#645b73 on default}   20m
  {#6b6378 on default}◌{default on default} {#20182b on default}demo-39{default on default} {#20182b on default}Close the stale branch{default on default} {#645b73 on default}    3h
 
 

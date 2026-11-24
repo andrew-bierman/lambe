@@ -2,7 +2,7 @@
 {default on #28203a} {#aaa3b5 on #28203a bold}○ no data · no live snapshot yet · start `lambe run`{default on #28203a}                                               
  {#c5a7ff on default bold}1 Queue{default on default} {#c5a7ff on default bold}0{default on default} {#9a90a8 on default}│{default on default} {#9a90a8 on default}2 Attention{default on default} {#9a90a8 on default}0{default on default} {#9a90a8 on default}│{default on default} {#9a90a8 on default}3 History{default on default} {#9a90a8 on default}0
 {#c5a7ff on default bold}━━━━━━━━━━━{#493f5e on default}─────────────────────────────────────────────────────────────────────────────────────────
-{#9a90a8 on #28203a bold}   ID   TITLE                              PHASE        AGE{#493f5e on default}│{default on #28203a} Preview                                
+{#9a90a8 on #28203a bold}   ID   TITLE                            PHASE          AGE{#493f5e on default}│{default on #28203a} Preview                                
                                                            {#493f5e on default}│
  {#fafafa on default}No runs yet.{default on default}                                              {#493f5e on default}│
                                                            {#493f5e on default}│{default on default} {#9a90a8 on default}No active run. Output appears here whe

@@ -2,12 +2,12 @@
  ▲ wedged · loop not ticking for 30m · rows are frozen · restart the daemon
  1 Queue 5 │ 2 Attention 2 │ 3 History 5
 ━━━━━━━━━━━─────────────────────────────────────────────────────────────────────────────────────────
-   ID      TITLE                           PHASE        AGE│ demo-42  ▶ running  output 8s ago
-▌▶ demo-42 Verify the release build        running       8s│ Verify the release build
- ⚠ demo-43 Recheck the artifact checksum   stalled       4m│ attempt 1 · turn 2
- ↻ demo-44 Retry the install smoke test    retry      in 1m│ artifacts
- ✘ demo-45 Validate the migration          escalated     2m│ Build event 22: verifying release
- ✔ demo-46 Check upgrade instructions      passed        5m│ artifacts
+   ID      TITLE                         PHASE          AGE│ demo-42  ▶ running  output 8s ago
+▌▶ demo-42 Verify the release build      running         8s│ Verify the release build
+ ⚠ demo-43 Recheck the artifact checksum stalled         4m│ attempt 1 · turn 2
+ ↻ demo-44 Retry the install smoke test  retry        in 1m│ artifacts
+ ✘ demo-45 Validate the migration        escalated       2m│ Build event 22: verifying release
+ ✔ demo-46 Check upgrade instructions    passed          5m│ artifacts
                                                            │ Build event 23: verifying release
                                                            │ artifacts
                                                            │ Build event 24: verifying release
