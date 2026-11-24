@@ -129,7 +129,8 @@ func TestDriverRefusedCommandsReturnCommandError(t *testing.T) {
 // TestDriverCallHonorsCallTimeout pins that a prompt whose ack never comes
 // returns on the configured CallTimeout rather than hanging.
 func TestDriverCallHonorsCallTimeout(t *testing.T) {
-	d, _ := startedDriver(t, scriptSlowAck, func(o *pi.Options) { o.CallTimeout = 50 * time.Millisecond })
+	d, _ := startedDriver(t, scriptSlowAck, nil) // startup runs under the default call timeout
+	d.SetCallTimeout(50 * time.Millisecond)
 	err := d.Prompt(t.Context(), "x") // slow-ack holds the response for 700ms
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want deadline exceeded", err)
