@@ -181,6 +181,11 @@ func (e *errorCollection) Error() string {
 	return strings.Join(parts, "; ")
 }
 
+// MaxConfigBytes bounds the config file. Duplicate-key handling in the YAML
+// parser is quadratic, so a malformed or hostile file must not be able to hang
+// startup; operator configs are far smaller than this.
+const MaxConfigBytes = 1 << 20
+
 // Load resolves configuration as defaults < file < env < flags and validates
 // the result, reporting every problem at once.
 func Load(opts Options) (*Config, error) {
@@ -191,6 +196,13 @@ func Load(opts Options) (*Config, error) {
 	}
 
 	if opts.File != "" {
+		info, err := os.Stat(opts.File)
+		if err != nil {
+			return nil, fmt.Errorf("config file: %w", err)
+		}
+		if info.Size() > MaxConfigBytes {
+			return nil, fmt.Errorf("config file %s is larger than %d bytes", opts.File, MaxConfigBytes)
+		}
 		fileOnly := koanf.New(".")
 		if err := fileOnly.Load(file.Provider(opts.File), yaml.Parser()); err != nil {
 			return nil, fmt.Errorf("config file: %w", err)

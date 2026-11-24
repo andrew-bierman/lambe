@@ -4,6 +4,7 @@ package logging
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"strings"
@@ -51,5 +52,18 @@ func TestConstantMessageNotInterpolated(t *testing.T) {
 	}
 	if rec["msg"] != "attempt failed" {
 		t.Errorf("msg: got %v", rec["msg"])
+	}
+}
+
+func TestDefaultLoggerLevels(t *testing.T) {
+	log := Default()
+	if log == nil {
+		t.Fatal("Default() returned nil")
+	}
+	if !log.Enabled(context.Background(), slog.LevelInfo) {
+		t.Error("Default() should enable info")
+	}
+	if log.Enabled(context.Background(), slog.LevelDebug) {
+		t.Error("Default() should disable debug")
 	}
 }
