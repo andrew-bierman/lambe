@@ -20,21 +20,31 @@ builds:
     goarch:
       - amd64
       - arm64
+    # Reproducible: no build paths, commit time (not build time), fixed mtimes.
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
-      - -s -w
+      - -s -w -buildid=
       - -X main.version={{.Version}}
       - -X main.commit={{.Commit}}
-      - -X main.date={{.Date}}
+      - -X main.date={{.CommitDate}}
 
 archives:
   - id: lambe
     ids: [lambe]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    builds_info:
+      mtime: "{{ .CommitDate }}"
     files:
-      - LICENSE*
-      - README*
-      - CHANGELOG*
-      - completions/*
+      - src: LICENSE*
+        info: {mtime: "{{ .CommitDate }}"}
+      - src: README*
+        info: {mtime: "{{ .CommitDate }}"}
+      - src: CHANGELOG*
+        info: {mtime: "{{ .CommitDate }}"}
+      - src: completions/*
+        info: {mtime: "{{ .CommitDate }}"}
 
 checksum:
   name_template: checksums.txt
@@ -63,6 +73,7 @@ nfpms:
     ids: [lambe]
     package_name: lambe
     file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    mtime: "{{ .CommitDate }}"
     homepage: https://github.com/andrew-bierman/lambe
     maintainer: Andrew Bierman <94939237+andrew-bierman@users.noreply.github.com>
     description: Supervisor that runs coding agents against a Beads tracker and verifies completion.
