@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Rex: run output can open as a split beside the pane you ran the action from (`placement=split` or `placement = "split"` in `lambe.config.lua`), an already-open run tab is found in any session on the server instead of being duplicated, and run tabs stay open after the run finishes so its output stays readable.
 - Rex: **Lambe: Needs You…** lists only the runs waiting on a human. **Open Run…** now sorts needs-you runs first (`▲`), shows plain-language phases, hides `attempt 0 · turn 0`, counts workflow runs per distinct issue, and explains empty lists (stopped daemon, no runs, unknown workflow).
 - A luajit test suite for the Rex integration (`luajit contrib/rex/test/run.lua`, CI job `rex-lua`) with a strict `rex` stub, version profiles for Rex preview.16, .19, and .21, and golden picker rows. `lambe_check` now returns a machine-readable report (plugin version, Rex API revision, picker availability, binary, doctor output) and fails when `lambe doctor` fails.
 

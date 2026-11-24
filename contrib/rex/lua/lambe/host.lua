@@ -16,6 +16,9 @@ function M.new_window(args) return rex.session.new_window(args) end
 function M.view() return rex.session.view{} end
 function M.focus_window(window_id) return rex.session.focus_window{ window_id = window_id } end
 function M.set_block_label(block_id, label) return rex.session.set_block_label{ block_id = block_id, label = label } end
+function M.new_split(args) return rex.session.new_split(args) end
+function M.list_blocks() return rex.session.list_blocks{} end
+function M.focus_block(block_id) return rex.session.focus_block{ block_id = block_id } end
 function M.queue_client(name) return rex.client.queue(name) end
 
 -- Whether this build of Rex offers the picker. rex.ui exists from API
@@ -38,6 +41,19 @@ function M.picker_support()
   if present and (revision == nil or revision >= lambe_version.UI_API) then return true end
   local seen = revision and ("this server reports API revision " .. revision) or "this server has no rex.ui"
   return false, "the run picker needs Rex preview.21 or newer (API revision " .. lambe_version.UI_API .. "+); " .. seen
+end
+
+-- Other sessions on this server: {session_id, label} rows, their window
+-- views, and focusing a window there. rex.call works after config load.
+function M.sessions()
+  local result = rex.call("session.list")
+  return result and result.sessions or {}
+end
+
+function M.session_view(session_id) return rex.call("session.view", { session_id = session_id }) end
+
+function M.focus_window_in(session_id, window_id)
+  return rex.call("session.focus_window", { session_id = session_id, window_id = window_id })
 end
 
 function M.pick(opts) return rex.ui.pick(opts) end

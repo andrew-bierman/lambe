@@ -186,6 +186,9 @@ return {
   config = "",
   -- LAMBE_STATE_DIR of the daemon whose runs the actions read.
   state_dir = "",
+  -- Where run output opens: "tab" (a window of its own) or "split" (beside the
+  -- pane you ran the action from). The placement= argument overrides it.
+  placement = "tab",
 }
 `, bin))
 }

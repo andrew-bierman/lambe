@@ -51,6 +51,7 @@ return {
   bin = "/Users/me/.local/bin/lambe", -- "" = `lambe` through the login shell
   config = "",                        -- -config passed to every live invocation
   state_dir = "",                     -- LAMBE_STATE_DIR of the daemon to read
+  placement = "tab",                  -- "tab" or "split": where run output opens
 }
 ```
 
@@ -91,6 +92,19 @@ Rex's config directory (the directory of `$REX_CONFIG`, else
   move them there before using `--force`.
 - **`--uninstall [--apply]`** removes the managed files under the same rules,
   keeps `lambe.config.lua`, and reminds you to delete the `dofile` line.
+
+## Where output opens
+
+By default a run opens in a tab of its own, labeled `Lambe · ID`. Set
+`placement = "split"` in `lambe.config.lua`, or pass `placement=split` to
+`lambe_open_run`, `lambe_needs_you`, or `lambe_open_workflow_run` (for example
+`rex do lambe_open_run issue=ac-123 placement=split`), to open it as a split
+beside the pane you ran the action from. A split is found again by its pane
+title (`ID · Workflow · state`), so picking the run twice focuses the same
+pane. If a tab for the run is already open in another session on the same
+server, the action focuses it there and says which session holds it instead of
+opening a duplicate. Run output stays on screen after the run finishes until
+you close the tab.
 
 ## Tab titles
 

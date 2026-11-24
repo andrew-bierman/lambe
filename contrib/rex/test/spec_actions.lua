@@ -293,6 +293,63 @@ return function(T)
     T.contains(err, "no runs for workflow `nope`", "workflow")
   end)
 
+  T.test("output tabs stay open after the command exits; the dashboard does not", function()
+    local stub = boot("p21")
+    T.ok(stub.run("lambe_open_run", { issue = "ac-1" }))
+    T.ok(stub.run("lambe_dashboard"))
+    local run_opts = stub.windows[1].blocks[1].layout.options
+    T.eq(run_opts.exit.on_completion, false, "run tab keeps its output")
+    T.eq(stub.windows[2].blocks[1].layout.options.exit, nil, "dashboard closes on quit")
+  end)
+
+  T.test("split placement opens beside the invoking block and reuses the pane", function()
+    local stub = boot("p21")
+    T.ok(stub.run("lambe_dashboard"))
+    local anchor = stub.windows[1].blocks[1].block_id
+    local function run(args)
+      local def = stub.actions.lambe_open_run
+      return pcall(def.run, { session_id = "session:1", block_id = anchor }, args)
+    end
+    T.ok(run({ issue = "ac-1", placement = "split" }))
+    T.eq(#stub.windows, 1, "no new window")
+    T.eq(#stub.windows[1].blocks, 2, "one new pane")
+    T.eq(stub.splits[1].anchor_id, anchor, "anchored on the invoking block")
+    T.eq(stub.splits[1].direction, "horizontal", "side by side")
+    T.eq(stub.windows[1].blocks[2].label, "ac-1 · build · running", "pane title")
+    stub.snapshot = { Alive = true, Runs = { { IssueID = "ac-1", Workflow = "build", Phase = "gating" } }, History = {} }
+    T.ok(run({ issue = "ac-1", placement = "split" }))
+    T.eq(#stub.windows[1].blocks, 2, "pane reused")
+    T.eq(stub.focused[#stub.focused], stub.windows[1].blocks[2].block_id, "pane focused")
+    T.eq(stub.windows[1].blocks[2].label, "ac-1 · build · gating", "pane retitled")
+  end)
+
+  T.test("placement comes from the argument, then lambe.config.lua, and is validated", function()
+    local stub = boot("p21", { bin = BIN, placement = "split" })
+    T.ok(stub.run("lambe_dashboard"))
+    local anchor = stub.windows[1].blocks[1].block_id
+    local def = stub.actions.lambe_open_run
+    T.ok(pcall(def.run, { session_id = "session:1", block_id = anchor }, { issue = "a-1" }))
+    T.eq(#stub.splits, 1, "config default is split")
+    T.ok(pcall(def.run, { session_id = "session:1", block_id = anchor }, { issue = "a-2", placement = "tab" }))
+    T.eq(stub.windows[2].label, "Lambe · a-2", "argument wins")
+    local ok, err = stub.run("lambe_open_run", { issue = "a-3", placement = "float" })
+    T.eq(ok, false, "invalid placement raised")
+    T.contains(err, "placement must be", "message")
+  end)
+
+  T.test("a run open in another session is found, not duplicated", function()
+    local stub = boot("p21")
+    stub.other_sessions = { {
+      session_id = "session:2", label = "Agents",
+      windows = { { window_id = "window:r", label = "Lambe · ac-1", layers = { { blocks = { { block_id = "block:r", label = "ac-1" } } } } } },
+    } }
+    local ok, message = stub.run("lambe_open_run", { issue = "ac-1" })
+    T.ok(ok, tostring(message))
+    T.eq(#stub.windows, 0, "nothing duplicated")
+    T.eq(stub.remote_focused[1], "session:2/window:r", "focused where it lives")
+    T.contains(message, "already open in session `Agents`", "says where")
+  end)
+
   T.test("Switch Host asks the app for its host picker", function()
     local stub = boot("p21")
     T.ok(stub.run("lambe_switch_host"))
