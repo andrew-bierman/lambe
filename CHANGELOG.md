@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- TUI filter rework: `/` now matches what the table shows (id, title, the PHASE word such as `stalled` or `escalated`, and workflow name) by case-insensitive substring with best matches first, so `/passed` no longer matches escalated rows. Scope a term with `phase:`, `wf:`, `id:` or `title:`; all terms must match. The filter survives switching views, highlights matches, shows `(n of m)` and has a clearer empty state.
 - `lambe setup rex` now adds a managed, marker-delimited block to Rex's `init.lua` (opt out with `--no-init`), validates the new file with `rex config check --json` before replacing `init.lua` and leaves it untouched if Rex rejects it, can bind suggested keys under a `cmd+shift+l` prefix with `--keys` (skipping keys already bound per `rex keymap --json`), prints a machine-readable plan or result with `--json`, and `--uninstall` removes the block.
 - Docs: a generated configuration reference (`docs/reference/config.md`, checked by a Go test so it cannot drift from the code), a real contributor `docs/ARCHITECTURE.md` (the planning-era document moved to `docs/research/`), `docs/TROUBLESHOOTING.md`, `docs/GLOSSARY.md`, `docs/UPGRADING.md`, and a documentation index in the README.
 - `lambe completion bash|zsh|fish` prints shell completions generated from the help text. The Homebrew formula installs them, the deb/rpm/apk packages ship them under the standard vendor completion directories, and the release archives include a `completions/` directory.
