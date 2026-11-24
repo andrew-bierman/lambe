@@ -18,10 +18,17 @@ import (
 	"github.com/andrew-bierman/lambe/internal/proc"
 	"github.com/andrew-bierman/lambe/internal/testchild"
 	"github.com/andrew-bierman/lambe/internal/tracker"
+	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {
-	testchild.Main(m)
+	testchild.MaybeReexec()
+	// Keep-alive connections that test HTTP clients leave pooled are not leaks;
+	// they wind down on the transport's idle timeout.
+	goleak.VerifyTestMain(m,
+		goleak.IgnoreTopFunction("net/http.(*persistConn).readLoop"),
+		goleak.IgnoreTopFunction("net/http.(*persistConn).writeLoop"),
+	)
 }
 
 func TestExecCommandBoundsWaitForInheritedStdout(t *testing.T) {

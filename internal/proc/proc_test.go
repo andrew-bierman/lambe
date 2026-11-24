@@ -14,10 +14,12 @@ import (
 
 	"github.com/andrew-bierman/lambe/internal/proc"
 	"github.com/andrew-bierman/lambe/internal/testchild"
+	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {
-	testchild.Main(m)
+	testchild.MaybeReexec()
+	goleak.VerifyTestMain(m)
 }
 
 // start launches the fake agent with the given behavior.

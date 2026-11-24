@@ -112,7 +112,8 @@ func (d *fakeDriver) emit(ev harness.Event) {
 
 // newTestRunner returns a runner whose drivers come from a counting
 // factory, so tests can assert how many driver instances were built.
-func newTestRunner(runFn func(*fakeDriver, string) harness.Outcome) (*harnessRunner, *int32) {
+func newTestRunner(t *testing.T, runFn func(*fakeDriver, string) harness.Outcome) (*harnessRunner, *int32) {
+	t.Helper()
 	var constructed int32
 	r := newHarnessRunner("pi", nil)
 	r.factory = func(symphony.TurnRequest) (harness.Driver, error) {
@@ -121,6 +122,18 @@ func newTestRunner(runFn func(*fakeDriver, string) harness.Outcome) (*harnessRun
 		d.runFn = runFn
 		return d, nil
 	}
+	// Retire every driver still mapped so its drain goroutine exits.
+	t.Cleanup(func() {
+		r.mu.Lock()
+		ids := make([]string, 0, len(r.drivers))
+		for id := range r.drivers {
+			ids = append(ids, id)
+		}
+		r.mu.Unlock()
+		for _, id := range ids {
+			r.CloseSession(context.Background(), id)
+		}
+	})
 	return r, &constructed
 }
 
@@ -136,7 +149,7 @@ var tWorkspace = "/tmp/opencode/lambe-test-ws"
 // closes.
 func TestRunTurnDrainsEventStream(t *testing.T) {
 	t.Parallel()
-	r, constructed := newTestRunner(func(d *fakeDriver, _ string) harness.Outcome {
+	r, constructed := newTestRunner(t, func(d *fakeDriver, _ string) harness.Outcome {
 		for i := 0; i < 3000; i++ {
 			d.emit(harness.ToolExecutionStartedEvent{ToolName: "bash"})
 		}
@@ -184,7 +197,7 @@ func TestRunTurnDrainsEventStream(t *testing.T) {
 // diagnostics.
 func TestRunTurnSettledOutputCarriesLastAssistantMessage(t *testing.T) {
 	t.Parallel()
-	r, _ := newTestRunner(func(d *fakeDriver, _ string) harness.Outcome {
+	r, _ := newTestRunner(t, func(d *fakeDriver, _ string) harness.Outcome {
 		d.emit(harness.MessageCompletedEvent{Role: "user", Text: "please fix"})
 		d.emit(harness.MessageCompletedEvent{Role: "assistant", Text: "earlier status"})
 		d.emit(harness.MessageCompletedEvent{Role: "assistant", Text: "done: tests pass"})
@@ -207,7 +220,7 @@ func TestRunTurnSettledOutputCarriesLastAssistantMessage(t *testing.T) {
 func TestDeadDriverRetiredAndReconstructed(t *testing.T) {
 	t.Parallel()
 	var first *fakeDriver
-	r, constructed := newTestRunner(func(d *fakeDriver, _ string) harness.Outcome {
+	r, constructed := newTestRunner(t, func(d *fakeDriver, _ string) harness.Outcome {
 		if first == nil {
 			first = d
 			return harness.Outcome{Kind: harness.OutcomeFailed, Err: errors.New("agent exploded")}
@@ -249,7 +262,7 @@ func TestDeadDriverRetiredAndReconstructed(t *testing.T) {
 func TestCloseSessionClosesLiveDriver(t *testing.T) {
 	t.Parallel()
 	var live *fakeDriver
-	r, constructed := newTestRunner(func(d *fakeDriver, _ string) harness.Outcome {
+	r, constructed := newTestRunner(t, func(d *fakeDriver, _ string) harness.Outcome {
 		live = d
 		return harness.Outcome{Kind: harness.OutcomeSettled}
 	})
