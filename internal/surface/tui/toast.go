@@ -32,7 +32,7 @@ func (m *Model) showToast(text string, isErr, pending bool) tea.Cmd {
 		m.toast = t
 		return nil
 	}
-	t.until = clock().Add(toastTTL)
+	t.until = m.clock().Add(toastTTL)
 	m.toast = t
 	return tea.Tick(toastTTL, func(time.Time) tea.Msg { return toastExpiredMsg{t.seq} })
 }
@@ -40,7 +40,7 @@ func (m *Model) showToast(text string, isErr, pending bool) tea.Cmd {
 // activeToast reports the toast to draw, if one is live.
 func (m *Model) activeToast() (toast, bool) {
 	t := m.toast
-	if t.text == "" || (!t.until.IsZero() && !clock().Before(t.until)) {
+	if t.text == "" || (!t.until.IsZero() && !m.clock().Before(t.until)) {
 		return toast{}, false
 	}
 	return t, true

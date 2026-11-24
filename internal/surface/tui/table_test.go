@@ -45,7 +45,7 @@ func TestTableColumnsAlign(t *testing.T) {
 		UpdatedAt: now.Add(-7 * time.Minute),
 	})
 	for _, width := range []int{60, 100, 140} {
-		m := New("")
+		m := at(New(""), now)
 		m.Update(snapshotMsg{snapshot: snap, alive: true})
 		m.Update(tea.WindowSizeMsg{Width: width, Height: 30})
 		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})

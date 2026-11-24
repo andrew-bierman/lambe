@@ -27,6 +27,7 @@ func hostLabel() string {
 func (m *Model) workflowLabel() string {
 	var names []string
 	add := func(w string) {
+		w = oneLine(w)
 		if w != "" && !slices.Contains(names, w) {
 			names = append(names, w)
 		}
@@ -80,12 +81,12 @@ func (m *Model) renderHeader() string {
 	badge := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).
 		Background(lipgloss.AdaptiveColor{Light: "#6236A1", Dark: "#654399"}).Padding(0, 1).Render("lambe")
 
-	h := m.health(clock())
+	h := m.health(m.clock())
 	health := on(h.style()).Render(h.label(m.width < 36))
 
 	active, waiting, stalled := 0, 0, 0
 	if m.alive {
-		now := clock()
+		now := m.clock()
 		for _, run := range m.snapshot.Runs {
 			if stalledFor(run, true, now) > 0 {
 				stalled++
@@ -299,6 +300,7 @@ func (m *Model) renderFooter() string {
 		left = m.renderToast(max(1, inner-lipgloss.Width(right)-2))
 	}
 	gap := max(1, inner-lipgloss.Width(left)-lipgloss.Width(right))
-	lines = append(lines, left+strings.Repeat(" ", gap)+right)
+	// Truncate: in a very narrow window the status alone is wider than the row and would wrap.
+	lines = append(lines, ansi.Truncate(left+strings.Repeat(" ", gap)+right, inner, "…"))
 	return style.Render(strings.Join(lines, "\n"))
 }

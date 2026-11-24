@@ -90,7 +90,7 @@ func (m *Model) setRuns(runs []daemon.LiveRun) {
 		}
 	}
 	for i, run := range runs {
-		items[i] = runItem{run: run, live: m.alive, attempts: counts[run.IssueID]}
+		items[i] = runItem{run: run, live: m.alive, attempts: counts[run.IssueID], now: m.clock}
 	}
 	m.replaceListItems(items)
 	if m.selectedID != "" {

@@ -1,0 +1,24 @@
+{default on #654399} {#ffffff on #654399 bold}lambe{default on #654399} {default on #28203a}  {#8de0bc on #28203a bold}● running{default on #28203a}  {#a79eb5 on #28203a}demo{default on #28203a}  {#ff6b6b on #28203a bold}⚠1{default on #28203a}  {#8de0bc on #28203a bold}2▶{default on #28203a} {#f3c582 on #28203a}1↻{default on #28203a}     
+ {#a79eb5 on default}1 Queue{default on default} {#a79eb5 on default}7{default on default} {#a79eb5 on default}│{default on default} {#c5a7ff on default bold}2 Attn{default on default} {#c5a7ff on default bold}3{default on default} {#a79eb5 on default}│{default on default} {#a79eb5 on default}3 Hist{default on default} {#a79eb5 on default}5
+{#493f5e on default}────────────{#c5a7ff on default bold}━━━━━━━━━━{#493f5e on default}──────────────────
+{#a79eb5 on #28203a bold}   ID      TITLE                     AGE
+{#c5a7ff on #342a4c}▌{#f3c582 on #342a4c}↻{default on #342a4c} {#fafafa on #342a4c bold}demo-44{default on #342a4c} {#fafafa on #342a4c bold}Retry the install smo…{default on #342a4c} {#a79eb5 on #342a4c} in 1m
+ {#ff6b6b on default}✘{default on default} {#fafafa on default}demo-45{default on default} {#fafafa on default}Validate the migration{default on default} {#a79eb5 on default}    2m
+ {#f3c582 on default}!{default on default} {#fafafa on default}demo-48{default on default} {#fafafa on default}Publish migration not…
+
+
+
+
+
+
+
+
+{default on #28203a} {#f3ebff on #28203a bold}demo-44{default on #28203a}  {#f3c582 on #28203a}↻ retry{default on #28203a}  {#a79eb5 on #28203a}retry in 1m{default on #28203a}          
+ {#fafafa on default bold}Retry the install smoke test
+
+ {#f3c582 on default bold}Last gate rejection
+ The registry timed out during the
+ install smoke test.
+
+ {#a79eb5 on default}Issue:{default on default}      {#fafafa on default}demo-44
+{default on #201b2a} {#eadfff on #201b2a bold}enter{default on default} {#beb5cb on default}open{default on default}  {#eadfff on default bold}:{default on default} {#beb5cb on default}cmd{default on default}  {#eadfff on default bold}?{default on default}  {#eadfff on default bold}q{default on default} {#beb5cb on default}quit{default on default}       {#fafafa on default}1/3{default on #201b2a} 

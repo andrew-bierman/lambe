@@ -16,13 +16,11 @@ import (
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
-// frozenClock pins rendered ages so snapshots are stable.
+// frozenClock returns the fixed instant the snapshot tests render at. Models
+// take it through at() (demo.go).
 func frozenClock(t *testing.T) time.Time {
 	t.Helper()
-	fixed := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
-	clock = func() time.Time { return fixed }
-	t.Cleanup(func() { clock = time.Now })
-	return fixed
+	return time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
 }
 
 func plain(view string) string {

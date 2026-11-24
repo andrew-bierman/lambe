@@ -14,13 +14,10 @@ import (
 	"github.com/andrew-bierman/lambe/internal/daemon"
 )
 
-// clock is the time source for rendered ages; tests replace it.
-var clock = time.Now
-
 // Adaptive palette shared by the table, tabs and chrome.
 var (
 	colBorder = lipgloss.AdaptiveColor{Light: "#B9AFC9", Dark: "#4A3F5E"}
-	colFaint  = lipgloss.AdaptiveColor{Light: "#645B73", Dark: "#9A90A8"}
+	colFaint  = lipgloss.AdaptiveColor{Light: "#645B73", Dark: "#A79EB5"}
 	colSelBg  = lipgloss.AdaptiveColor{Light: "#E4D8FB", Dark: "#352A4C"}
 	colBarBg  = lipgloss.AdaptiveColor{Light: "#EBE1FF", Dark: "#29203A"}
 )
@@ -154,7 +151,7 @@ func (m *Model) filterHeader(width int) string {
 	count := dimStyle.Render(fmt.Sprintf("  (%d of %d)", len(m.list.VisibleItems()), len(m.list.Items())))
 	if m.list.FilterState() == list.Filtering {
 		// The input pads itself to its width, so reserve room for the count on the right.
-		return style.Render(ansi.Truncate(m.list.FilterInput.View(), max(0, width-lipgloss.Width(count)), "") + count)
+		return style.Render(ansi.Truncate(ansi.Truncate(m.list.FilterInput.View(), max(0, width-lipgloss.Width(count)), "")+count, width, ""))
 	}
 	text := lipgloss.NewStyle().Foreground(accentColor).Bold(true).Render("/ "+m.list.FilterValue()) +
 		count + dimStyle.Render("  esc clears")
@@ -199,8 +196,9 @@ func (m *Model) renderRow(item runItem, c tableCols, selected bool, now time.Tim
 			m.cell(word, phaseColWidth, st(phaseStyle.Bold(false)), fPhase))
 	}
 	parts = append(parts, st(lipgloss.NewStyle()).Render(" "), st(ageStyle).Render(pad(age, ageColWidth, true)))
-	row := strings.Join(parts, "")
-	return st(lipgloss.NewStyle()).Width(c.totalWidth).MaxWidth(c.totalWidth).Render(row)
+	// Truncate before styling: Width would wrap a row wider than the table onto extra lines.
+	row := ansi.Truncate(strings.Join(parts, ""), c.totalWidth, "")
+	return st(lipgloss.NewStyle()).Width(c.totalWidth).Render(row)
 }
 
 func (m *Model) emptyMessage() []string {
@@ -221,7 +219,7 @@ func (m *Model) renderTable(width, height int) string {
 	if width < 1 || height < 1 {
 		return ""
 	}
-	now := clock()
+	now := m.clock()
 	m.filterTerms = nil
 	if m.list.FilterState() != list.Unfiltered {
 		m.filterTerms = parseFilter(m.list.FilterValue())

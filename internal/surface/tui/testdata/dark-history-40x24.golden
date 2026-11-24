@@ -1,0 +1,24 @@
+{default on #654399} {#ffffff on #654399 bold}lambe{default on #654399} {default on #28203a}  {#8de0bc on #28203a bold}● running{default on #28203a}  {#a79eb5 on #28203a}demo{default on #28203a}  {#ff6b6b on #28203a bold}⚠1{default on #28203a}  {#8de0bc on #28203a bold}2▶{default on #28203a} {#f3c582 on #28203a}1↻{default on #28203a}     
+ {#a79eb5 on default}1 Queue{default on default} {#a79eb5 on default}7{default on default} {#a79eb5 on default}│{default on default} {#a79eb5 on default}2 Attn{default on default} {#f3c582 on default bold}3{default on default} {#a79eb5 on default}│{default on default} {#c5a7ff on default bold}3 Hist{default on default} {#c5a7ff on default bold}5
+{#493f5e on default}───────────────────────{#c5a7ff on default bold}━━━━━━━━━━{#493f5e on default}───────
+{#a79eb5 on #28203a bold}   ID      TITLE                     AGE
+{#c5a7ff on #342a4c}▌{#ff6b6b on #342a4c}✘{default on #342a4c} {#fafafa on #342a4c bold}demo-45{default on #342a4c} {#fafafa on #342a4c bold}Validate the migration{default on #342a4c} {#a79eb5 on #342a4c}    2m
+ {#5fd38d on default}✔{default on default} {#fafafa on default}demo-46{default on default} {#fafafa on default}Check upgrade instruc…{default on default} {#a79eb5 on default}    5m
+ {#f3c582 on default}↻{default on default} {#fafafa on default}demo-44{default on default} {#fafafa on default}Retry the install smo…{default on default} {#a79eb5 on default}   15m
+ {#5fd38d on default}✔{default on default} {#fafafa on default}demo-41{default on default} {#fafafa on default}Publish the change…{#a79eb5 on default} ×3{default on default} {#a79eb5 on default}   20m
+ {#aaa3b5 on default}◌{default on default} {#fafafa on default}demo-39{default on default} {#fafafa on default}Close the stale branch{default on default} {#a79eb5 on default}    3h
+
+
+
+
+
+
+{default on #28203a} {#f3ebff on #28203a bold}demo-45{default on #28203a}  {#ff6b6b on #28203a}✘ escalated{default on #28203a}                   
+ {#fafafa on default bold}Validate the migration
+
+ {#a79eb5 on default}Issue:{default on default}      {#fafafa on default}demo-45
+ {#a79eb5 on default}Phase:{default on default}      {#ff6b6b on default}✘ stopped: gate escalation
+ {#a79eb5 on default}Attempt:{default on default}    {#fafafa on default}3
+ {#a79eb5 on default}Turn:{default on default}       {#fafafa on default}0
+
+{default on #201b2a} {#eadfff on #201b2a bold}enter{default on default} {#beb5cb on default}open{default on default}  {#eadfff on default bold}:{default on default} {#beb5cb on default}cmd{default on default}  {#eadfff on default bold}?{default on default}  {#eadfff on default bold}q{default on default} {#beb5cb on default}quit{default on default}       {#fafafa on default}1/5{default on #201b2a} 

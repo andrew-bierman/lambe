@@ -44,6 +44,7 @@ type runItem struct {
 	// attempts is how many attempts of the issue the history row stands for;
 	// zero outside the history view.
 	attempts int
+	now      func() time.Time // time source for FilterValue; nil means time.Now
 }
 
 // stallAfter is how long an active run may stay silent (no output and no agent
@@ -83,6 +84,7 @@ type Model struct {
 	palette        *commandPalette
 	toast          toast
 	toastSeq       int
+	now            func() time.Time // time source; nil means time.Now
 	demoAt         time.Time
 	demo           bool // RunDemo: keep the sample runs from aging into stalls
 	queueTask      func(string) (string, error)
@@ -150,6 +152,14 @@ func (m *Model) readReadiness(after time.Duration) tea.Cmd {
 	})
 }
 
+// clock is the model's time source, so tests can pin or advance it per model.
+func (m *Model) clock() time.Time {
+	if m.now != nil {
+		return m.now()
+	}
+	return time.Now()
+}
+
 // New creates a dashboard that reads the live snapshot at path.
 func New(path string) *Model {
 	m := &Model{
@@ -190,7 +200,7 @@ func New(path string) *Model {
 func (m *Model) Init() tea.Cmd {
 	if m.path == "" {
 		if m.demo {
-			m.demoAt = clock()
+			m.demoAt = m.clock()
 			return demoTick()
 		}
 		return nil
@@ -582,6 +592,10 @@ func (m *Model) View() string {
 }
 
 // detailContent formats one run for the detail viewport.
+// oneLine collapses s to a single line without control bytes, for ids and
+// names that reach the screen unfiltered.
+func oneLine(s string) string { return strings.Join(strings.Fields(cleanTaskText(s)), " ") }
+
 func cleanTaskText(s string) string {
 	return strings.Map(func(r rune) rune {
 		if r != '\n' && (unicode.IsControl(r) || unicode.In(r, unicode.Cf)) {
