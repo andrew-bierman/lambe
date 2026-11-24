@@ -9,7 +9,7 @@
 [![CI](https://github.com/andrew-bierman/lambe/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/andrew-bierman/lambe/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/andrew-bierman/lambe)](https://github.com/andrew-bierman/lambe/releases/latest)
 [![Go Reference](https://pkg.go.dev/badge/github.com/andrew-bierman/lambe.svg)](https://pkg.go.dev/github.com/andrew-bierman/lambe)
-[![Go Report Card](https://goreportcard.com/badge/github.com/andrew-bierman/lambe)](https://goreportcard.com/report/github.com/andrew-bierman/lambe)
+[![Go version](https://img.shields.io/github/go-mod/go-version/andrew-bierman/lambe)](go.mod)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 
 </div>
