@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -87,4 +89,76 @@ func phasePresentation(phase string) (string, lipgloss.Style) {
 	default:
 		return "○", neutralStyle
 	}
+}
+
+// oscBudget bounds the terminal background query. lipgloss would otherwise
+// ask lazily with termenv's fixed 5 s timeout, blanking the first frame in
+// terminals that never answer OSC 11 (tmux without passthrough, some ssh paths).
+const oscBudget = 200 * time.Millisecond
+
+// applyTheme picks the light/dark palette before the first render and reports
+// whether the environment decided it; when false the caller should query the
+// terminal (see detectBackground). Order: LAMBE_THEME=light|dark, NO_COLOR
+// (dark; nothing is coloured anyway), COLORFGBG, then auto-detection.
+func applyTheme(getenv func(string) string, setDark func(bool)) bool {
+	switch strings.ToLower(strings.TrimSpace(getenv("LAMBE_THEME"))) {
+	case "dark":
+		setDark(true)
+		return true
+	case "light":
+		setDark(false)
+		return true
+	}
+	if getenv("NO_COLOR") != "" {
+		setDark(true)
+		return true
+	}
+	if dark, ok := colorFGBGDark(getenv("COLORFGBG")); ok {
+		setDark(dark)
+		return true
+	}
+	return false
+}
+
+// colorFGBGDark reads the background index (last field) of COLORFGBG.
+func colorFGBGDark(v string) (dark, ok bool) {
+	i := strings.LastIndex(v, ";")
+	if i < 0 {
+		return false, false
+	}
+	bg, err := strconv.Atoi(v[i+1:])
+	if err != nil || bg < 0 || bg > 15 {
+		return false, false
+	}
+	return bg < 7 || bg == 8, true
+}
+
+// parseOSC11 extracts dark/light from a reply like ESC ] 11 ; rgb:RRRR/GGGG/BBBB BEL.
+func parseOSC11(reply string) (dark, ok bool) {
+	_, rest, found := strings.Cut(reply, "rgb:")
+	if !found {
+		return false, false
+	}
+	var lum float64
+	weights := [3]float64{0.299, 0.587, 0.114}
+	parts := strings.SplitN(rest, "/", 3)
+	if len(parts) != 3 {
+		return false, false
+	}
+	for n, part := range parts {
+		digits := 0
+		for digits < len(part) && digits < 4 && strings.ContainsRune("0123456789abcdefABCDEF", rune(part[digits])) {
+			digits++
+		}
+		if digits == 0 {
+			return false, false
+		}
+		v, err := strconv.ParseUint(part[:digits], 16, 16)
+		if err != nil {
+			return false, false
+		}
+		top := float64(uint64(1)<<(4*digits) - 1)
+		lum += weights[n] * float64(v) / top
+	}
+	return lum < 0.5, true
 }
