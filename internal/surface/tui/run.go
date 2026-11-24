@@ -6,6 +6,7 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/term"
 
 	"github.com/andrew-bierman/lambe/internal/tracker"
@@ -25,6 +26,11 @@ func Run(ctx context.Context, path, trackerPath string, queue func(string) (stri
 func run(ctx context.Context, model *Model) error {
 	if !term.IsTerminal(os.Stdout.Fd()) {
 		return errors.New("lambe tui needs an interactive terminal; use `lambe logs -follow` for pipes")
+	}
+	// Resolve the background before bubbletea owns stdin; the query is bounded.
+	if !applyTheme(os.Getenv, lipgloss.SetHasDarkBackground) {
+		dark, ok := detectBackground(os.Stdin, os.Stdout, os.Getenv("TERM"), oscBudget)
+		lipgloss.SetHasDarkBackground(dark || !ok) // silent terminal: dark default
 	}
 	p := tea.NewProgram(model, tea.WithContext(ctx), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {

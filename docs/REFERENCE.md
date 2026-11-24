@@ -212,6 +212,9 @@ On narrow terminals and Rex splits, the TUI shows one pane at a time and fits mo
 the selected run, `Esc` from its details to return to the run list, or `Tab`
 to switch between panes.
 
+The palette follows the terminal background. `LAMBE_THEME=light|dark|auto` overrides it, `COLORFGBG` is honoured, and
+`NO_COLOR` disables color. When the terminal does not answer the background query, lambe waits at most 200 ms.
+
 ### Local state API (opt-in)
 
 A daemon can serve its supervised state as JSON on loopback for apps that
