@@ -27,6 +27,9 @@ type keyMap struct {
 	FilterApply  key.Binding
 	FilterCancel key.Binding
 	Views        key.Binding
+	Copy         key.Binding
+	Open         key.Binding
+	OpenEditor   key.Binding
 	Close        key.Binding
 	History      key.Binding
 	Attention    key.Binding
@@ -60,6 +63,9 @@ func defaultKeyMap(focus *focusArea) keyMap {
 		),
 		FilterApply:  key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "apply filter")),
 		FilterCancel: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear filter")),
+		Copy:         key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy, then y/i issue id, w workspace path, o output")),
+		Open:         key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open workspace in the file manager")),
+		OpenEditor:   key.NewBinding(key.WithKeys("O"), key.WithHelp("O", "open workspace in $EDITOR")),
 		Views:        key.NewBinding(key.WithKeys("1", "2", "3"), key.WithHelp("1-3", "queue / attn / history")),
 		Close:        key.NewBinding(key.WithKeys("esc", "q"), key.WithHelp("esc", "close help, palette or chart")),
 		Commands:     key.NewBinding(key.WithKeys(":", "ctrl+p"), key.WithHelp(": / ctrl+p", "command palette")),

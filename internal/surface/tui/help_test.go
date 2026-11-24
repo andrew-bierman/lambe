@@ -85,7 +85,7 @@ func TestPaletteHintsAreBoundKeys(t *testing.T) {
 		if c.desc == "" {
 			t.Errorf("%q has no description", c.label)
 		}
-		if c.hint != "" && !bound[c.hint] {
+		if c.hint != "" && !bound[c.hint] && !bound[c.hint[:1]] { // "yy" is the chord y then y
 			t.Errorf("%q hints key %q that nothing binds", c.label, c.hint)
 		}
 	}
