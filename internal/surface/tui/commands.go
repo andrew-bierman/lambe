@@ -101,6 +101,17 @@ func (m *Model) paletteCommands(p *commandPalette) []paletteCommand {
 				return nil
 			}},
 		)
+		cmds = append(cmds,
+			paletteCommand{"Copy issue ID", "to the clipboard (OSC 52)", "yy", m.copyID},
+			paletteCommand{"Copy last output", "the selected run's output tail", "yo", m.copyOutput},
+		)
+		if run.Workspace != "" {
+			cmds = append(cmds,
+				paletteCommand{"Copy workspace path", "to the clipboard (OSC 52)", "yw", m.copyWorkspace},
+				paletteCommand{"Open workspace in file manager", "Finder or xdg-open", "o", func() tea.Cmd { return m.openWorkspace(false) }},
+				paletteCommand{"Open workspace in $EDITOR", "suspends the dashboard while the editor runs", "O", func() tea.Cmd { return m.openWorkspace(true) }},
+			)
+		}
 		if m.sessionContext != nil && run.Thread != "" {
 			cmds = append(cmds, paletteCommand{"Show agent session details", "provider and workspace of the agent session", "", func() tea.Cmd {
 				return readAgentSession(m.sessionContext, run.Thread)

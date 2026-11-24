@@ -21,10 +21,10 @@
                 │ a             attention view                                     │
                 │ h             history view                                       │
                 │                                                                  │
-                │ General                                                          │
-                │ : / ctrl+p    command palette                                    │
-                │ ?             this help                                          │
-                │ esc           close help, palette or chart                       │
+                │ Actions                                                          │
+                │ y             copy, then y/i issue id, w workspace path, o       │
+                │               output                                             │
+                │ o             open workspace in the file manager                 │
                 │ ↑↓ scroll   Esc close                                            │
                 ╰──────────────────────────────────────────────────────────────────╯
 

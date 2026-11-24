@@ -90,6 +90,8 @@ type Model struct {
 	queuePending   bool
 	showActivity   bool
 	showHelp       bool
+	yank           bool // y was pressed; the next key picks what to copy
+	acts           actions
 	helpVP         viewport.Model
 	readiness      func() ([]tracker.ReadinessRow, error)
 	upcoming       []daemon.LiveRun
@@ -158,6 +160,7 @@ func New(path string) *Model {
 		m.reader = &snapshotReader{path: path}
 	}
 	m.keys = defaultKeyMap(&m.focus)
+	m.acts = systemActions{out: os.Stdout}
 	m.list = list.New(nil, rowDelegate{}, 0, 0)
 	m.list.SetShowHelp(false)
 	m.list.SetShowTitle(false)
@@ -395,7 +398,17 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.updateFilter(msg)
 	}
 
+	if m.yank {
+		return m, m.handleYank(msg)
+	}
 	switch {
+	case key.Matches(msg, m.keys.Copy):
+		m.yank = true
+		return m, m.showToast("copy: y id · w workspace · o output · esc cancel", false, true)
+	case key.Matches(msg, m.keys.Open):
+		return m, m.openWorkspace(false)
+	case key.Matches(msg, m.keys.OpenEditor):
+		return m, m.openWorkspace(true)
 	case m.focus == focusDetail && msg.String() == "q":
 		m.setFocus(focusList) // back out before quitting
 		return m, nil

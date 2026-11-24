@@ -202,6 +202,8 @@ The TUI exits with Ctrl-C or `q` (from run details, `q` first returns to the lis
 - `:` or `Ctrl-P` — fuzzy-search commands (each shows its key hint), inspect a run, or open a shell in its workspace or the Beads tracker
 - `1` / `2` / `3` — open Queue, Attention, or History directly
 - `a` — show retries, deferred or interrupted runs, and failed gates
+- `y` then `y`/`i`, `w`, or `o` — copy the issue ID, workspace path, or last output to the clipboard (OSC 52)
+- `o` / `O` — open the selected run's workspace in the file manager / `$EDITOR`
 - `h` — switch between the run queue and recent attempt history
 - `Tab` — switch focus between the run list and the detail pane
 - `/` — filter runs. While filtering, `Esc` clears the filter.

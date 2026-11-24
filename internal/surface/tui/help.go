@@ -52,6 +52,7 @@ func (k keyMap) helpGroups(v helpView) []helpGroup {
 	}
 	groups = append(groups,
 		helpGroup{"Views", rows(k.Views, k.Attention, k.History)},
+		helpGroup{"Actions", rows(k.Copy, k.Open, k.OpenEditor)},
 		helpGroup{"General", rows(k.Commands, k.Help, k.Close, k.Quit)})
 	return groups
 }
@@ -74,7 +75,12 @@ func (m *Model) helpText(width int) string {
 	bold := lipgloss.NewStyle().Bold(true).Foreground(accentColor)
 	line := func(keys, desc string) string {
 		pad := strings.Repeat(" ", max(1, keyW-lipgloss.Width(keys)))
-		return m.help.Styles.FullKey.Render(keys) + pad + m.help.Styles.FullDesc.Render(desc)
+		// Wrap the description with a hanging indent under its own column.
+		wrapped := strings.Split(lipgloss.NewStyle().Width(max(1, width-keyW)).Render(desc), "\n")
+		for i := range wrapped {
+			wrapped[i] = strings.TrimRight(wrapped[i], " ")
+		}
+		return m.help.Styles.FullKey.Render(keys) + pad + m.help.Styles.FullDesc.Render(strings.Join(wrapped, "\n"+strings.Repeat(" ", keyW)))
 	}
 	var out []string
 	for _, g := range m.keys.helpGroups(m.currentHelpView()) {
