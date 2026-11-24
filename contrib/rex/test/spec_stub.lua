@@ -69,4 +69,20 @@ return function(T)
     rejects(function() rex.layout.block{ flavor = "f", options = { command = { 1 } } } end, "strings", "bad command")
     rejects(function() rex.layout.block{ flavor = "f", options = { bogus = 1 } } end, "unknown field", "bad terminal option")
   end)
+
+  T.test("stub validates Rex method arguments against the captured schemas", function()
+    for _, profile in ipairs({ "p16", "p19", "p21" }) do
+      local stub = rexstub.install(profile)
+      stub.finish_load()
+      local block = rex.layout.block{ flavor = "com.superlogical.terminal.shell" }
+      rejects(function() rex.session.new_window{ window_label = "w", layout = block, bogus = 1 } end, "unknown field `bogus`", profile .. " extra field")
+      rejects(function() rex.session.new_window{ window_label = 3, layout = block } end, "must be string", profile .. " wrong type")
+      rejects(function() rex.session.new_split{ direction = "diagonal", side = "after", layout = block } end, "must be one of", profile .. " bad enum")
+      rejects(function() rex.session.new_split{ direction = "horizontal", layout = block } end, "missing required field `side`", profile .. " missing field")
+      rejects(function() rex.call("session.attach", {}) end, "missing required field `session_id`", profile .. " rex.call needs session_id")
+      rejects(function() rex.session.focus_block{} end, "missing required field `block_id`", profile .. " focus_block")
+      local result = rex.session.new_window{ window_label = "w", layout = block, focus = false }
+      T.ok(result.window_id, profile .. " valid new_window")
+    end
+  end)
 end

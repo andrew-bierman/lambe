@@ -1,0 +1,53 @@
+{
+  "input_schema": {
+    "additionalProperties": false,
+    "type": "object"
+  },
+  "name": "server.version",
+  "output_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "api_min_revision": {
+        "description": "The oldest revision of the API the server supports. Left out when it is 0.",
+        "maximum": 4294967295,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "api_revision": {
+        "description": "The newest revision of the API the server supports. Left out when it is 0.",
+        "maximum": 4294967295,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "built_at": {
+        "description": "When the server was built, as an RFC 3339 timestamp. Most builds record the time of their Git commit. Left out when unknown.",
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "commit": {
+        "description": "The Git commit the server was built from. Left out when unknown.",
+        "type": "string"
+      },
+      "dirty": {
+        "description": "True if the server was built from source with uncommitted changes.",
+        "type": "boolean"
+      },
+      "platform": {
+        "description": "The operating system and CPU the server was built for, such as darwin_arm64 or linux_amd64.",
+        "type": "string"
+      },
+      "rex_version": {
+        "description": "The version of Rex the server runs, as rex version prints it, such as 0.0.1780750825-g9a754d.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "rex_version",
+      "platform",
+      "dirty"
+    ],
+    "type": "object"
+  }
+}

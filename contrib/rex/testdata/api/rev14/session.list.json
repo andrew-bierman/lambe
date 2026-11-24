@@ -1,0 +1,41 @@
+{
+  "input_schema": {
+    "additionalProperties": false,
+    "type": "object"
+  },
+  "name": "session.list",
+  "output_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "sessions": {
+        "description": "Every session on the server. New sessions go at the end, and session.move changes the order.",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "label": {
+              "description": "The session's label.",
+              "type": "string"
+            },
+            "session_id": {
+              "description": "The session's ID.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "session_id",
+            "label"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      }
+    },
+    "required": [
+      "sessions"
+    ],
+    "type": "object"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "session_id": {
+        "description": "The session to detach from.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id"
+    ],
+    "type": "object"
+  },
+  "name": "session.detach",
+  "output_schema": {
+    "additionalProperties": false,
+    "type": "object"
+  }
+}
