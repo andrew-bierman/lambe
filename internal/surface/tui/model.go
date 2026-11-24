@@ -106,6 +106,9 @@ type Model struct {
 	alive           bool
 	err             error
 	missing         bool // the snapshot file does not exist
+	reader          *snapshotReader
+	reading         bool // a snapshot read is in flight
+	forceNext       bool // run a forced read when the in-flight one lands
 	bannerH         int
 	width           int
 	height          int
@@ -149,6 +152,9 @@ func New(path string) *Model {
 		path:    path,
 		loading: true,
 	}
+	if path != "" {
+		m.reader = &snapshotReader{path: path}
+	}
 	m.keys = defaultKeyMap(&m.focus)
 	m.list = list.New(nil, rowDelegate{}, 0, 0)
 	m.list.SetShowHelp(false)
@@ -180,7 +186,7 @@ func (m *Model) Init() tea.Cmd {
 	if m.path == "" {
 		return nil
 	}
-	return tea.Batch(readSnapshot(m.path), tick(), m.spinner.Tick, m.readReadiness(0))
+	return tea.Batch(m.readNow(false), tick(), m.spinner.Tick, m.readReadiness(0))
 }
 
 // Update implements tea.Model.
@@ -204,6 +210,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case snapshotMsg:
 		m.loading = false
+		m.reading = false
+		var next tea.Cmd
+		if m.forceNext {
+			m.forceNext = false
+			next = m.readNow(true)
+		}
+		if msg.unchanged && msg.err == nil {
+			// Same file as the last poll: only the daemon's liveness can differ.
+			if m.alive != msg.alive {
+				m.alive = msg.alive
+				m.setRuns(m.visibleRuns())
+				m.refreshDetail(!m.showHistory && !m.showAttention && m.detail.AtBottom())
+			}
+			m.syncHealth()
+			return m, next
+		}
 		if msg.err != nil {
 			// Keep the last good snapshot on errors (for example a daemon
 			// restart rewriting the file) instead of flashing empty; the
@@ -214,7 +236,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.err = msg.err
 			}
 			m.syncHealth()
-			return m, nil
+			return m, next
 		}
 		m.err, m.missing = nil, false
 		runs, history := m.snapshot.Runs, m.snapshot.History
@@ -235,7 +257,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshDetail(!m.showHistory && !m.showAttention && m.detail.AtBottom())
 		}
 		m.syncHealth()
-		return m, nil
+		return m, next
 
 	case agentSessionMsg:
 		if selected, ok := m.selectedRun(); ok && selected.Thread == msg.thread {
@@ -284,7 +306,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		m.syncHealth()
-		return m, tea.Batch(readSnapshot(m.path), tick())
+		return m, tea.Batch(m.readNow(false), tick())
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -377,10 +399,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Commands):
 		return m, m.openPalette()
 	case msg.String() == "r":
-		if m.path == "" {
-			return m, nil
-		}
-		return m, readSnapshot(m.path)
+		return m, m.readNow(true)
 	case msg.String() == "1":
 		m.setQueueView(false, false)
 		return m, nil

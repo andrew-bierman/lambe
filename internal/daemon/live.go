@@ -73,8 +73,15 @@ func ReadLive(path string) (LiveSnapshot, bool, error) {
 	for i := range s.History {
 		s.History[i].Phase = canonicalPhase(s.History[i].Phase)
 	}
+	return s, LiveAlive(s), nil
+}
+
+// LiveAlive reports whether the process that wrote the snapshot is still the
+// same incarnation. It costs one syscall, so a viewer can re-check it between
+// reads of an unchanged file.
+func LiveAlive(s LiveSnapshot) bool {
 	identity, err := proc.ProcessIdentity(s.PID)
-	return s, err == nil && identity == s.Identity && s.Identity != "", nil
+	return err == nil && identity == s.Identity && s.Identity != ""
 }
 
 type liveView struct {
