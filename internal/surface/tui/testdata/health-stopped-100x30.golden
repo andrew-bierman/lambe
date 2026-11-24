@@ -1,0 +1,30 @@
+ lambe   ■ stopped 4m  demo  0 active · 0 waiting                                  updated 11:56:00
+ ■ stopped · last update 4m ago · rows show its last state · start `lambe run`
+ 1 Queue 5 │ 2 Attention 2 │ 3 History 7
+━━━━━━━━━━━─────────────────────────────────────────────────────────────────────────────────────────
+   ID      TITLE                           PHASE        AGE│ demo-42  ◌ (running)
+▌◌ demo-42 Verify the release build        (running)       │ Verify the release build
+ ◌ demo-43 Recheck the artifact checksum   (gating)        │ attempt 1 · turn 2
+ ◌ demo-44 Retry the install smoke test    (retry)         │ artifacts
+ ✘ demo-45 Validate the migration          escalated     2m│ Build event 22: verifying release
+ ✔ demo-46 Check upgrade instructions      passed        5m│ artifacts
+                                                           │ Build event 23: verifying release
+                                                           │ artifacts
+                                                           │ Build event 24: verifying release
+                                                           │ artifacts
+                                                           │ Build event 25: verifying release
+                                                           │ artifacts
+                                                           │ Build event 26: verifying release
+                                                           │ artifacts
+                                                           │ Build event 27: verifying release
+                                                           │ artifacts
+                                                           │ Build event 28: verifying release
+                                                           │ artifacts
+                                                           │ Build event 29: verifying release
+                                                           │ artifacts
+                                                           │ Build event 30: verifying release
+                                                           │ artifacts
+                                                           │ ✓ Linux amd64 and arm64 checks passed
+                                                           │ ✓ Release archives match the manifest
+                                                           │ … Waiting for the macOS smoke test
+ enter open  : cmd  ? help  q quit  1-3 views  / filter  j/k move                               1/5

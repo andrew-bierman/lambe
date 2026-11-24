@@ -1,0 +1,24 @@
+ lambe   ■ stopped 4m  demo  0▶ 0↻
+ ■ stopped · last update 4m ago
+ 1 Queue 5 │ 2 Attn 2 │ 3 Hist 7
+━━━━━━━━━━━─────────────────────────────
+   ID      TITLE                     AGE
+▌◌ demo-42 Verify the release bu…
+ ◌ demo-43 Recheck the artifact …
+ ◌ demo-44 Retry the install smo…
+ ✘ demo-45 Validate the migration     2m
+ ✔ demo-46 Check upgrade instruc…     5m
+
+
+
+
+
+
+ demo-42  ◌ (running)
+ artifacts
+ Build event 30: verifying release
+ artifacts
+ ✓ Linux amd64 and arm64 checks passed
+ ✓ Release archives match the manifest
+ … Waiting for the macOS smoke test
+ enter open  : cmd  ?  q quit       1/5

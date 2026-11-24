@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"maps"
 	"math"
 	"strconv"
 	"strings"
@@ -216,6 +217,7 @@ func lightViews(t *testing.T) map[string]string {
 			views[fmt.Sprintf("%s-%dx%d", name, w, h)] = m.View()
 		}
 	}
+	maps.Copy(views, healthViews(t, now))
 	return views
 }
 

@@ -1,0 +1,30 @@
+{default on #6136a1} {#ffffff on #6136a1 bold}lambe{default on #6136a1} {default on #ebe1ff}  {#b6242b on #ebe1ff bold}▲ wedged 30m{default on #ebe1ff}  {#645b73 on #ebe1ff}demo{default on #ebe1ff}  {#b6242b on #ebe1ff bold}⚠ 1 stalled{default on #ebe1ff}  {#20182b on #ebe1ff}2 active{#645b73 on #ebe1ff} · {#20182b on #ebe1ff}1 waiting{default on #ebe1ff}                     {#645b73 on #ebe1ff}updated 12:00:00 
+{default on #ebe1ff} {#b6242b on #ebe1ff bold}▲ wedged · loop not ticking for 30m · rows are frozen · restart the daemon{default on #ebe1ff}                         
+ {#6941a5 on default bold}1 Queue{default on default} {#6941a5 on default bold}5{default on default} {#645b73 on default}│{default on default} {#645b73 on default}2 Attention{default on default} {#805000 on default bold}2{default on default} {#645b73 on default}│{default on default} {#645b73 on default}3 History{default on default} {#645b73 on default}5
+{#6941a5 on default bold}━━━━━━━━━━━{#b9afc9 on default}─────────────────────────────────────────────────────────────────────────────────────────
+{#645b73 on #ebe1ff bold}   ID      TITLE                           PHASE        AGE{#b9afc9 on default}│{default on #ebe1ff} {#645b73 on #ebe1ff bold}demo-42{default on #ebe1ff}  {#126447 on #ebe1ff bold}▶ running{default on #ebe1ff}  {#645b73 on #ebe1ff}output 8s ago{default on #ebe1ff}      
+{#6941a5 on #e3d8fb}▌{#126447 on #e3d8fb bold}▶{default on #e3d8fb} {#20182b on #e3d8fb bold}demo-42{default on #e3d8fb} {#20182b on #e3d8fb bold}Verify the release build       {default on #e3d8fb} {#126447 on #e3d8fb}running  {default on #e3d8fb} {#645b73 on #e3d8fb}    8s{#b9afc9 on default}│{default on default} {#20182b on default bold}Verify the release build
+ {#b6242b on default bold}⚠{default on default} {#20182b on default}demo-43{default on default} {#20182b on default}Recheck the artifact checksum  {default on default} {#b6242b on default}stalled  {default on default} {#b6242b on default}    4m{#b9afc9 on default}│{default on default} {#645b73 on default}attempt 1 · turn 2
+ {#805000 on default}↻{default on default} {#20182b on default}demo-44{default on default} {#20182b on default}Retry the install smoke test   {default on default} {#805000 on default}retry    {default on default} {#645b73 on default} in 1m{#b9afc9 on default}│{default on default} artifacts
+ {#b6242b on default}✘{default on default} {#20182b on default}demo-45{default on default} {#20182b on default}Validate the migration         {default on default} {#b6242b on default}escalated{default on default} {#645b73 on default}    2m{#b9afc9 on default}│{default on default} Build event 22: verifying release
+ {#1b7f3b on default}✔{default on default} {#20182b on default}demo-46{default on default} {#20182b on default}Check upgrade instructions     {default on default} {#1b7f3b on default}passed   {default on default} {#645b73 on default}    5m{#b9afc9 on default}│{default on default} artifacts
+                                                           {#b9afc9 on default}│{default on default} Build event 23: verifying release
+                                                           {#b9afc9 on default}│{default on default} artifacts
+                                                           {#b9afc9 on default}│{default on default} Build event 24: verifying release
+                                                           {#b9afc9 on default}│{default on default} artifacts
+                                                           {#b9afc9 on default}│{default on default} Build event 25: verifying release
+                                                           {#b9afc9 on default}│{default on default} artifacts
+                                                           {#b9afc9 on default}│{default on default} Build event 26: verifying release
+                                                           {#b9afc9 on default}│{default on default} artifacts
+                                                           {#b9afc9 on default}│{default on default} Build event 27: verifying release
+                                                           {#b9afc9 on default}│{default on default} artifacts
+                                                           {#b9afc9 on default}│{default on default} Build event 28: verifying release
+                                                           {#b9afc9 on default}│{default on default} artifacts
+                                                           {#b9afc9 on default}│{default on default} Build event 29: verifying release
+                                                           {#b9afc9 on default}│{default on default} artifacts
+                                                           {#b9afc9 on default}│{default on default} Build event 30: verifying release
+                                                           {#b9afc9 on default}│{default on default} artifacts
+                                                           {#b9afc9 on default}│{default on default} ✓ Linux amd64 and arm64 checks passed
+                                                           {#b9afc9 on default}│{default on default} ✓ Release archives match the manifest
+                                                           {#b9afc9 on default}│{default on default} … Waiting for the macOS smoke test
+{default on #f3eff7} {#382453 on #f3eff7 bold}enter{default on default} {#51485e on default}open{default on default}  {#382453 on default bold}:{default on default} {#51485e on default}cmd{default on default}  {#382453 on default bold}?{default on default} {#51485e on default}help{default on default}  {#382453 on default bold}q{default on default} {#51485e on default}quit{default on default}  {#382453 on default bold}1-3{default on default} {#51485e on default}views{default on default}  {#382453 on default bold}/{default on default} {#51485e on default}filter{default on default}  {#382453 on default bold}j/k{default on default} {#51485e on default}move{default on default}                               {#20182b on default}1/5{default on #f3eff7} 
