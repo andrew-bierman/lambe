@@ -205,6 +205,18 @@ func (a *activityReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// gatedReader blocks reads until ready is closed.
+type gatedReader struct {
+	r     io.Reader
+	ready <-chan struct{}
+}
+
+// Read implements io.Reader.
+func (g *gatedReader) Read(p []byte) (int, error) {
+	<-g.ready
+	return g.r.Read(p)
+}
+
 // clientCallbacks implements the acp-go-sdk Client interface: every request
 // the agent sends to its client lands here.
 //
@@ -295,16 +307,19 @@ func startClient(opts clientOptions, sink inbound) (*client, error) {
 		return nil, err
 	}
 	cbs := &clientCallbacks{sink: sink}
-	var conn *acpsdk.ClientSideConnection
+	// The SDK starts its read loop inside the constructor, and SetLogger is
+	// an unsynchronized write; hold the first read until the logger is set so
+	// a fast-talking (or garbage-emitting) agent cannot race it.
+	ready := make(chan struct{})
+	var out io.Reader = &gatedReader{r: p.stdout, ready: ready}
 	if opts.OnActivity != nil {
-		hook := opts.OnActivity
-		conn = acpsdk.NewClientSideConnection(cbs, p.stdin, &activityReader{r: p.stdout, onActivity: hook})
-	} else {
-		conn = acpsdk.NewClientSideConnection(cbs, p.stdin, p.stdout)
+		out = &activityReader{r: out, onActivity: opts.OnActivity}
 	}
+	conn := acpsdk.NewClientSideConnection(cbs, p.stdin, out)
 	if opts.Logger != nil {
 		conn.SetLogger(opts.Logger)
 	}
+	close(ready)
 	return &client{proc: p, conn: conn, cbs: cbs}, nil
 }
 
