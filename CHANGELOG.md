@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `lambe enqueue --json` prints one object (`schema_version`, `issue`, `workflow`, `applied`, `would_add_label`) instead of prose; exit codes are unchanged.
+
 ### Fixed
 
 - A config file or `WORKFLOW.md` larger than 1 MiB is now rejected up front instead of being handed to the YAML parser, whose duplicate-key handling is quadratic on hostile input.

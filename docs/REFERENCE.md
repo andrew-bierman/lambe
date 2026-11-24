@@ -87,6 +87,16 @@ lambe enqueue -workflow 'Repo tasks' ISSUE_ID
 lambe enqueue -workflow 'Repo tasks' -apply ISSUE_ID
 ```
 
+`lambe enqueue -json` prints one object for a client instead of prose:
+
+```json
+{"schema_version":1,"issue":"lambe-abc","workflow":"Repo tasks","applied":false,"would_add_label":true}
+```
+
+`applied` is false for a preview; `would_add_label` says whether the workflow
+label is still missing. Exit codes match the other one-shot commands (0 ok,
+1 problem, 2 usage).
+
 Named workflows share the daemon's workspace root and use its top-level
 `harness` unless a workflow sets its own. This sends repo tasks to Pi and
 fleet babysitting to Codex from one daemon:

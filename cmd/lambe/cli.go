@@ -273,6 +273,8 @@ flags:
   --config FILE     ` + configFlagHelp + `
   --workflow NAME   named workflow to run
   --apply           add the workflow label to the task
+  --json            print one object with schema_version, issue, workflow,
+                    applied and would_add_label
 
 examples:
   lambe enqueue --workflow review lambe-abc

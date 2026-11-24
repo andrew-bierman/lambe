@@ -3,11 +3,13 @@ package main
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/andrew-bierman/lambe/internal/config"
@@ -19,6 +21,7 @@ func runEnqueue(args []string, out io.Writer) error {
 	cfgPath := flags.String("config", "", configFlagHelp)
 	name := flags.String("workflow", "", "named workflow to run")
 	apply := flags.Bool("apply", false, "add the workflow label to the task")
+	asJSON := flags.Bool("json", false, "print the preview or result as JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
@@ -77,6 +80,22 @@ func runEnqueue(args []string, out io.Writer) error {
 	if err := requireGateDir(gateDir); err != nil {
 		return err
 	}
+	if *asJSON {
+		result := enqueueResult{
+			SchemaVersion: 1,
+			Issue:         id,
+			Workflow:      chosen.Name,
+			Applied:       false,
+			WouldAddLabel: !slices.Contains(issues[0].Labels, chosen.Label),
+		}
+		if *apply {
+			if err := local.AddWorkflowLabel(ctx, id, chosen.Label); err != nil {
+				return err
+			}
+			result.Applied = true
+		}
+		return json.NewEncoder(out).Encode(result)
+	}
 	if _, err := fmt.Fprintf(out, "%s  %s\nWorkflow: %s\nInstructions: %s\nHarness: %s\nGates: %s\n", id, terminalText(issues[0].Title), chosen.Name, chosen.Path, cfg.Harness, gateDir); err != nil {
 		return err
 	}
@@ -89,4 +108,12 @@ func runEnqueue(args []string, out io.Writer) error {
 	}
 	_, err = fmt.Fprintf(out, "Queued %s with %s\n", id, chosen.Label)
 	return err
+}
+
+type enqueueResult struct {
+	SchemaVersion int    `json:"schema_version"`
+	Issue         string `json:"issue"`
+	Workflow      string `json:"workflow"`
+	Applied       bool   `json:"applied"`
+	WouldAddLabel bool   `json:"would_add_label"`
 }
