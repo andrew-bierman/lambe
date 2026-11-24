@@ -13,7 +13,7 @@ func newTestAdapter(avail bool, fc *fakeClient, out *bytes.Buffer) *Adapter {
 }
 
 func TestAdapterLifecycle(t *testing.T) {
-	fc := &fakeClient{createResp: `{"id":"ses-1"}`}
+	fc := &fakeClient{createResp: `{"id":"ses-1"}`, listResp: `[]`}
 	var out bytes.Buffer
 	a := newTestAdapter(true, fc, &out)
 
@@ -24,8 +24,8 @@ func TestAdapterLifecycle(t *testing.T) {
 		t.Fatalf("sessions created = %d, want 1", len(fc.created))
 	}
 	req := fc.created[0]
-	if req.Name != "issues" {
-		t.Errorf("session name = %q, want issues", req.Name)
+	if req.Name != "lambe-issues" {
+		t.Errorf("session name = %q, want lambe-issues", req.Name)
 	}
 	if req.Labels["surface"] != "lambe" {
 		t.Errorf("labels missing surface=lambe: %v", req.Labels)
@@ -50,8 +50,47 @@ func TestAdapterLifecycle(t *testing.T) {
 	}
 }
 
+func TestAdapterReusesSessions(t *testing.T) {
+	fc := &fakeClient{
+		createResp: `{"id":"ses-new","name":"lambe-b"}`,
+		listResp:   `[{"id":"ses-old","name":"lambe-a"},{"id":"ses-user","name":"b"}]`,
+	}
+	a := newTestAdapter(true, fc, &bytes.Buffer{})
+	ctx := context.Background()
+	for _, agent := range []string{"a", "a", "b", "b"} {
+		if err := a.Handle(ctx, RunStartedEvent{Agent: agent}); err != nil {
+			t.Fatalf("Handle(%s): %v", agent, err)
+		}
+	}
+	if len(fc.created) != 1 || fc.created[0].Name != "lambe-b" {
+		t.Errorf("created = %v, want only lambe-b (the user's session b is not adopted)", fc.created)
+	}
+	got := a.Sessions()
+	if got["a"].ID != "ses-old" || got["b"].ID != "ses-new" {
+		t.Errorf("sessions = %v, want a=ses-old b=ses-new", got)
+	}
+}
+
+func TestAdapterListErrorPropagatesAndRetries(t *testing.T) {
+	fc := &fakeClient{listErr: errors.New("rex down"), createResp: `{"id":"ses-1"}`}
+	a := newTestAdapter(true, fc, &bytes.Buffer{})
+	if err := a.Handle(context.Background(), RunStartedEvent{Agent: "x"}); err == nil {
+		t.Fatal("Handle should propagate list error")
+	}
+	if len(fc.created) != 0 || len(a.Sessions()) != 0 {
+		t.Errorf("nothing should be created or cached after a list failure")
+	}
+	fc.listErr, fc.listResp = nil, `[]`
+	if err := a.Handle(context.Background(), RunStartedEvent{Agent: "x"}); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if len(fc.created) != 1 {
+		t.Errorf("created = %d, want 1 after retry", len(fc.created))
+	}
+}
+
 func TestAdapterWatchdogKilledEmitsFailed(t *testing.T) {
-	fc := &fakeClient{createResp: `{"id":"ses-1"}`}
+	fc := &fakeClient{createResp: `{"id":"ses-1"}`, listResp: `[]`}
 	var out bytes.Buffer
 	a := newTestAdapter(true, fc, &out)
 	_ = a.Handle(context.Background(), RunStartedEvent{Agent: "a"})
@@ -78,7 +117,7 @@ func TestAdapterStateBeforeStartStillEmits(t *testing.T) {
 }
 
 func TestAdapterDegradesToNoOpWhenUnavailable(t *testing.T) {
-	fc := &fakeClient{createResp: `{"id":"ses-1"}`}
+	fc := &fakeClient{createResp: `{"id":"ses-1"}`, listResp: `[]`}
 	var out bytes.Buffer
 	a := newTestAdapter(false, fc, &out)
 	for _, ev := range []RunEvent{
@@ -99,7 +138,7 @@ func TestAdapterDegradesToNoOpWhenUnavailable(t *testing.T) {
 }
 
 func TestAdapterCreateSessionErrorPropagates(t *testing.T) {
-	fc := &fakeClient{createErr: errors.New("rex down")}
+	fc := &fakeClient{createErr: errors.New("rex down"), listResp: `[]`}
 	a := newTestAdapter(true, fc, &bytes.Buffer{})
 	err := a.Handle(context.Background(), RunStartedEvent{Agent: "x"})
 	if err == nil {

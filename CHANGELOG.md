@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Rex surface: the daemon no longer creates a new Rex session for every run it starts. It reuses one session per agent, named `lambe-<agent>`, and finds it again by name after a restart. Detection no longer treats `REX_SERVER` as evidence of Rex (only `REX_SESSION` or a `rex ls` probe do).
 - Rex integration: the Lua reads `lambe logs -json -brief` (no agent output, far smaller) and falls back to plain `-json` when the installed lambe predates `-brief`. `lambe setup rex` help now lists `--no-init`, `--keys` and `--json`.
 - `lambe logs --json --brief` prints the live snapshot without each run's agent output (about 10x smaller on a 2,500-run snapshot), adding per-run `AgeSec`, an `Attention {Reason, AgeSec}` field for runs that need a human, and `LambeVersion`. The dashboard's Attention view and this field share one rule, `daemon.NeedsAttention`. The Rex "Needs You" picker already reads `Attention`. The full `--json` output is unchanged.
 - TUI: transient messages (`Queued demo-55`, errors) now appear as a toast in the footer for about four seconds instead of replacing the header's health, counts and stall warning. `lambe tui -demo` no longer ages into an all-stalled screen, and a task queued in the demo gets an unused id instead of colliding with `demo-55`.

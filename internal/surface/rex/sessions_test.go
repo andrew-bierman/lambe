@@ -3,7 +3,6 @@ package rex
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"testing"
 )
@@ -15,8 +14,6 @@ type fakeClient struct {
 	created    []SessionRequest
 	listResp   string
 	listErr    error
-	captured   []string
-	captureFn  func(sessionID string) (string, error)
 }
 
 func (f *fakeClient) CreateSession(_ context.Context, req SessionRequest) (Session, error) {
@@ -40,14 +37,6 @@ func (f *fakeClient) ListSessions(_ context.Context) ([]Session, error) {
 		return nil, err
 	}
 	return out, nil
-}
-
-func (f *fakeClient) Capture(_ context.Context, sessionID string) (string, error) {
-	f.captured = append(f.captured, sessionID)
-	if f.captureFn != nil {
-		return f.captureFn(sessionID)
-	}
-	return fmt.Sprintf("output of %s", sessionID), nil
 }
 
 func TestClientInterfaceSatisfied(_ *testing.T) {

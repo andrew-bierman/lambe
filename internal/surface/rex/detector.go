@@ -1,6 +1,6 @@
 // Package rex surfaces lambe's supervised runs into Rex, Superlogical's
-// terminal. Presence is detected via REX_SESSION/REX_SERVER environment
-// variables or a `rex ls` probe (exit code 4 means Rex is absent). Status is
+// terminal. Presence is detected via REX_SESSION environment
+// variable (Rex sets it inside its panes) or a `rex ls` probe (exit code 4 means Rex is absent). Status is
 // reported with OSC 7501 escape sequences; structured data flows through the
 // `rex` CLI with JSON output. When Rex is absent every surface degrades to a
 // no-op.
@@ -74,14 +74,12 @@ type Detector struct {
 	Runner CommandRunner
 }
 
-// Detect reports Rex availability. Environment evidence (REX_SESSION or
-// REX_SERVER) short-circuits the probe; otherwise `rex ls --json` is probed
+// Detect reports Rex availability. Environment evidence (REX_SESSION)
+// short-circuits the probe; otherwise `rex ls --json` is probed
 // (without autostarting a server) and exit code 4 is treated as a definitive absence rather than an error.
 func (d Detector) Detect(ctx context.Context) Availability {
-	for _, key := range []string{"REX_SESSION", "REX_SERVER"} {
-		if lookup(d.Env, key) != "" {
-			return Availability{Available: true, Reason: ReasonEnv}
-		}
+	if lookup(d.Env, "REX_SESSION") != "" {
+		return Availability{Available: true, Reason: ReasonEnv}
 	}
 	if d.Runner == nil {
 		return Availability{Reason: ReasonProbeFailed}
