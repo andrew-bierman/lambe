@@ -3,3 +3,6 @@ contact_links:
   - name: Report a security vulnerability
     url: https://github.com/andrew-bierman/lambe/security/advisories/new
     about: Please report vulnerabilities privately, not in a public issue.
+  - name: Ask a question or share an idea
+    url: https://github.com/andrew-bierman/lambe/discussions
+    about: Usage questions and open-ended ideas belong in Discussions.

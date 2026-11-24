@@ -1,0 +1,42 @@
+name: Rex integration
+description: Report a problem or request for the Rex terminal surface or the Rex Lua plugin
+labels: [bug, "area: rex"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw in Rex (status, picker, tabs) and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: input
+    id: rex
+    attributes:
+      label: Rex version
+    validations:
+      required: true
+  - type: textarea
+    id: version
+    attributes:
+      label: "`lambe version --json` output"
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`lambe doctor` output"
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or Rex events
+      render: text
