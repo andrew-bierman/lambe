@@ -16,80 +16,85 @@ Type **Lambe** in the Rex command palette:
 | **Lambe: Switch Host…** | Opens Rex's host picker. Rex runs the actions on the host the app is connected to, so switch to the machine running your agents, then use **Open Run…**. |
 | **Lambe: Check Setup** | Runs `lambe doctor` exactly as the other actions run `lambe`. |
 
-On Rex servers without custom UI (see [Troubleshooting](#troubleshooting)),
-the picker actions open the dashboard instead. For scripts,
+The picker actions need Rex **preview.21** or newer (API revision 17+). On an
+older server they say so (`Lambe: the run picker needs Rex preview.21 or newer
+...`) and open the dashboard instead; **Check Setup** shows the revision your
+server reports. Failures (lambe not found, no runs yet, a picker that could
+not show) are raised as errors with the reason, so the palette or `rex do`
+shows them. Cancelling a picker is silent. For scripts,
 `rex do lambe_open_run issue=ac-123` skips the picker.
 
 ## Install
 
-The short way, on the machine that runs the Rex server:
+On the machine that runs the Rex server:
 
 ```sh
 lambe setup rex            # dry run: prints exactly what it would do
-lambe setup rex --apply    # writes lambe.lua
+lambe setup rex --apply    # writes the files
 ```
 
-See [`lambe setup rex`](#lambe-setup-rex) below. The manual steps follow.
+Then add the printed `dofile(...)` line to Rex's `init.lua`, and run
+`rex config check && rex config reload` on that machine (a remote reload is
+refused). Verify with `rex do lambe_check`; for another host use
+`rex -S HOST do lambe_check`.
 
-Do this on every machine whose Rex server should offer the actions. The
-actions run on the Rex **server**, so the file goes on the host that runs the
-server, not on the machine whose app you are looking at.
+The actions run on the Rex **server**, so install on every host whose server
+should offer them, not on the machine whose app you are looking at.
 
-1. Put `lambe` where a login shell finds it (`zsh -l -c 'command -v lambe'`),
-   or pin its path in step 3.
-2. Copy `lambe.lua` next to Rex's `init.lua` (`~/.config/rex/` on macOS and
-   Linux) and load it from `init.lua`:
+Settings live in `lambe.config.lua` beside `init.lua`. Setup creates it once,
+with the absolute path of the `lambe` binary that ran setup, and never
+overwrites it:
 
-   ```lua
-   dofile(os.getenv("HOME") .. "/.config/rex/lambe.lua")
-   ```
+```lua
+return {
+  bin = "/Users/me/.local/bin/lambe", -- "" = `lambe` through the login shell
+  config = "",                        -- -config passed to every live invocation
+  state_dir = "",                     -- LAMBE_STATE_DIR of the daemon to read
+}
+```
 
-3. Optional: pin the binary, config, and state directory. Set
-   `LAMBE_REX_BIN`, `LAMBE_REX_CONFIG`, and `LAMBE_REX_STATE_DIR` in the Rex
-   server's environment, or edit `bin_override`, `override`, and
-   `state_dir_override` at the top of `lambe.lua`. Use them when the daemon
-   runs from a service unit with its own `LAMBE_STATE_DIR` or config. Every
-   action then reads the same daemon, so the picker never disagrees with the
-   dashboard.
-4. Load it. Reload on the machine that runs the server; a remote reload is
-   refused (`server.config_reload requires the local Unix socket`):
+Use `config` and `state_dir` when the daemon runs from a service unit with
+its own settings, so the picker never disagrees with the dashboard.
+`LAMBE_REX_BIN`, `LAMBE_REX_CONFIG`, and `LAMBE_REX_STATE_DIR` in the Rex
+server's environment take precedence.
 
-   ```sh
-   rex config check
-   rex config reload            # on the server's own machine
-   rex actions | grep lambe     # seven lambe_* actions
-   ```
+For a headless stand-in for the palette (no app, no focus change):
 
-5. Verify the setup in the server's own environment, then in a headless
-   stand-in for the palette (no app, no focus change):
+```sh
+LAMBE_REX_LUA=~/.config/rex/lambe.lua rex do contrib/rex/check.lua
+```
 
-   ```sh
-   rex do lambe_check                                   # lambe doctor, via the actions' PATH
-   LAMBE_REX_LUA=~/.config/rex/lambe.lua rex do contrib/rex/check.lua
-   ```
-
-   `check.lua` loads `lambe.lua` with a stubbed `rex`, answers each picker
-   with its first row, and prints `PASS` plus the rows. For a remote host,
-   run `lambe_check` with `rex -S HOST do lambe_check`.
+`check.lua` loads the installed shim with a stubbed `rex`, answers each picker
+with its first row, and prints `PASS` plus the rows. It needs a live Lambe
+snapshot.
 
 ## `lambe setup rex`
 
-`lambe setup rex` installs the `lambe.lua` that shipped with your `lambe`
-binary into Rex's config directory (the directory of `$REX_CONFIG`, else
-`$XDG_CONFIG_HOME/rex`, else `~/.config/rex`; override with `--dir DIR`).
+`lambe setup rex` installs the Lua that shipped with your `lambe` binary into
+Rex's config directory (the directory of `$REX_CONFIG`, else
+`$XDG_CONFIG_HOME/rex`, else `~/.config/rex`; override with `--dir DIR`):
 
-- **Dry run by default.** It prints the file it would create or update, the
-  `dofile` line to add to `init.lua` with a commented-out key binding
-  suggestion, and the `rex config check && rex config reload` command.
-- **`--apply`** writes only `lambe.lua`, atomically. The file starts with a
-  `-- lambe-managed: v1 sha256=...` header. Re-running updates a managed file,
-  and a byte-identical hand copy is adopted.
-- **It never edits `init.lua`** and writes nothing else, in `$HOME` or anywhere.
-- **It refuses to overwrite** a `lambe.lua` that is not lambe's or that you
-  edited after installing (the hash in the header no longer matches), unless you
-  pass `--force`.
-- **`--uninstall [--apply]`** removes a managed `lambe.lua` under the same
-  rules and reminds you to delete the `dofile` line yourself.
+| File | Role |
+| --- | --- |
+| `lambe.lua` | A tiny managed shim: it finds the modules and loads them. If the modules are missing it keeps one `Lambe: Check Setup` action that explains. |
+| `lambe/*.lua` | The managed modules (actions, row building, exec, windows, Rex adapter). |
+| `lambe.config.lua` | Your settings. Created once, never overwritten, never removed. |
+
+- **Dry run by default.** It prints each file it would create, update, or
+  remove, the `dofile` line to add to `init.lua`, and the `rex config check &&
+  rex config reload` command.
+- **`--apply`** writes atomically, modules first and the shim last. Each
+  managed file starts with `-- lambe-managed: v1 plugin=N sha256=...`: the
+  plugin version and a hash of the body. Re-running updates managed files and
+  removes managed modules a newer version no longer ships.
+- **It never edits `init.lua`.**
+- **It refuses to overwrite** a managed file you edited (the hash no longer
+  matches) or a foreign `lambe.lua`, and writes nothing at all in that case,
+  unless you pass `--force`. Put settings in `lambe.config.lua` instead; if
+  you edited the `override` variables of an older single-file `lambe.lua`,
+  move them there before using `--force`.
+- **`--uninstall [--apply]`** removes the managed files under the same rules,
+  keeps `lambe.config.lua`, and reminds you to delete the `dofile` line.
 
 ## Tab titles
 
@@ -133,24 +138,24 @@ supervising when Rex closes; open a dashboard tab to follow it.
 
 ## Troubleshooting
 
-**The picker shows nothing, or the log says `could not start lambe` / exit
-127.** Rex starts programs with a minimal `PATH` (`/usr/bin:/bin:...`), so a
-`lambe` in `~/.local/bin` is invisible unless run through your login shell,
-which `lambe.lua` now does. If your login shell still cannot find it, set
-`LAMBE_REX_BIN` or `bin_override` to an absolute path. `rex do lambe_check`
-shows what the actions see.
+**`Lambe: could not start lambe` or exit 127.** Rex starts programs with a
+minimal `PATH`, so a bare `lambe` in `~/.local/bin` is only found through the
+login shell. `lambe setup rex` bakes an absolute path into `lambe.config.lua`;
+if you removed it or moved the binary, set `bin` there (or
+`LAMBE_REX_BIN`). `rex do lambe_check` shows what the actions see.
 
-**Open Run… opens the dashboard instead of a picker.** The Rex server has no
-custom UI (`rex.ui`). Check `rex whoami --json | grep rex_version`; custom UI
-is absent in `0.1.0-preview.19` and present in `0.1.0-preview.21`, and the app
-must be new enough to show prompts. Restart the server after updating Rex.
+**Open Run… opens the dashboard and says the picker needs preview.21.** The
+Rex server's API revision is below 17, where custom UI (`rex.ui`) starts
+(preview.21; preview.19 is revision 14). `rex do lambe_check` prints the
+revision. Update Rex, restart the server, and the app must be new enough to
+show prompts.
 
 **`rex config reload` fails for a remote host.** Run it on that machine, for
 example in a terminal tab on the host.
 
 **The picker lists different runs than the dashboard.** The two read
-different daemons. Pin `LAMBE_REX_CONFIG` and `LAMBE_REX_STATE_DIR` (or
-`override` and `state_dir_override`) to the daemon's own values; the
+different daemons. Set `config` and `state_dir` in `lambe.config.lua` (or
+`LAMBE_REX_CONFIG` and `LAMBE_REX_STATE_DIR`) to the daemon's own values; the
 dashboard and the picker then agree.
 
 **Rows say `daemon stopped`.** The daemon that wrote the snapshot is gone, so
