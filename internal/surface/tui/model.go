@@ -81,8 +81,10 @@ type Model struct {
 	keys           keyMap
 	trackerPath    string
 	palette        *commandPalette
-	commandStatus  string
-	commandErr     error
+	toast          toast
+	toastSeq       int
+	demoAt         time.Time
+	demo           bool // RunDemo: keep the sample runs from aging into stalls
 	queueTask      func(string) (string, error)
 	queueWorkflows []QueueWorkflow
 	queuePending   bool
@@ -178,6 +180,10 @@ func New(path string) *Model {
 // Init implements tea.Model.
 func (m *Model) Init() tea.Cmd {
 	if m.path == "" {
+		if m.demo {
+			m.demoAt = clock()
+			return demoTick()
+		}
 		return nil
 	}
 	return tea.Batch(readSnapshot(m.path), tick(), m.spinner.Tick, m.readReadiness(0))
@@ -317,12 +323,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.handleKey(msg)
 	case commandResult:
-		m.commandErr = msg.err
-		m.commandStatus = msg.status
 		if msg.queued {
 			m.queuePending = false
 		}
+		switch {
+		case msg.err != nil:
+			return m, m.showToast(msg.err.Error(), true, false)
+		case msg.status != "":
+			return m, m.showToast(msg.status, false, false)
+		}
 		return m, nil
+	case toastExpiredMsg:
+		if msg.seq == m.toast.seq {
+			m.toast = toast{}
+		}
+		return m, nil
+	case demoTickMsg:
+		m.advanceDemo(time.Time(msg))
+		return m, demoTick()
 	case tea.MouseMsg:
 		if m.palette != nil || m.showActivity || m.showHelp {
 			return m, nil

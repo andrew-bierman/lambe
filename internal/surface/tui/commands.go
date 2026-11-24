@@ -74,8 +74,6 @@ func (p *commandPalette) matches() []paletteCommand {
 }
 
 func (m *Model) openPalette() tea.Cmd {
-	m.commandErr = nil
-	m.commandStatus = ""
 	p := &commandPalette{input: textinput.New()}
 	p.input.Prompt = "› "
 	p.input.Placeholder = "Search commands"
@@ -240,18 +238,17 @@ func (m *Model) centerPanel(lines []string, width int, frame bool) string {
 
 func (m *Model) submitTask(title string, queue func(string) (string, error)) tea.Cmd {
 	if m.path == "" {
-		id := fmt.Sprintf("demo-%d", 42+len(m.snapshot.Runs))
+		id := m.nextDemoID()
 		m.snapshot.Runs = append(m.snapshot.Runs, daemon.LiveRun{
 			Progress:  symphony.Progress{IssueID: id, Title: title, Phase: "queued"},
-			UpdatedAt: time.Now(),
+			UpdatedAt: clock(),
 		})
 		m.setHistory(false)
 		m.setRuns(m.snapshot.Runs)
-		m.commandStatus = "Queued " + id
-		return nil
+		return m.showToast("Queued "+id, false, false)
 	}
-	m.commandStatus = "Queuing…"
 	m.queuePending = true
+	m.showToast("Queuing…", false, true)
 	return func() tea.Msg {
 		id, err := queue(title)
 		if err != nil {

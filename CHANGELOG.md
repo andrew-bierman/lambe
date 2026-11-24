@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- TUI: transient messages (`Queued demo-55`, errors) now appear as a toast in the footer for about four seconds instead of replacing the header's health, counts and stall warning. `lambe tui -demo` no longer ages into an all-stalled screen, and a task queued in the demo gets an unused id instead of colliding with `demo-55`.
 - The Homebrew package is now a cask (`Casks/lambe.rb`, still macOS and Linux) instead of a formula, because goreleaser deprecated formula publishing. If you installed the formula, run `brew uninstall lambe && brew install --cask andrew-bierman/tap/lambe` once.
 
 - Releases now sign every artifact (archives, deb/rpm/apk packages, SBOMs and `checksums.txt`) with cosign, one `<file>.sigstore.json` bundle each, instead of only `checksums.txt`; verification steps are in the README and docs/RELEASING.md. Release binaries and packages are also reproducible from the commit.
