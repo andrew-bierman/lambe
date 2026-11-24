@@ -1,0 +1,24 @@
+
+╭──────────────────────────────────────╮
+│  Help · Queue                        │
+│ Runs                                 │
+│ j/↓           next run               │
+│ k/↑           previous run           │
+│ d/pgdn        half page down         │
+│ u/pgup        half page up           │
+│ g             top                    │
+│ G             bottom / latest output │
+│ enter         open details           │
+│ tab           switch list / details  │
+│                                      │
+│ Filter                               │
+│ /             filter runs            │
+│ enter         apply filter           │
+│ esc           clear filter           │
+│                                      │
+│ Views                                │
+│ 1-3           queue / attn / history │
+│ a             attention view         │
+│ ↑↓ scroll   Esc close                │
+╰──────────────────────────────────────╯
+

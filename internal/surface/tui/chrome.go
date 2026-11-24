@@ -233,10 +233,14 @@ type hint struct {
 func (m *Model) hints() []hint {
 	k := m.keys
 	short := func(b key.Binding, keys, desc string) key.Binding { b.SetHelp(keys, desc); return b }
+	// pair merges two bindings so one hint can stand for both (j/k).
+	pair := func(a, b key.Binding, keys, desc string) key.Binding {
+		return key.NewBinding(key.WithKeys(append(a.Keys(), b.Keys()...)...), key.WithHelp(keys, desc))
+	}
 	if m.list.FilterState() == list.Filtering {
 		return []hint{
-			{key.NewBinding(key.WithHelp("enter", "apply")), 0},
-			{key.NewBinding(key.WithHelp("esc", "cancel")), 1},
+			{short(k.FilterApply, "enter", "apply"), 0},
+			{short(k.FilterCancel, "esc", "cancel"), 1},
 		}
 	}
 	if m.focus == focusDetail {
@@ -245,8 +249,7 @@ func (m *Model) hints() []hint {
 			{short(k.GoBottom, "G", "latest"), 1},
 			{short(k.Commands, ":", "cmd"), 2},
 			{short(k.Help, "?", "help"), 3},
-			{short(k.Quit, "q", "quit"), 4},
-			{short(k.ScrollUp, "j/k", "scroll"), 5},
+			{pair(k.ScrollDn, k.ScrollUp, "j/k", "scroll"), 5},
 			{short(k.GoTop, "g", "top"), 6},
 			{short(k.Focus, "tab", "list"), 7},
 		}
@@ -256,9 +259,9 @@ func (m *Model) hints() []hint {
 		{short(k.Commands, ":", "cmd"), 1},
 		{short(k.Help, "?", "help"), 2},
 		{short(k.Quit, "q", "quit"), 3},
-		{key.NewBinding(key.WithHelp("1-3", "views")), 4},
+		{short(k.Views, "1-3", "views"), 4},
 		{short(k.Filter, "/", "filter"), 5},
-		{short(k.ListDown, "j/k", "move"), 6},
+		{pair(k.ListDown, k.ListUp, "j/k", "move"), 6},
 	}
 }
 
@@ -297,11 +300,6 @@ func (m *Model) renderFooter() string {
 	style := footerStyle.Width(m.width).MaxWidth(m.width).MaxHeight(max(1, m.height-2))
 	inner := max(1, m.width-2)
 	var lines []string
-	if m.help.ShowAll {
-		for _, group := range m.keys.FullHelp() {
-			lines = append(lines, ansi.Truncate(m.help.ShortHelpView(group), inner, "…"))
-		}
-	}
 	status := m.position()
 	switch {
 	case m.focus == focusDetail && !m.showHistory && !m.showAttention && m.detail.AtBottom():

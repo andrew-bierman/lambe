@@ -19,10 +19,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/sahilm/fuzzy"
 )
 
 type paletteCommand struct {
 	label string
+	desc  string // searched along with the label and shown for the selected row
+	hint  string // the key that does the same thing, shown at the right edge
 	run   func() tea.Cmd
 }
 
@@ -48,11 +51,23 @@ type commandResult struct {
 }
 
 func (p *commandPalette) matches() []paletteCommand {
-	query := strings.ToLower(strings.TrimSpace(p.input.Value()))
+	query := strings.TrimSpace(p.input.Value())
+	if query == "" {
+		return p.commands
+	}
+	labels := make([]string, len(p.commands))
+	for i, c := range p.commands {
+		labels[i] = c.label
+	}
 	var matches []paletteCommand
-	for _, command := range p.commands {
-		if strings.Contains(strings.ToLower(command.label), query) {
-			matches = append(matches, command)
+	seen := make(map[int]bool)
+	for _, r := range fuzzy.Find(query, labels) { // best label match first
+		matches = append(matches, p.commands[r.Index])
+		seen[r.Index] = true
+	}
+	for i, c := range p.commands { // then commands whose description mentions the query
+		if !seen[i] && strings.Contains(strings.ToLower(c.desc), strings.ToLower(query)) {
+			matches = append(matches, c)
 		}
 	}
 	return matches
@@ -64,34 +79,43 @@ func (m *Model) openPalette() tea.Cmd {
 	p := &commandPalette{input: textinput.New()}
 	p.input.Prompt = "› "
 	p.input.Placeholder = "Search commands"
-	p.commands = []paletteCommand{
-		{"Show run queue", func() tea.Cmd { m.setHistory(false); m.setFocus(focusList); return nil }},
-		{"Show runs needing attention", func() tea.Cmd { m.setQueueView(false, true); m.setFocus(focusList); return nil }},
-		{"Show attempt history", func() tea.Cmd { m.setHistory(true); m.setFocus(focusList); return nil }},
-		{"Show activity chart", func() tea.Cmd { m.showActivity = true; return nil }},
+	p.commands = m.paletteCommands(p)
+	m.palette = p
+	return p.input.Focus()
+}
+
+// paletteCommands builds the command table for the current selection. The key
+// hints are checked against the keyMap by a test.
+func (m *Model) paletteCommands(p *commandPalette) []paletteCommand {
+	cmds := []paletteCommand{
+		{"Show run queue", "all runs in flight", "1", func() tea.Cmd { m.setHistory(false); m.setFocus(focusList); return nil }},
+		{"Show runs needing attention", "retries, deferred, interrupted, failed gates", "2", func() tea.Cmd { m.setQueueView(false, true); m.setFocus(focusList); return nil }},
+		{"Show attempt history", "finished attempts", "3", func() tea.Cmd { m.setHistory(true); m.setFocus(focusList); return nil }},
+		{"Show activity chart", "breakdown of runs and outcomes", "", func() tea.Cmd { m.showActivity = true; return nil }},
+		{"Show key help", "every key for this view", "?", func() tea.Cmd { m.openHelp(); return nil }},
 	}
 	if run, ok := m.selectedRun(); ok {
-		p.commands = append(p.commands,
-			paletteCommand{"Inspect selected run", func() tea.Cmd { m.setFocus(focusDetail); return nil }},
-			paletteCommand{"Jump to latest output", func() tea.Cmd {
+		cmds = append(cmds,
+			paletteCommand{"Inspect selected run", "focus the detail pane", "enter", func() tea.Cmd { m.setFocus(focusDetail); return nil }},
+			paletteCommand{"Jump to latest output", "scroll details to the bottom", "G", func() tea.Cmd {
 				m.setFocus(focusDetail)
 				m.detail.GotoBottom()
 				return nil
 			}},
 		)
 		if m.sessionContext != nil && run.Thread != "" {
-			p.commands = append(p.commands, paletteCommand{"Show agent session details", func() tea.Cmd {
+			cmds = append(cmds, paletteCommand{"Show agent session details", "provider and workspace of the agent session", "", func() tea.Cmd {
 				return readAgentSession(m.sessionContext, run.Thread)
 			}})
 		}
 		if m.path != "" && run.Workspace != "" {
-			p.commands = append(p.commands, paletteCommand{"Open run workspace shell", func() tea.Cmd {
+			cmds = append(cmds, paletteCommand{"Open run workspace shell", "a shell in the run workspace", "", func() tea.Cmd {
 				return openDirectoryShell(run.Workspace)
 			}})
 		}
 	}
 	if m.trackerPath != "" {
-		p.commands = append(p.commands, paletteCommand{"Open Beads tracker shell", func() tea.Cmd {
+		cmds = append(cmds, paletteCommand{"Open Beads tracker shell", "a shell in the tracker directory", "", func() tea.Cmd {
 			return openDirectoryShell(m.trackerPath)
 		}})
 	}
@@ -105,7 +129,7 @@ func (m *Model) openPalette() tea.Cmd {
 			if choice.Name != "" {
 				label = "Queue task · " + choice.Name
 			}
-			p.commands = append(p.commands, paletteCommand{label, func() tea.Cmd {
+			cmds = append(cmds, paletteCommand{label, "add a task for the daemon to run", "", func() tea.Cmd {
 				p.queueForm = true
 				p.workflow = choice
 				p.input.SetValue("")
@@ -116,8 +140,7 @@ func (m *Model) openPalette() tea.Cmd {
 			}})
 		}
 	}
-	m.palette = p
-	return p.input.Focus()
+	return cmds
 }
 
 func (m *Model) updatePalette(msg tea.KeyMsg) tea.Cmd {
@@ -173,11 +196,19 @@ func (m *Model) renderPalette() string {
 	rows := max(1, m.height-5)
 	start := max(0, p.selected-rows+1)
 	for i, command := range matches[start:min(len(matches), start+rows)] {
-		if start+i == p.selected {
-			lines = append(lines, headerStyle.Width(width).MaxWidth(width).Render("› "+command.label))
-		} else {
-			lines = append(lines, "  "+command.label)
+		label := command.label
+		if command.hint != "" {
+			pad := max(1, width-4-lipgloss.Width(label)-lipgloss.Width(command.hint))
+			label += strings.Repeat(" ", pad) + command.hint
 		}
+		if start+i == p.selected {
+			lines = append(lines, headerStyle.Width(width).MaxWidth(width).Render("› "+label))
+		} else {
+			lines = append(lines, "  "+label)
+		}
+	}
+	if p.selected < len(matches) && matches[p.selected].desc != "" && m.height >= 10 {
+		lines = append(lines, dimStyle.Render(matches[p.selected].desc))
 	}
 	lines = append(lines, dimStyle.Render("↑↓ select   Enter run   Esc close"))
 	if p.queueForm {
@@ -195,10 +226,11 @@ func (m *Model) renderPalette() string {
 }
 
 func (m *Model) centerPanel(lines []string, width int, frame bool) string {
-	for i, line := range lines {
-		lines[i] = ansi.Truncate(line, width, "…")
+	parts := strings.Split(strings.Join(lines, "\n"), "\n") // lines may hold embedded newlines
+	for i, line := range parts {
+		parts[i] = ansi.Truncate(line, width, "…")
 	}
-	content := strings.Join(lines, "\n")
+	content := strings.Join(parts, "\n")
 	if frame {
 		content = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(width + 2).Render(content)
 	}
