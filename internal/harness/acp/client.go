@@ -78,6 +78,8 @@ type agentProc struct {
 	waitErr   error
 	closeOnce sync.Once
 	stdinOnce sync.Once
+	readEOF   chan struct{}
+	eofOnce   sync.Once
 }
 
 // spawnAgent launches the described process in a new process group (Setpgid)
@@ -135,6 +137,7 @@ func spawnAgent(opts clientOptions) (*agentProc, error) {
 		stdin:    stdinWrite,
 		stdout:   stdoutRead,
 		waitDone: make(chan struct{}),
+		readEOF:  make(chan struct{}),
 	}
 	logger.Info("acp agent spawned", "pgid", pgid, "session", opts.Session, "pid", cmd.Process.Pid)
 	go p.waitOwner()
@@ -152,9 +155,15 @@ func (p *agentProc) waitOwner() {
 	}
 	p.waitErr = waitErr
 	close(p.waitDone)
+	// Give the SDK read loop a moment to see EOF, but stop waiting as soon as
+	// it does: the old unconditional WaitDelay added three seconds to every
+	// teardown even when the pipe was already drained.
 	timer := time.NewTimer(proc.DefaultWaitDelay)
 	defer timer.Stop()
-	<-timer.C
+	select {
+	case <-p.readEOF:
+	case <-timer.C:
+	}
 	p.closeOnce.Do(func() { _ = p.stdout.Close() })
 }
 
@@ -186,6 +195,23 @@ func (p *agentProc) Terminate(ctx context.Context, grace time.Duration) error {
 		return err
 	}
 	return nil
+}
+
+// eofReader signals when the child's stdout reaches EOF, so waitOwner can stop
+// waiting as soon as the SDK has seen the end of the stream.
+type eofReader struct {
+	r      io.Reader
+	onEOF  func()
+	closed bool
+}
+
+func (e *eofReader) Read(p []byte) (int, error) {
+	n, err := e.r.Read(p)
+	if err == io.EOF && !e.closed {
+		e.closed = true
+		e.onEOF()
+	}
+	return n, err
 }
 
 // activityReader wraps the child's stdout read end and fires onActivity for
@@ -321,7 +347,8 @@ func startClient(opts clientOptions, sink inbound) (*client, error) {
 	// an unsynchronized write; hold the first read until the logger is set so
 	// a fast-talking (or garbage-emitting) agent cannot race it.
 	ready := make(chan struct{})
-	var out io.Reader = &gatedReader{r: p.stdout, ready: ready}
+	reader := &eofReader{r: p.stdout, onEOF: func() { p.eofOnce.Do(func() { close(p.readEOF) }) }}
+	var out io.Reader = &gatedReader{r: reader, ready: ready}
 	if opts.OnActivity != nil {
 		out = &activityReader{r: out, onActivity: opts.OnActivity}
 	}
