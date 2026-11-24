@@ -237,3 +237,52 @@ func TestStatusReadsGateRejectionLog(t *testing.T) {
 		t.Fatalf("report gate rejections = %+v known=%v", rep.GateRejections, rep.GateRejectionsKnown)
 	}
 }
+
+// TestRenderReportOrphanScanFailure pins that a failed orphan scan is shown
+// as unavailable, not silently rendered as "no orphans".
+func TestRenderReportOrphanScanFailure(t *testing.T) {
+	var b strings.Builder
+	if err := RenderReport(&b, Report{OrphanedError: "read in-progress claims: boom"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.String(); !strings.Contains(got, "orphaned claims: unavailable (read in-progress claims: boom)") {
+		t.Fatalf("report does not surface the orphan scan failure:\n%s", got)
+	}
+}
+
+// TestStatusSurfacesOrphanScanError drives readReport with a checkpoint
+// directory that cannot be listed (a regular file in its place).
+func TestStatusSurfacesOrphanScanError(t *testing.T) {
+	bin := bdBin()
+	if bin == "" {
+		t.Skip("bd binary not found; set LAMBE_TEST_BD=1 with bd on PATH to run")
+	}
+	dir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	local, err := tracker.NewLocal(bin, dir, "lambe@testbox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Init(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	state := t.TempDir()
+	t.Setenv("LAMBE_STATE_DIR", state)
+	cfg := &config.Config{Trackers: []config.Tracker{{Name: "t", Path: dir}}}
+	ckpt := CheckpointDir(state, cfg)
+	if err := os.MkdirAll(filepath.Dir(ckpt), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ckpt, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := readReport(cfg, "testbox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.OrphanedError == "" {
+		t.Fatal("OrphanedError empty; scan failure was swallowed")
+	}
+}

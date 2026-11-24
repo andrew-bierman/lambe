@@ -352,7 +352,9 @@ func (l *Loop) noteBlocked(ctx context.Context, saved *checkpoint, err error) {
 	}
 	saved.Error = err.Error()
 	if changed {
-		_ = l.writeCheckpoint(*saved)
+		if werr := l.writeCheckpoint(*saved); werr != nil {
+			l.Log.Warn("checkpoint write failed while recording blocked recovery", "issue", id, "error", werr)
+		}
 		l.Log.Error("session recovery blocked; preserving claim and workspace", "issue", id, "error", err)
 	}
 	if !orphan {
