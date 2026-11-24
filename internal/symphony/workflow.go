@@ -91,7 +91,15 @@ var hookNames = map[HookName]bool{
 // $VAR / ${VAR} / ${VAR:-default} environment resolution; a referenced
 // variable that is unset without a default is an error. The returned
 // Workflow carries the content hash as its Revision.
+// MaxWorkflowBytes bounds WORKFLOW.md. Duplicate-key handling in the YAML
+// parser is quadratic, so a malformed or hostile file must not be able to hang
+// the daemon.
+const MaxWorkflowBytes = 1 << 20
+
 func ParseWorkflow(content []byte, env EnvLookup) (*Workflow, error) {
+	if len(content) > MaxWorkflowBytes {
+		return nil, fmt.Errorf("WORKFLOW.md is larger than %d bytes", MaxWorkflowBytes)
+	}
 	front, body, err := splitFrontMatter(content)
 	if err != nil {
 		return nil, err

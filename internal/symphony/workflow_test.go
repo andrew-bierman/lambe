@@ -349,3 +349,10 @@ func TestLoaderInitialInvalidIsError(t *testing.T) {
 		t.Fatal("expected error for invalid initial workflow")
 	}
 }
+
+func TestParseWorkflowRejectsAnOversizedFile(t *testing.T) {
+	content := make([]byte, MaxWorkflowBytes+1)
+	if _, err := ParseWorkflow(content, nil); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("err = %v, want an oversized-file error", err)
+	}
+}

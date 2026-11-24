@@ -763,3 +763,14 @@ func TestKeyTableMatchesLoader(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadRejectsAnOversizedConfigFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "big.yaml")
+	if err := os.WriteFile(path, make([]byte, MaxConfigBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(Options{File: path, Env: []string{}})
+	if err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("err = %v, want an oversized-file error", err)
+	}
+}
