@@ -596,3 +596,17 @@ func TestContractRoutePrecedence(t *testing.T) {
 		}
 	})
 }
+
+// An empty snapshot must encode its lists as [], never null, so clients can
+// iterate without a nil check.
+func TestEmptySnapshotListsEncodeAsArrays(t *testing.T) {
+	raw, err := json.Marshal(NewSnapshotResponse(Snapshot{}, Daemon{}, time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"runs":[]`, `"needs_human":[]`, `"gate_rejections":[]`} {
+		if !strings.Contains(string(raw), key) {
+			t.Errorf("snapshot lacks %s: %s", key, raw)
+		}
+	}
+}

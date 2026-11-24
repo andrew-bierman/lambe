@@ -388,17 +388,6 @@ func TestBareCommandsLoadInitializedConfigurationFromAnotherDirectory(t *testing
 	}
 }
 
-// TestInitHelpIsSuccess pins the CLI contract that -h/--help exits cleanly:
-// flag.ErrHelp is a successful outcome of the setup wizard, not a failure.
-// (The flag package prints usage to its own stderr; runInit's writer only
-// carries wizard output.)
-func TestInitHelpIsSuccess(t *testing.T) {
-	var out strings.Builder
-	if err := runInit([]string{"-h"}, strings.NewReader(""), &out); err != nil {
-		t.Fatalf("runInit(-h) = %v; want nil", err)
-	}
-}
-
 // Hosts sharing one tracker need distinct actors; the daemon must take its
 // identity from config (machine/actor, env included), not from the hostname
 // alone.

@@ -32,105 +32,18 @@ var (
 	date    = "unknown"
 )
 
-const usage = `lambe is the supervisor daemon for autonomous coding agents.
-
-usage:
-  lambe init    [-config FILE] [--non-interactive] set up config, workflow, and starter formula
-  lambe run     [-config FILE] run the supervisor daemon until SIGTERM/SIGINT
-  lambe status  [-config FILE] [-json] print the morning report (-json: state API snapshot)
-  lambe state-dir [-json]      print the state directory and live state API descriptors
-  lambe claims  list | release [--force] ISSUE   inspect or release orphaned claims
-  lambe doctor  [-config FILE] [-json] check for anything that could stall your agents
-  lambe service install|status|uninstall  keep the daemon alive under launchd/systemd
-  lambe setup   rex [--apply] [--uninstall] [--force] [--dir DIR]   install the Rex palette actions (dry run by default)
-  lambe mcp     [-config FILE] serve lambe's MCP tools over stdio
-  lambe logs    [-config FILE] [-issue ID] [-follow] [-json] show agent output
-  lambe enqueue [-config FILE] -workflow NAME [-apply] ISSUE_ID
-  lambe tui     [-config FILE | -demo]                 interactive dashboard (split panes, scrollback)
-  lambe version [--json] print build information
-`
-
 func main() {
-	args := os.Args[1:]
-	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
-	}
-	switch args[0] {
-	case "version":
-		if err := runVersion(args[1:], os.Stdout); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(2)
-		}
-	case "init":
-		if err := runInit(args[1:], os.Stdin, os.Stdout); err != nil {
-			logging.Default().Error("lambe init failed", "error", err.Error())
-			os.Exit(1)
-		}
-	case "run":
-		if err := runDaemon(args[1:]); err != nil {
-			logging.Default().Error("lambe run failed", "error", err.Error())
-			os.Exit(exitCodeFor(err))
-		}
-	case "enqueue":
-		if err := runEnqueue(args[1:], os.Stdout); err != nil {
-			logging.Default().Error("queueing task failed", "error", err)
-			os.Exit(1)
-		}
-	case "logs", "tui":
-		if err := runLive(args[1:], args[0] == "tui", os.Stdin, os.Stdout); err != nil {
-			logging.Default().Error("live view failed", "error", err)
-			os.Exit(1)
-		}
-	case "doctor":
-		if err := runDoctor(args[1:], hostDoctorEnv(), os.Stdout); err != nil {
-			if !errors.Is(err, errDoctorFailed) {
-				logging.Default().Error("lambe doctor failed", "error", err.Error())
-			}
-			os.Exit(1)
-		}
-	case "claims":
-		if err := runClaims(args[1:], os.Stdout); err != nil {
-			logging.Default().Error("lambe claims failed", "error", err.Error())
-			os.Exit(readExitCode(err))
-		}
-	case "service":
-		if err := runService(args[1:], hostEnv(), os.Stdout); err != nil {
-			logging.Default().Error("lambe service failed", "error", err.Error())
-			os.Exit(1)
-		}
-	case "setup":
-		if err := runSetup(args[1:], hostRexSetupEnv(), os.Stdout); err != nil {
-			logging.Default().Error("lambe setup failed", "error", err.Error())
-			os.Exit(readExitCode(err))
-		}
-	case "status":
-		if err := runStatus(args[1:], os.Stdout); err != nil {
-			logging.Default().Error("lambe status failed", "error", err.Error())
-			os.Exit(readExitCode(err))
-		}
-	case "state-dir":
-		dir, source := daemon.ResolveStateDir()
-		if err := runStateDir(args[1:], dir, source, os.Stdout); err != nil {
-			logging.Default().Error("lambe state-dir failed", "error", err.Error())
-			os.Exit(readExitCode(err))
-		}
-	case "mcp":
-		if err := runMCP(args[1:]); err != nil {
-			logging.Default().Error("lambe mcp failed", "error", err.Error())
-			os.Exit(1)
-		}
-	default:
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
-	}
+	os.Exit(execute(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
 // parseCommon loads configuration from the shared -config flag.
 func parseCommon(args []string) (*config.Config, string, error) {
 	fs := flag.NewFlagSet("lambe", flag.ContinueOnError)
-	configFile := fs.String("config", "", "path to a lambe config file")
-	if err := fs.Parse(args); err != nil {
+	configFile := fs.String("config", "", configFlagHelp)
+	if err := parseFlags(fs, args); err != nil {
+		return nil, "", err
+	}
+	if err := noArgs(fs); err != nil {
 		return nil, "", err
 	}
 	return loadConfig(*configFile)
@@ -151,6 +64,9 @@ func loadConfig(explicit string) (*config.Config, string, error) {
 }
 
 func cliConfigPath(explicit string) (string, error) {
+	if explicit == "" {
+		explicit = os.Getenv("LAMBE_CONFIG")
+	}
 	if explicit != "" {
 		abs, err := filepath.Abs(explicit)
 		if err != nil {
@@ -243,14 +159,13 @@ func hostIdentity(cfg *config.Config) (machine, actor string) {
 // a daemon, so it answers whether or not one is running.
 func runStatus(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("lambe status", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	configFile := fs.String("config", "", "path to a lambe config file")
+	configFile := fs.String("config", "", configFlagHelp)
 	asJSON := fs.Bool("json", false, "print a state API snapshot as JSON")
-	if err := fs.Parse(args); err != nil {
-		return usageError{err}
+	if err := parseFlags(fs, args); err != nil {
+		return err
 	}
-	if fs.NArg() != 0 {
-		return usageError{fmt.Errorf("unexpected arguments: %v", fs.Args())}
+	if err := noArgs(fs); err != nil {
+		return err
 	}
 	cfg, path, err := loadConfig(*configFile)
 	if err != nil {
@@ -425,15 +340,13 @@ func say(out io.Writer, format string, args ...any) {
 // and never runs external commands; every choice falls back to a default.
 func runInit(args []string, in io.Reader, out io.Writer) error {
 	fs := flag.NewFlagSet("lambe init", flag.ContinueOnError)
-	configFile := fs.String("config", "", "path to write the lambe config to")
+	configFile := fs.String("config", "", "path to write the lambe config to (env LAMBE_CONFIG)")
 	harness := fs.String("harness", "pi", "agent backend: pi, codex, or acp")
 	nonInteractive := fs.Bool("non-interactive", false, "skip all prompts and use defaults")
-	if err := fs.Parse(args); err != nil {
-		// -h/--help prints the flag usage and returns flag.ErrHelp: that is
-		// a successful outcome, not a setup failure.
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if err := noArgs(fs); err != nil {
 		return err
 	}
 	if _, err := daemon.HarnessCommand(&config.Config{Harness: *harness}); err != nil {

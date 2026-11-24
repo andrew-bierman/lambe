@@ -329,6 +329,9 @@ func NewSnapshotResponse(snap Snapshot, id Daemon, now time.Time) SnapshotRespon
 	resp := SnapshotResponse{
 		SchemaVersion:      SchemaVersion,
 		Daemon:             daemonDTO(id),
+		Runs:               []RunDTO{}, // empty lists encode as [], never null
+		NeedsHuman:         []NeedsHumanDTO{},
+		GateRejections:     []GateRejectionDTO{},
 		DeferredUntil:      formatTime(snap.DeferredUntil),
 		WakeAt:             formatTime(snap.WakeAt),
 		RunsAsOf:           formatTime(snap.RunsAsOf),

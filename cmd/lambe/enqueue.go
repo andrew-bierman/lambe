@@ -16,21 +16,18 @@ import (
 
 func runEnqueue(args []string, out io.Writer) error {
 	flags := flag.NewFlagSet("lambe enqueue", flag.ContinueOnError)
-	cfgPath := flags.String("config", "", "configuration file")
+	cfgPath := flags.String("config", "", configFlagHelp)
 	name := flags.String("workflow", "", "named workflow to run")
 	apply := flags.Bool("apply", false, "add the workflow label to the task")
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
+	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
 	if flags.NArg() != 1 || *name == "" {
-		return errors.New("usage: lambe enqueue -workflow NAME [-apply] ISSUE_ID")
+		return usageError{errors.New("usage: lambe enqueue --workflow NAME [--apply] ISSUE_ID")}
 	}
 	id := flags.Arg(0)
 	if id == "" || strings.HasPrefix(id, "-") {
-		return fmt.Errorf("invalid task ID %q", id)
+		return usageError{fmt.Errorf("invalid task ID %q", id)}
 	}
 	path, err := cliConfigPath(*cfgPath)
 	if err != nil {
@@ -84,7 +81,7 @@ func runEnqueue(args []string, out io.Writer) error {
 		return err
 	}
 	if !*apply {
-		_, err := fmt.Fprintln(out, "Preview only. Add -apply to queue the task.")
+		_, err := fmt.Fprintln(out, "Preview only. Add --apply to queue the task.")
 		return err
 	}
 	if err := local.AddWorkflowLabel(ctx, id, chosen.Label); err != nil {
