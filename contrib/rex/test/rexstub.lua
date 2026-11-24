@@ -133,6 +133,7 @@ function M.install(profile_name)
     faults = {}, -- method name -> error string, makes that call return nil, err
     calls = {}, -- rex.call methods seen
     other_sessions = {}, -- {session_id, label, windows = view windows} on the same server
+    attached = {}, -- sessions the connection is attached to
     remote_focused = {}, -- session/window pairs focused through rex.call
     splits = {}, -- new_split arguments received
   }
@@ -184,13 +185,22 @@ function M.install(profile_name)
       local sessions = { { session_id = "session:1", label = "Current" } }
       for _, other in ipairs(ctl.other_sessions) do sessions[#sessions + 1] = { session_id = other.session_id, label = other.label } end
       return { sessions = sessions }
-    elseif method == "session.view" then
+    elseif method == "session.attach" then
       for _, other in ipairs(ctl.other_sessions) do
-        if other.session_id == (args or {}).session_id then return { windows = other.windows } end
+        if other.session_id == (args or {}).session_id then
+          ctl.attached[other.session_id] = true
+          return { view = { windows = other.windows }, client_id = "client:1" }
+        end
       end
       return nil, "no such session"
+    elseif method == "session.detach" then
+      ctl.attached[(args or {}).session_id] = nil
+      return {}
     elseif method == "session.focus_window" then
-      ctl.remote_focused[#ctl.remote_focused + 1] = (args or {}).session_id .. "/" .. (args or {}).window_id
+      local id = (args or {}).session_id
+      -- A real server refuses calls into a session the connection is not attached to.
+      if id ~= "session:1" and not ctl.attached[id] then return nil, "stream is not attached to session " .. tostring(id) end
+      ctl.remote_focused[#ctl.remote_focused + 1] = id .. "/" .. (args or {}).window_id
       return {}
     end
     return nil, "unknown method " .. method

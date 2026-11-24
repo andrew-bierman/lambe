@@ -39,18 +39,33 @@ function M.picker_support()
   local revision = M.api_revision()
   local present = rex.ui ~= nil and rex.ui.pick ~= nil
   if present and (revision == nil or revision >= lambe_version.UI_API) then return true end
-  local seen = revision and ("this server reports API revision " .. revision) or "this server has no rex.ui"
-  return false, "the run picker needs Rex preview.21 or newer (API revision " .. lambe_version.UI_API .. "+); " .. seen
+  local need = "the run picker needs Rex preview.21 or newer (API revision " .. lambe_version.UI_API .. "+)"
+  if revision ~= nil and revision >= lambe_version.UI_API then
+    -- A `rex do` script runs in the rex CLI's own Lua, which can be older than the server.
+    return false, need .. "; the server reports API revision " .. revision .. " but this Lua runtime has no rex.ui (an older rex CLI running the script?)"
+  end
+  return false, need .. "; " .. (revision and ("this server reports API revision " .. revision) or "this server has no rex.ui")
 end
 
--- Other sessions on this server: {session_id, label} rows, their window
--- views, and focusing a window there. rex.call works after config load.
+-- Other sessions on this server: {session_id, label} rows, and a way to look
+-- at one. Calls into a session this action did not start in need the
+-- connection attached to it (rex.call works after config load); the view
+-- comes back from the attach, and the attach is always undone.
 function M.sessions()
   local result = rex.call("session.list")
   return result and result.sessions or {}
 end
 
-function M.session_view(session_id) return rex.call("session.view", { session_id = session_id }) end
+-- Runs fn(view) while attached to `session_id`; returns fn's results, or
+-- nil when the attach fails.
+function M.with_session(session_id, fn)
+  local attached = rex.call("session.attach", { session_id = session_id })
+  if attached == nil then return nil end
+  local ok, result = pcall(fn, attached.view)
+  rex.call("session.detach", { session_id = session_id })
+  if not ok then error(result, 0) end
+  return result
+end
 
 function M.focus_window_in(session_id, window_id)
   return rex.call("session.focus_window", { session_id = session_id, window_id = window_id })

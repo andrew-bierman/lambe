@@ -59,19 +59,22 @@ local function find_in_view(view, label)
   end
 end
 
--- The window already following `label`: {window_id, block_id, block_label}
--- in this session, or with session_id and session_label when another
--- session on the server has it. nil when none does.
-function M.find_labeled(label, own_session)
-  local found = find_in_view(host.view(), label)
-  if found ~= nil then return found end
+-- The window already following `label` in this session:
+-- {window_id, block_id, block_label}, or nil.
+function M.find_labeled(label)
+  return find_in_view(host.view(), label)
+end
+
+-- Look for `label` in the other sessions on the server and focus it where it
+-- lives. Returns that session's label, or nil when none has it.
+local function focus_elsewhere(label, own_session)
   for _, session in ipairs(host.sessions()) do
     if session.session_id ~= own_session then
-      found = find_in_view(host.session_view(session.session_id), label)
-      if found ~= nil then
-        found.session_id, found.session_label = session.session_id, session.label
-        return found
-      end
+      local focused = host.with_session(session.session_id, function(view)
+        local found = find_in_view(view, label)
+        return found ~= nil and host.focus_window_in(session.session_id, found.window_id) ~= nil
+      end)
+      if focused then return session.label end
     end
   end
 end
@@ -102,15 +105,15 @@ end
 -- when it lives in another session (focusing it there changes nothing the
 -- user is looking at, so say where it is).
 function M.focus_existing(label, title, own_session)
-  local found = M.find_labeled(label, own_session)
-  if found == nil then return false end
-  if found.session_id ~= nil then
-    if host.focus_window_in(found.session_id, found.window_id) == nil then return false end
-    return true, "`" .. label .. "` is already open in session `" .. tostring(found.session_label) .. "`; switch to that session to see it"
+  local found = M.find_labeled(label)
+  if found ~= nil then
+    if host.focus_window(found.window_id) == nil then return false end
+    M.retitle(found, title)
+    return true
   end
-  if host.focus_window(found.window_id) == nil then return false end
-  M.retitle(found, title)
-  return true
+  local where = focus_elsewhere(label, own_session)
+  if where == nil then return false end
+  return true, "`" .. label .. "` is already open in session `" .. tostring(where) .. "`; switch to that session to see it"
 end
 
 -- Focus the pane for `issue` if one exists; returns whether it did.

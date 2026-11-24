@@ -348,6 +348,16 @@ return function(T)
     T.eq(#stub.windows, 0, "nothing duplicated")
     T.eq(stub.remote_focused[1], "session:2/window:r", "focused where it lives")
     T.contains(message, "already open in session `Agents`", "says where")
+    T.eq(next(stub.attached), nil, "detached again")
+  end)
+
+  T.test("a missing rex.ui on a new-enough server is explained, not blamed on the server", function()
+    local stub = boot("p21")
+    rex.ui = nil -- a rex CLI older than the server runs the script
+    local ok, message = stub.run("lambe_open_run")
+    T.ok(ok, tostring(message))
+    T.contains(message, "this Lua runtime has no rex.ui", "message")
+    T.contains(message, "API revision 18", "message")
   end)
 
   T.test("Switch Host asks the app for its host picker", function()
