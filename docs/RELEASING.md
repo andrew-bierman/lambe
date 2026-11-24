@@ -142,6 +142,26 @@ gh attestation verify lambe_X.Y.Z_linux_amd64.tar.gz --repo andrew-bierman/lambe
 
 Each archive has an SBOM (`*.sbom.json`) alongside it.
 
+## Reproducible builds
+
+Release binaries, archives and packages are byte-for-byte reproducible from a
+commit: `-trimpath`, `-buildid=`, `main.date` from the commit date
+(`{{ .CommitDate }}`, not build time), and `mod_timestamp`/archive/nfpm mtimes
+pinned to the commit. To verify, build twice (the second time from a fresh clone
+in another directory) and compare hashes. SBOMs and signatures are skipped
+because they are not part of the comparison:
+
+```sh
+goreleaser release --snapshot --clean --skip=publish,sign,sbom
+(cd dist && shasum -a 256 checksums.txt lambe_*.tar.gz lambe_*.deb lambe_*.rpm lambe_*.apk) > /tmp/a.txt
+# repeat in a second clone of the same commit, then:
+diff /tmp/a.txt /tmp/b.txt && echo reproducible
+```
+
+Use the same Go toolchain (`mise.toml`) for both runs. A published release can be
+checked the same way: build the tag's commit and compare against
+`checksums.txt`.
+
 ## Homebrew
 
 `brew install andrew-bierman/tap/lambe` installs the formula that goreleaser
