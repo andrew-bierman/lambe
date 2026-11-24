@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -157,6 +158,9 @@ func ParseWorkflow(content []byte, env EnvLookup) (*Workflow, error) {
 		n, err := asInt(v)
 		if err != nil || n < 1 {
 			return nil, fmt.Errorf("WORKFLOW.md: hook_timeout_ms must be a positive integer, got %v", v)
+		}
+		if int64(n) > math.MaxInt64/int64(time.Millisecond) {
+			return nil, fmt.Errorf("WORKFLOW.md: hook_timeout_ms is too large, got %v", v)
 		}
 		wf.HookTimeout = time.Duration(n) * time.Millisecond
 	}
