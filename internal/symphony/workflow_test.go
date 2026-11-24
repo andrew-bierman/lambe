@@ -32,6 +32,7 @@ func TestParseWorkflow(t *testing.T) {
 			name:    "defaults apply with empty front matter",
 			content: "---\n---\nDo the work for {{ issue }}.",
 			check: func(t *testing.T, wf *Workflow) {
+				t.Helper()
 				if wf.MaxTurns != DefaultMaxTurns {
 					t.Errorf("MaxTurns = %d, want %d", wf.MaxTurns, DefaultMaxTurns)
 				}
@@ -52,6 +53,7 @@ hook_timeout_ms: 1500
 Body {{ attempt }}.
 `,
 			check: func(t *testing.T, wf *Workflow) {
+				t.Helper()
 				if wf.Hooks[HookAfterCreate] != "git init" || wf.Hooks[HookBeforeRun] != "echo run" {
 					t.Errorf("hooks = %v", wf.Hooks)
 				}
@@ -70,6 +72,7 @@ body
 `,
 			env: map[string]string{},
 			check: func(t *testing.T, wf *Workflow) {
+				t.Helper()
 				want := "clone https://example.invalid/repo.git"
 				if wf.Hooks[HookAfterCreate] != want {
 					t.Errorf("after_create = %q, want %q", wf.Hooks[HookAfterCreate], want)
@@ -86,6 +89,7 @@ body
 `,
 			env: map[string]string{"LAMBE_TOKEN": "s3cret", "LAMBE_USER": "lambe"},
 			check: func(t *testing.T, wf *Workflow) {
+				t.Helper()
 				if wf.Hooks[HookAfterRun] != "echo s3cret lambe" {
 					t.Errorf("after_run = %q", wf.Hooks[HookAfterRun])
 				}
@@ -111,6 +115,7 @@ tracker:
 ---
 body`,
 			check: func(t *testing.T, wf *Workflow) {
+				t.Helper()
 				if len(wf.RequiredLabels) != 2 || wf.RequiredLabels[0] != "lambe:babysit" || wf.RequiredLabels[1] != "priority:high" {
 					t.Errorf("RequiredLabels = %v", wf.RequiredLabels)
 				}
@@ -125,6 +130,7 @@ tracker:
 ---
 body`,
 			check: func(t *testing.T, wf *Workflow) {
+				t.Helper()
 				if len(wf.RequiredLabels) != 1 || wf.RequiredLabels[0] != "lambe:babysit" {
 					t.Errorf("RequiredLabels = %v", wf.RequiredLabels)
 				}

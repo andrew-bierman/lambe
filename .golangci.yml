@@ -6,9 +6,38 @@ run:
 linters:
   default: standard
   enable:
+    - errchkjson
+    - errorlint
+    - exhaustive
+    - forcetypeassert
     - gosec
     - misspell
     - revive
+    - thelper
+    - unparam
+  settings:
+    exhaustive:
+      # A switch with a default is a deliberate catch-all; only a switch with
+      # neither a default nor every member listed is flagged.
+      default-signifies-exhaustive: true
+      # bubbletea key codes are a terminal-input namespace, not state: nobody
+      # lists all ~90 of them.
+      ignore-types: github.com/charmbracelet/bubbletea.KeyType
+  exclusions:
+    rules:
+      # Tests assert on concrete types, reuse fixtures with constant
+      # arguments, and switch over scenario enums partially on purpose;
+      # these linters only produce noise there.
+      - path: _test\.go
+        linters:
+          - errchkjson
+          - exhaustive
+          - forcetypeassert
+          - unparam
+      # fakeagent implements an SDK interface, so its signatures are fixed.
+      - path: internal/harness/acp/fakeagent/
+        linters:
+          - unparam
 
 formatters:
   enable:

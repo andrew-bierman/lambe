@@ -181,6 +181,7 @@ func BenchmarkPoll(b *testing.B) {
 			return m
 		}
 		report := func(b *testing.B) {
+			b.Helper()
 			// One poll per 250ms tick: seconds of CPU per poll times four, as a percent of a core.
 			b.ReportMetric(b.Elapsed().Seconds()/float64(b.N)*4*100, "cpu%@4Hz")
 		}

@@ -214,12 +214,13 @@ func TestInitNeverWritesOutsideProjectTree(t *testing.T) {
 		stdin string
 	}{
 		{"stub home beads is ignored", func(t *testing.T, home string) {
+			t.Helper()
 			mustNil(t, os.MkdirAll(filepath.Join(home, ".beads"), 0o750))
 			mustNil(t, os.WriteFile(filepath.Join(home, ".beads", "machine-id"), []byte("x"), 0o600))
 		}, []string{"-non-interactive"}, ""},
-		{"real home store, non-interactive", func(t *testing.T, home string) { fakeBeadsStore(t, home) }, []string{"-non-interactive"}, ""},
-		{"real home store, interactive yes still refused", func(t *testing.T, home string) { fakeBeadsStore(t, home) }, nil, "y\n"},
-		{"real ancestor store, interactive no", func(t *testing.T, home string) { fakeBeadsStore(t, filepath.Join(home, "work")) }, nil, "n\n"},
+		{"real home store, non-interactive", func(t *testing.T, home string) { t.Helper(); fakeBeadsStore(t, home) }, []string{"-non-interactive"}, ""},
+		{"real home store, interactive yes still refused", func(t *testing.T, home string) { t.Helper(); fakeBeadsStore(t, home) }, nil, "y\n"},
+		{"real ancestor store, interactive no", func(t *testing.T, home string) { t.Helper(); fakeBeadsStore(t, filepath.Join(home, "work")) }, nil, "n\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

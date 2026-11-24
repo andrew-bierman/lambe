@@ -30,6 +30,7 @@ func twoHosts(t *testing.T, srv *testdolt.Server) (a, b *tracker.Beads, dirA, di
 }
 
 func testContestedClaimHasOneWinner(t *testing.T, srv *testdolt.Server) {
+	t.Helper()
 	a, b, _, _, mk := twoHosts(t, srv)
 	const rounds = 15
 	for i := range rounds {
@@ -57,6 +58,7 @@ func testContestedClaimHasOneWinner(t *testing.T, srv *testdolt.Server) {
 }
 
 func testHealthyLeaseSurvivesPeerReclaim(t *testing.T, srv *testdolt.Server) {
+	t.Helper()
 	a, b, _, _, mk := twoHosts(t, srv)
 	id := mk("healthy")
 	if _, err := a.Claim(t.Context(), id); err != nil {
@@ -77,6 +79,7 @@ func testHealthyLeaseSurvivesPeerReclaim(t *testing.T, srv *testdolt.Server) {
 }
 
 func testPeerRecoversExpiredLease(t *testing.T, srv *testdolt.Server) {
+	t.Helper()
 	a, b, _, dirB, mk := twoHosts(t, srv)
 	id := mk("orphan")
 	if _, err := a.Claim(t.Context(), id); err != nil {

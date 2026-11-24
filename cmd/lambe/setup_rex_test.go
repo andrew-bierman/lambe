@@ -99,6 +99,7 @@ func TestSetupRex(t *testing.T) {
 			name:    "dry run writes nothing",
 			wantOut: []string{"dry run", "create", "init.lua", "rex config reload"},
 			check: func(t *testing.T, dir string) {
+				t.Helper()
 				if _, err := os.Stat(filepath.Join(dir, "lambe.lua")); err == nil {
 					t.Error("dry run wrote lambe.lua")
 				}
@@ -109,12 +110,13 @@ func TestSetupRex(t *testing.T) {
 		},
 		{
 			name: "apply is idempotent", args: []string{"--apply"},
-			prepare: func(t *testing.T, dir string) { installRex(t, dir) },
+			prepare: func(t *testing.T, dir string) { t.Helper(); installRex(t, dir) },
 			wantOut: []string{"keep    " + "%DIR%/lambe.lua"}, denyOut: []string{"update", "create"},
 		},
 		{
 			name: "apply upgrades an older managed shim", args: []string{"--apply"},
 			prepare: func(t *testing.T, dir string) {
+				t.Helper()
 				mustWrite(t, filepath.Join(dir, "lambe.lua"), string(rexManagedContent([]byte("-- old script\n"), 1)))
 			},
 			wantOut: []string{"update  %DIR%/lambe.lua"},
@@ -122,6 +124,7 @@ func TestSetupRex(t *testing.T) {
 		{
 			name: "edited module is refused and nothing is written", args: []string{"--apply"},
 			prepare: func(t *testing.T, dir string) {
+				t.Helper()
 				installRex(t, dir)
 				p := filepath.Join(dir, "lambe", "rows.lua")
 				mustWrite(t, p, readFile(t, p)+"-- mine\n")
@@ -130,9 +133,10 @@ func TestSetupRex(t *testing.T) {
 		},
 		{
 			name: "refuses a foreign lambe.lua", args: []string{"--apply"},
-			prepare: func(t *testing.T, dir string) { mustWrite(t, filepath.Join(dir, "lambe.lua"), "-- mine\n") },
+			prepare: func(t *testing.T, dir string) { t.Helper(); mustWrite(t, filepath.Join(dir, "lambe.lua"), "-- mine\n") },
 			wantErr: true, wantOut: []string{"refuse"},
 			check: func(t *testing.T, dir string) {
+				t.Helper()
 				if got := readFile(t, filepath.Join(dir, "lambe.lua")); got != "-- mine\n" {
 					t.Errorf("foreign file overwritten: %q", got)
 				}
@@ -143,9 +147,10 @@ func TestSetupRex(t *testing.T) {
 		},
 		{
 			name: "force replaces a foreign lambe.lua", args: []string{"--apply", "--force"},
-			prepare: func(t *testing.T, dir string) { mustWrite(t, filepath.Join(dir, "lambe.lua"), "-- mine\n") },
+			prepare: func(t *testing.T, dir string) { t.Helper(); mustWrite(t, filepath.Join(dir, "lambe.lua"), "-- mine\n") },
 			wantOut: []string{"replace"},
 			check: func(t *testing.T, dir string) {
+				t.Helper()
 				if !strings.HasPrefix(readFile(t, filepath.Join(dir, "lambe.lua")), rexManagedPrefix) {
 					t.Error("foreign file not replaced")
 				}
@@ -154,12 +159,14 @@ func TestSetupRex(t *testing.T) {
 		{
 			name: "stale managed module is removed, foreign file kept", args: []string{"--apply"},
 			prepare: func(t *testing.T, dir string) {
+				t.Helper()
 				installRex(t, dir)
 				mustWrite(t, filepath.Join(dir, "lambe", "gone.lua"), string(rexManagedContent([]byte("return 1\n"), 1)))
 				mustWrite(t, filepath.Join(dir, "lambe", "mine.lua"), "return 2\n")
 			},
 			wantOut: []string{"remove  %DIR%/lambe/gone.lua"},
 			check: func(t *testing.T, dir string) {
+				t.Helper()
 				if _, err := os.Stat(filepath.Join(dir, "lambe", "gone.lua")); err == nil {
 					t.Error("stale module kept")
 				}
@@ -170,14 +177,18 @@ func TestSetupRex(t *testing.T) {
 		},
 		{
 			name: "init.lua that loads lambe.lua gets no snippet", args: []string{"--apply"},
-			prepare: func(t *testing.T, dir string) { mustWrite(t, filepath.Join(dir, "init.lua"), `dofile("x/lambe.lua")`) },
+			prepare: func(t *testing.T, dir string) {
+				t.Helper()
+				mustWrite(t, filepath.Join(dir, "init.lua"), `dofile("x/lambe.lua")`)
+			},
 			wantOut: []string{"already loads lambe.lua"}, denyOut: []string{"Add this"},
 		},
 		{
 			name: "uninstall dry run keeps the files", args: []string{"--uninstall"},
-			prepare: func(t *testing.T, dir string) { installRex(t, dir) },
+			prepare: func(t *testing.T, dir string) { t.Helper(); installRex(t, dir) },
 			wantOut: []string{"remove"},
 			check: func(t *testing.T, dir string) {
+				t.Helper()
 				if _, err := os.Stat(filepath.Join(dir, "lambe.lua")); err != nil {
 					t.Error("dry-run uninstall removed lambe.lua")
 				}
@@ -185,9 +196,10 @@ func TestSetupRex(t *testing.T) {
 		},
 		{
 			name: "uninstall removes managed files and keeps the settings", args: []string{"--uninstall", "--apply"},
-			prepare: func(t *testing.T, dir string) { installRex(t, dir) },
+			prepare: func(t *testing.T, dir string) { t.Helper(); installRex(t, dir) },
 			wantOut: []string{"remove", "your settings"},
 			check: func(t *testing.T, dir string) {
+				t.Helper()
 				for _, gone := range []string{"lambe.lua", "lambe"} {
 					if _, err := os.Stat(filepath.Join(dir, gone)); err == nil {
 						t.Errorf("%s survived uninstall", gone)
@@ -201,12 +213,14 @@ func TestSetupRex(t *testing.T) {
 		{
 			name: "uninstall refuses a modified file", args: []string{"--uninstall", "--apply"},
 			prepare: func(t *testing.T, dir string) {
+				t.Helper()
 				installRex(t, dir)
 				p := filepath.Join(dir, "lambe.lua")
 				mustWrite(t, p, readFile(t, p)+"-- mine\n")
 			},
 			wantErr: true, wantOut: []string{"refuse"},
 			check: func(t *testing.T, dir string) {
+				t.Helper()
 				if _, err := os.Stat(filepath.Join(dir, "lambe", "init.lua")); err != nil {
 					t.Error("partial uninstall happened")
 				}

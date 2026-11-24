@@ -350,6 +350,7 @@ func TestAcquireStateLockForeignPidHintDoesNotBlock(t *testing.T) {
 func TestRecover(t *testing.T) {
 	const actor = "lambe@test"
 	newCase := func(t *testing.T) (*fakeTracker, *proc.Child) {
+		t.Helper()
 		tr := newFakeTracker()
 		child := spawnTestChild(t, "issue-1")
 		return tr, child

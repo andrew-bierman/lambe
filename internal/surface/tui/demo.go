@@ -108,9 +108,9 @@ Build event 07: manifest written
 ✓ Gate passed: shell "make verify"
 … Waiting for the macOS smoke test
 `
-	quiet := func(id, title, phase string, attempt int, ago time.Duration, tail string) daemon.LiveRun {
+	quiet := func(id, title, phase string, ago time.Duration, tail string) daemon.LiveRun {
 		return daemon.LiveRun{
-			Progress:     symphony.Progress{IssueID: id, Title: title, Phase: phase, Attempt: attempt, Turn: 1},
+			Progress:     symphony.Progress{IssueID: id, Title: title, Phase: phase, Attempt: 1, Turn: 1},
 			LastOutputAt: now.Add(-ago),
 			Tail:         tail,
 		}
@@ -123,10 +123,10 @@ Build event 07: manifest written
 		}
 	}
 	snap.Runs = append(snap.Runs,
-		quiet("demo-49", "Bump the Go toolchain to 1.27", "running", 1, 3*time.Second, "▸ tool bash: mise use go@1.27\nToolchain updated. Running the full test suite."),
-		quiet("demo-50", "Add retry jitter to the tracker client", "running", 1, 14*time.Second, "▸ tool edit: internal/tracker/client.go\nJitter added. Writing a table-driven test."),
-		quiet("demo-51", "Regenerate the API fixtures", "gating", 1, 20*time.Second, "Fixtures regenerated. Waiting for the contract check."),
-		quiet("demo-52", "Profile the startup path", "gating", 1, 11*time.Minute, "Profile captured. Reading the flame graph."),
+		quiet("demo-49", "Bump the Go toolchain to 1.27", "running", 3*time.Second, "▸ tool bash: mise use go@1.27\nToolchain updated. Running the full test suite."),
+		quiet("demo-50", "Add retry jitter to the tracker client", "running", 14*time.Second, "▸ tool edit: internal/tracker/client.go\nJitter added. Writing a table-driven test."),
+		quiet("demo-51", "Regenerate the API fixtures", "gating", 20*time.Second, "Fixtures regenerated. Waiting for the contract check."),
+		quiet("demo-52", "Profile the startup path", "gating", 11*time.Minute, "Profile captured. Reading the flame graph."),
 		daemon.LiveRun{
 			Progress: symphony.Progress{IssueID: "demo-53", Title: "Fix the flaky queue ordering test", Phase: "retry", Attempt: 2, WakeAt: now.Add(2 * time.Minute), LastGate: "TestQueueOrdering failed 1 of 20 runs."},
 			Tail:     "Gate rejected the first attempt. Waiting for the next retry.",

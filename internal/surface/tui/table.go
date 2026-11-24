@@ -184,19 +184,19 @@ func (m *Model) renderRow(item runItem, c tableCols, selected bool, now time.Tim
 	if stalled {
 		age, ageStyle = ageText(stalledFor(item.run, true, now)), redStyle
 	}
-	titleCell := m.cell(title, c.title, false, st(titleStyle), fTitle)
+	titleCell := m.cell(title, c.title, st(titleStyle), fTitle)
 	if suffix := fmt.Sprintf(" ×%d", item.attempts); item.attempts > 1 && c.title > lipgloss.Width(suffix)+8 {
-		titleCell = m.cell(title, c.title-lipgloss.Width(suffix), false, st(titleStyle), fTitle) + st(dimStyle).Render(suffix)
+		titleCell = m.cell(title, c.title-lipgloss.Width(suffix), st(titleStyle), fTitle) + st(dimStyle).Render(suffix)
 	}
 	parts := []string{
 		marker + st(phaseStyle).Render(icon) + st(lipgloss.NewStyle()).Render(" "),
-		m.cell(item.run.IssueID, c.id, false, st(valueStyle.Bold(selected)), fID),
+		m.cell(item.run.IssueID, c.id, st(valueStyle.Bold(selected)), fID),
 		st(lipgloss.NewStyle()).Render(" "),
 		titleCell,
 	}
 	if c.showPhase {
 		parts = append(parts, st(lipgloss.NewStyle()).Render(" "),
-			m.cell(word, phaseColWidth, false, st(phaseStyle.Bold(false)), fPhase))
+			m.cell(word, phaseColWidth, st(phaseStyle.Bold(false)), fPhase))
 	}
 	parts = append(parts, st(lipgloss.NewStyle()).Render(" "), st(ageStyle).Render(pad(age, ageColWidth, true)))
 	row := strings.Join(parts, "")

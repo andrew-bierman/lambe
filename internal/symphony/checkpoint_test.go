@@ -316,7 +316,7 @@ func TestNativeThreadIsDurableBeforePrompt(t *testing.T) {
 		}
 		saved, err := f.loop.readCheckpoint(f.loop.checkpointPath(req.SessionID))
 		if err != nil || saved.Thread != "actual-backend-thread" || saved.ThreadHarness != "codex" || saved.Phase != checkpointRunning {
-			return TurnResult{}, fmt.Errorf("thread not durable before prompt: %+v, %v", saved, err)
+			return TurnResult{}, fmt.Errorf("thread not durable before prompt: %+v, %w", saved, err)
 		}
 		return TurnResult{Exit: TurnSuccess}, nil
 	})

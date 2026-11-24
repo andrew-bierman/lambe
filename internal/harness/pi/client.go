@@ -197,9 +197,11 @@ func (c *Client) readLoop() {
 			continue
 		}
 		if rec.IsResponse() && rec.ID != "" {
-			if ch, ok := c.pending.LoadAndDelete(rec.ID); ok {
-				ch.(chan Record) <- rec
-				continue
+			if v, ok := c.pending.LoadAndDelete(rec.ID); ok {
+				if ch, isChan := v.(chan Record); isChan {
+					ch <- rec
+					continue
+				}
 			}
 		}
 		c.events <- rec
