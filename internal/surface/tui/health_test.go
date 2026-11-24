@@ -63,7 +63,7 @@ func healthCases() []healthCase {
 
 func healthView(t *testing.T, now time.Time, c healthCase, w, h int) *Model {
 	t.Helper()
-	m := New("") // the "demo" context keeps goldens independent of the host name
+	m := at(New(""), now) // the "demo" context keeps goldens independent of the host name
 	m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	c.prepare(m, now)
 	return m
@@ -72,7 +72,7 @@ func healthView(t *testing.T, now time.Time, c healthCase, w, h int) *Model {
 func TestHealthStates(t *testing.T) {
 	now := frozenClock(t)
 	for _, c := range healthCases() {
-		for _, size := range [][2]int{{28, 12}, {40, 24}, {100, 30}} {
+		for _, size := range stateSizes {
 			w, h := size[0], size[1]
 			t.Run(fmt.Sprintf("%s-%dx%d", c.name, w, h), func(t *testing.T) {
 				m := healthView(t, now, c, w, h)
@@ -158,7 +158,7 @@ func TestStoppedDaemonRowsAreNotRunning(t *testing.T) {
 
 func TestHealthFollowsTimeWithoutNewSnapshots(t *testing.T) {
 	now := frozenClock(t)
-	m := New("/state/live.json")
+	m := at(New("/state/live.json"), now)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	snap := demoSnapshot(now)
 	snap.TickAt = now
@@ -168,7 +168,7 @@ func TestHealthFollowsTimeWithoutNewSnapshots(t *testing.T) {
 	}
 	bodyBefore := m.bodyH
 	later := now.Add(10 * time.Minute)
-	clock = func() time.Time { return later }
+	m.now = func() time.Time { return later }
 	m.Update(tickMsg(later))
 	if m.bannerH != 1 || m.health(later).kind != healthWedged {
 		t.Fatalf("a heartbeat 10m old must show the wedged banner, bannerH=%d kind=%v", m.bannerH, m.health(later).kind)
@@ -186,7 +186,7 @@ func TestHealthFollowsTimeWithoutNewSnapshots(t *testing.T) {
 
 func TestOlderDaemonWithoutHeartbeatIsNotFlagged(t *testing.T) {
 	now := frozenClock(t)
-	m := New("/state/live.json")
+	m := at(New("/state/live.json"), now)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	snap := demoSnapshot(now)
 	snap.UpdatedAt = now.Add(-time.Hour) // no TickAt: an idle older daemon
@@ -251,6 +251,25 @@ func healthViews(t *testing.T, now time.Time) map[string]string {
 		}
 	}
 	return views
+}
+
+// stateSizes are every width the connection states are exercised at.
+var stateSizes = [][2]int{{28, 12}, {40, 24}, {60, 24}, {100, 30}, {140, 40}}
+
+// TestGoldenHealthAllWidths adds the widths the colour goldens skip (28, 60,
+// 140) so each connection state has a plain-text snapshot at every width.
+func TestGoldenHealthAllWidths(t *testing.T) {
+	now := frozenClock(t)
+	for _, c := range healthCases()[1:] {
+		for _, size := range [][2]int{{28, 12}, {60, 24}, {140, 40}} {
+			name := fmt.Sprintf("health-%s-%dx%d", c.name, size[0], size[1])
+			t.Run(name, func(t *testing.T) {
+				m := healthView(t, now, c, size[0], size[1])
+				fits(t, m.View(), size[0], size[1])
+				checkGolden(t, name, plain(m.View()))
+			})
+		}
+	}
 }
 
 func TestGoldenHealth(t *testing.T) {

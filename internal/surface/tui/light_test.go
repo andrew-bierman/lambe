@@ -197,7 +197,14 @@ const (
 // minTextContrast is WCAG AA for normal text.
 const minTextContrast = 4.5
 
-// lightViews are the screens checked on a light background.
+// darkDefaultFg and darkDefaultBg are the terminal defaults assumed for a dark profile.
+const (
+	darkDefaultFg = "#ffffff"
+	darkDefaultBg = "#000000"
+)
+
+// lightViews are the screens checked on a light background (the same screens
+// are checked on a dark one: colors are resolved by forceBackground).
 func lightViews(t *testing.T) map[string]string {
 	t.Helper()
 	now := frozenClock(t)
@@ -233,12 +240,35 @@ func TestGoldenLightBackground(t *testing.T) {
 	}
 }
 
+// TestGoldenDarkBackground snapshots the colors on a dark terminal at the same
+// screens as the light golden.
+func TestGoldenDarkBackground(t *testing.T) {
+	forceBackground(t, true)
+	views := lightViews(t)
+	for _, name := range []string{"queue-40x24", "queue-100x30", "attention-40x24", "history-40x24", "history-100x30"} {
+		t.Run(name, func(t *testing.T) {
+			checkGolden(t, "dark-"+name, annotate(parseCells(views[name])))
+		})
+	}
+}
+
 // TestLightBackgroundTextIsReadable fails when any letter or digit is drawn
 // with less than WCAG AA contrast against its background on a light terminal.
 // Box-drawing rules and symbols are decoration and are not held to it.
 func TestLightBackgroundTextIsReadable(t *testing.T) {
 	forceBackground(t, false)
-	for name, view := range lightViews(t) {
+	checkReadable(t, lightViews(t), lightDefaultFg, lightDefaultBg)
+}
+
+// TestDarkBackgroundTextIsReadable is the same WCAG AA check on a dark terminal.
+func TestDarkBackgroundTextIsReadable(t *testing.T) {
+	forceBackground(t, true)
+	checkReadable(t, lightViews(t), darkDefaultFg, darkDefaultBg)
+}
+
+func checkReadable(t *testing.T, views map[string]string, defFg, defBg string) {
+	t.Helper()
+	for name, view := range views {
 		t.Run(name, func(t *testing.T) {
 			seen := map[string]bool{}
 			for y, line := range parseCells(view) {
@@ -248,10 +278,10 @@ func TestLightBackgroundTextIsReadable(t *testing.T) {
 					}
 					fg, bg := c.fg, c.bg
 					if fg == "" {
-						fg = lightDefaultFg
+						fg = defFg
 					}
 					if bg == "" {
-						bg = lightDefaultBg
+						bg = defBg
 					}
 					if strings.HasPrefix(fg, "ansi") || strings.HasPrefix(bg, "ansi") {
 						continue // palette colors depend on the terminal theme

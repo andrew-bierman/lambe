@@ -21,7 +21,7 @@ func (m *Model) refreshDetail(follow bool) {
 	if m.showHistory {
 		for _, g := range m.historyGroups() {
 			if g[0].IssueID == run.IssueID && len(g) > 1 {
-				content = attemptList(g, clock()) + "\n\n" + content
+				content = attemptList(g, m.clock()) + "\n\n" + content
 			}
 		}
 	}
@@ -81,22 +81,22 @@ func detailBody(run daemon.LiveRun, width, pins int) string {
 	var left []string
 	if pins < 2 {
 		left = []string{
-			row("Issue:", run.IssueID),
+			row("Issue:", oneLine(run.IssueID)),
 			row("Phase:", phaseLabel(run.Phase)),
 			row("Attempt:", fmt.Sprintf("%d", run.Attempt)),
 			row("Turn:", fmt.Sprintf("%d", run.Turn)),
 		}
 		if run.Workflow != "" {
-			left = append(left, row("Workflow:", run.Workflow))
+			left = append(left, row("Workflow:", oneLine(run.Workflow)))
 		}
 	}
 	if run.Thread != "" && pins < 2 {
-		left = append(left, row("Thread:", run.Thread))
+		left = append(left, row("Thread:", oneLine(run.Thread)))
 	}
 
 	right := []string{}
 	if run.Workspace != "" {
-		right = append(right, row("Workspace:", run.Workspace))
+		right = append(right, row("Workspace:", oneLine(run.Workspace)))
 	}
 	if !run.WakeAt.IsZero() {
 		right = append(right, row("Wake at:", run.WakeAt.Format(time.RFC3339)))

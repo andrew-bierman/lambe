@@ -145,7 +145,7 @@ func (h health) label(narrow bool) string {
 
 // bannerWanted reports whether the dashboard has room for, and needs, a banner.
 func (m *Model) bannerWanted() bool {
-	return m.height >= 8 && !m.health(clock()).healthy()
+	return m.height >= 8 && !m.health(m.clock()).healthy()
 }
 
 // syncHealth re-lays-out when the banner appears or disappears; the snapshot
@@ -161,7 +161,7 @@ func (m *Model) syncHealth() {
 // renderBanner is the one-line explanation under the header for an unhealthy
 // state. It always opens with the glyph, the word and the last-update age.
 func (m *Model) renderBanner() string {
-	h := m.health(clock())
+	h := m.health(m.clock())
 	ago := func(prefix string) string {
 		if !h.hasAge {
 			return ""
@@ -230,7 +230,7 @@ func nonEmpty(parts []string) []string {
 // of a dead daemon are drawn dim and parenthesised: "(running)".
 func presentPhase(phase string, live, stalled bool) (string, lipgloss.Style, string) {
 	icon, style := phasePresentation(phase)
-	word := phaseWord(phase, stalled)
+	word := oneLine(phaseWord(phase, stalled))
 	switch {
 	case stalled:
 		icon, style = "⚠", redStyle.Bold(true)

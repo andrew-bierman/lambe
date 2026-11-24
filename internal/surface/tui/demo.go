@@ -65,8 +65,14 @@ func (m *Model) nextDemoID() string {
 	return fmt.Sprintf("demo-%d", next)
 }
 
+// at pins m's clock to now.
+func at(m *Model, now time.Time) *Model {
+	m.now = func() time.Time { return now }
+	return m
+}
+
 func demoModel(now time.Time) *Model {
-	model := New("")
+	model := at(New(""), now)
 	model.Update(snapshotMsg{snapshot: demoSnapshot(now), alive: true})
 	model.Update(readinessMsg{rows: []tracker.ReadinessRow{
 		{ID: "demo-47", Title: "Document the recovery workflow", Reason: "Dependencies resolved"},

@@ -11,12 +11,10 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// fakeClock replaces the package clock and returns a function that advances it.
+// fakeClock returns a clock a test installs on its model (m.now) and a function that advances it.
 func fakeClock(t *testing.T) (now func() time.Time, advance func(time.Duration)) {
 	t.Helper()
 	cur := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
-	clock = func() time.Time { return cur }
-	t.Cleanup(func() { clock = time.Now })
 	return func() time.Time { return cur }, func(d time.Duration) { cur = cur.Add(d) }
 }
 
@@ -28,6 +26,7 @@ func firstAndLastLine(view string) (string, string) {
 func TestToastLivesInFooterAndKeepsHeaderCounts(t *testing.T) {
 	now, _ := fakeClock(t)
 	m := demoRichModel(now())
+	m.now = now
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	before, _ := firstAndLastLine(m.View())
 	m.submitTask("Write the docs", nil)
@@ -46,6 +45,7 @@ func TestToastLivesInFooterAndKeepsHeaderCounts(t *testing.T) {
 func TestToastStallWarningSurvivesErrors(t *testing.T) {
 	now, advance := fakeClock(t)
 	m := demoRichModel(now())
+	m.now = now
 	advance(10 * time.Minute) // every running row is now silent
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m.Update(commandResult{err: errors.New("daemon\nnot reachable")})
@@ -61,6 +61,7 @@ func TestToastStallWarningSurvivesErrors(t *testing.T) {
 func TestToastExpiresAfterTTL(t *testing.T) {
 	now, advance := fakeClock(t)
 	m := demoRichModel(now())
+	m.now = now
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m.showToast("Copied demo-42", false, false)
 	seq := m.toast.seq
@@ -97,6 +98,7 @@ func TestToastExpiresAfterTTL(t *testing.T) {
 func TestPendingToastDoesNotExpire(t *testing.T) {
 	now, advance := fakeClock(t)
 	m := demoRichModel(now())
+	m.now = now
 	if cmd := m.showToast("Queuing…", false, true); cmd != nil {
 		t.Fatal("pending toast scheduled an expiry")
 	}
@@ -109,6 +111,7 @@ func TestPendingToastDoesNotExpire(t *testing.T) {
 func TestQueuedDemoIDsNeverCollide(t *testing.T) {
 	now, _ := fakeClock(t)
 	m := demoRichModel(now())
+	m.now = now
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	seen := map[string]bool{}
 	for _, r := range append(append([]string{}, ids(m.snapshot.Runs)...), ids(m.snapshot.History)...) {
@@ -127,12 +130,13 @@ func TestQueuedDemoIDsNeverCollide(t *testing.T) {
 func TestDemoDoesNotDecayIntoStalls(t *testing.T) {
 	now, advance := fakeClock(t)
 	m := demoRichModel(now())
+	m.now = now
 	m.demo, m.demoAt = true, now()
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	stalled := func() int {
 		n := 0
 		for _, r := range m.snapshot.Runs {
-			if stalledFor(r, true, clock()) > 0 {
+			if stalledFor(r, true, now()) > 0 {
 				n++
 			}
 		}
@@ -141,12 +145,12 @@ func TestDemoDoesNotDecayIntoStalls(t *testing.T) {
 	start := stalled()
 	for range 600 { // ten minutes of one-second ticks
 		advance(time.Second)
-		m.Update(demoTickMsg(clock()))
+		m.Update(demoTickMsg(now()))
 	}
 	if got := stalled(); got != start {
 		t.Fatalf("stalled rows drifted from %d to %d", start, got)
 	}
-	if !m.snapshot.UpdatedAt.Equal(clock()) {
+	if !m.snapshot.UpdatedAt.Equal(now()) {
 		t.Fatal("demo clock did not advance")
 	}
 }

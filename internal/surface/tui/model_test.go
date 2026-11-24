@@ -26,6 +26,10 @@ func testSnapshot() daemon.LiveSnapshot {
 	}
 }
 
+// detailVisible reports whether the preview pane is on screen: beside or
+// below the list, or drilled into on a narrow window.
+func detailVisible(m *Model) bool { return m.split || m.stacked || m.focus == focusDetail }
+
 func newSized(t *testing.T) *Model {
 	t.Helper()
 	m := New("/tmp/live.json")
@@ -202,8 +206,8 @@ func TestResizeKeepsFollowingOutput(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
 	m.Update(tea.WindowSizeMsg{Width: 34, Height: 14})
-	if view := m.View(); !strings.Contains(view, "latest output") {
-		t.Fatalf("resize lost the end of the output:\n%s", view)
+	if !m.detail.AtBottom() || !strings.Contains(m.detail.View(), "latest output") {
+		t.Fatalf("resize lost the end of the output:\n%s", m.detail.View())
 	}
 }
 
@@ -235,7 +239,7 @@ func TestQuitKey(t *testing.T) {
 func TestViewContainsExpectedContent(t *testing.T) {
 	m := withSnapshot(t, newSized(t))
 	view := m.View()
-	for _, want := range []string{"lambe", "running", "ac-1", "first issue", "quit"} {
+	for _, want := range []string{"running", "ac-1", "first issue"} { // run data, not chrome text
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -245,28 +249,26 @@ func TestViewContainsExpectedContent(t *testing.T) {
 func TestNarrowViewSwitchesPanesAndShowsFilter(t *testing.T) {
 	m := withSnapshot(t, newSized(t))
 	m.Update(tea.WindowSizeMsg{Width: 36, Height: 14})
-	if view := m.View(); !strings.Contains(view, "enter open") || strings.Contains(view, "Agent output") {
-		t.Fatalf("expected run picker and details shortcut:\n%s", view)
+	if detailVisible(m) || m.focus != focusList {
+		t.Fatalf("narrow window should show only the run picker: focus=%v", m.focus)
 	}
 
 	m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	if view := m.View(); !strings.Contains(view, "second issue") ||
-		!strings.Contains(view, "Agent output") || !strings.Contains(view, "esc back") ||
-		strings.Contains(view, "first issue") {
-		t.Fatalf("expected details for selected run:\n%s", view)
+	if !detailVisible(m) || m.selectedID != "ac-2" || strings.Contains(m.View(), "first issue") {
+		t.Fatalf("expected details for the selected run, focus=%v selected=%q", m.focus, m.selectedID)
 	}
 
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	if view := m.View(); !strings.Contains(view, "/ a") || strings.Contains(view, "Agent output") {
-		t.Fatalf("expected visible filter input:\n%s", view)
+	if !m.list.SettingFilter() || m.list.FilterValue() != "a" || detailVisible(m) {
+		t.Fatalf("filter input must take the narrow window: filtering=%v focus=%v", m.list.SettingFilter(), m.focus)
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	if view := m.View(); !strings.Contains(view, "│") || !strings.Contains(view, "Agent output") {
-		t.Fatalf("expected split layout after resizing:\n%s", view)
+	if !m.split || !detailVisible(m) {
+		t.Fatal("expected split layout after resizing")
 	}
 }
 
@@ -275,13 +277,12 @@ func TestNarrowEnterAndEscapeSwitchPanes(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 36, Height: 14})
 	m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if view := m.View(); !strings.Contains(view, "esc back") ||
-		!strings.Contains(view, "second issue") || !strings.Contains(view, "Agent output") {
-		t.Fatalf("expected selected run details after enter:\n%s", view)
+	if !detailVisible(m) || m.selectedID != "ac-2" {
+		t.Fatalf("expected selected run details after enter: focus=%v selected=%q", m.focus, m.selectedID)
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if view := m.View(); !strings.Contains(view, "enter open") || strings.Contains(view, "Agent output") {
-		t.Fatalf("expected run picker after escape:\n%s", view)
+	if detailVisible(m) {
+		t.Fatal("expected run picker after escape")
 	}
 }
 
@@ -308,8 +309,8 @@ func TestResizeRevealsFilterWhileDetailHasFocus(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	m.Update(tea.WindowSizeMsg{Width: 36, Height: 14})
 
-	if view := m.View(); !strings.Contains(view, "/ ") || strings.Contains(view, "Agent output") {
-		t.Fatalf("expected filter to stay visible after resizing:\n%s", view)
+	if !m.list.SettingFilter() || detailVisible(m) {
+		t.Fatalf("expected filter to stay visible after resizing: filtering=%v focus=%v", m.list.SettingFilter(), m.focus)
 	}
 }
 
@@ -469,12 +470,8 @@ func TestEmptySnapshotShowsPlaceholder(t *testing.T) {
 	if got := len(m.list.Items()); got != 0 {
 		t.Fatalf("items = %d, want 0", got)
 	}
-	view := m.View()
-	if !strings.Contains(view, "No active run") {
-		t.Fatalf("empty state missing placeholder:\n%s", view)
-	}
-	if !strings.Contains(view, "stopped") {
-		t.Fatalf("header should show stopped state:\n%s", view)
+	if _, ok := m.selectedRun(); ok || m.health(time.Now()).kind != healthStopped {
+		t.Fatalf("empty stopped daemon: selected run present or health = %v", m.health(time.Now()).kind)
 	}
 }
 
@@ -534,8 +531,8 @@ func TestHistorySelectionSurvivesNewerAttempts(t *testing.T) {
 		{Progress: symphony.Progress{IssueID: "ac-1", Attempt: 3}, UpdatedAt: now.Add(time.Minute), Tail: "third output"},
 	}, snapshot.History...)
 	m.Update(snapshotMsg{snapshot: snapshot, alive: true})
-	if run, ok := m.selectedRun(); !ok || run.IssueID != "ac-1" || run.Attempt != 3 || !strings.Contains(m.View(), "3 attempts") {
-		t.Fatalf("history should follow the issue to its newest attempt: %+v\n%s", run, m.View())
+	if run, ok := m.selectedRun(); !ok || run.IssueID != "ac-1" || run.Attempt != 3 || m.list.Items()[0].(runItem).attempts != 3 {
+		t.Fatalf("history should follow the issue to its newest attempt: %+v", run)
 	}
 }
 

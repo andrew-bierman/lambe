@@ -131,7 +131,7 @@ func runMeta(run daemon.LiveRun) string {
 	meta := fmt.Sprintf("attempt %d · turn %d", run.Attempt, run.Turn)
 	for _, extra := range []string{run.Workflow, run.Thread} {
 		if extra != "" {
-			meta += " · " + extra
+			meta += " · " + oneLine(extra)
 		}
 	}
 	return meta
@@ -144,11 +144,11 @@ func (m *Model) previewBar(width int) string {
 	}
 	label := " Preview"
 	if run, ok := m.selectedRun(); ok {
-		now := clock()
+		now := m.clock()
 		stalled := stalledFor(run, m.alive, now)
 		icon, phaseStyle, word := presentPhase(run.Phase, m.alive, stalled > 0)
 		bg := lipgloss.NewStyle().Background(colBarBg)
-		label = " " + style.Render(run.IssueID) + bg.Render("  ") +
+		label = " " + style.Render(oneLine(run.IssueID)) + bg.Render("  ") +
 			phaseStyle.Background(colBarBg).Render(icon+" "+word)
 		timing := ""
 		switch {

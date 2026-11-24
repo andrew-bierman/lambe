@@ -1,0 +1,24 @@
+ lambe   ● running  demo  4 active · 1 waiting
+ 1 Queue 7 │ 2 Attention 3 │ 3 History 3
+━━━━━━━━━━━─────────────────────────────────────────────────
+   ID         TITLE                       PHASE          AGE
+▌▶ cjk-001    日本語の長いタイトルで幅を… running         5s
+ ▶ emoji-002  👩👩👧👦 family 🚀🔥 relea… running        20s
+ ↻ combining… Café résumé naïve à́̂̃̄ zalgo   retry           2m
+ ✘ rtl-004    שלום עולם — בדיקת כיוון, م… escalated       3m
+ ▶ long-titl… 01234567890123456789012345… running         9s
+ ✘ 012345678… long id                     failed          4m
+ ▶ long-wf-0… long workflow               running         1s
+
+
+
+
+ cjk-001  ▶ running  output 5s ago
+ ── Agent output ──────────────────────────────────────────
+ 日本語の長いタイトルで幅を確認する漢字仮名交じり文
+ 日本語の出力 🚀 עברית مرحبا
+ 0123456789012345678901234567890123456789012345678901234567
+ 8901234567890123456789012345678901234567890123456789012345
+ 6789012345678901234567890123456789012345678901234567890123
+ 45678901234567890123456789
+ enter open  : cmd  ? help  q quit  1-3 views           1/7

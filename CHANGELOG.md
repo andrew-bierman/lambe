@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- TUI: windows narrower than 20 columns, ids or workflows containing line breaks, and a very narrow filter prompt or footer no longer overflow the window (found by the new `FuzzViewFits`), and the faint text on the selected row in dark terminals is lighter so it meets WCAG AA contrast.
 - `lambe tui` no longer shows a wedged or stopped daemon as healthy. The header always carries a health glyph and word (`● running`, `▲ stale 2m`, `▲ wedged 30m`, `■ stopped 4m`, `○ no data`, `✖ unreadable`) at every width, an unhealthy state adds a banner with the last-update age, rows of a stopped daemon read `◌ (running)` instead of `▶ running`, a missing or corrupt snapshot says so instead of a raw error, runs with recent agent activity are no longer flagged as stalled, and `r` re-reads the snapshot now.
 - TUI table: the `×N` history suffix no longer shifts the AGE column, archived retry/interrupted history rows show their age instead of a blank or countdown, and the PHASE column is wide enough for `interrupted`.
 - Docs: removed the stale duplicated "Reference" half of `docs/OPERATIONS.md`, the configuration tables that named keys that do not exist (`tick`, `sync_interval` / `LAMBE_SYNC_INTERVAL`), and the broken `#os-level-restart-production` anchor. The README mascot image is 124 KB instead of 795 KB.

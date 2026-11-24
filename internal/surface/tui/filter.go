@@ -3,6 +3,7 @@ package tui
 import (
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
@@ -31,7 +32,11 @@ var filterFields = map[string]int{"id": fID, "title": fTitle, "phase": fPhase, "
 
 // FilterValue is the searchable text of the row: the same words the table shows.
 func (i runItem) FilterValue() string {
-	_, _, phase := presentPhase(i.run.Phase, i.live, stalledFor(i.run, i.live, clock()) > 0)
+	now := time.Now
+	if i.now != nil {
+		now = i.now
+	}
+	_, _, phase := presentPhase(i.run.Phase, i.live, stalledFor(i.run, i.live, now()) > 0)
 	parts := [fieldCount]string{
 		fID:       i.run.IssueID,
 		fTitle:    strings.Join(strings.Fields(cleanTaskText(i.run.Title)), " "),
@@ -122,6 +127,7 @@ func filterRuns(query string, targets []string) []list.Rank {
 // cell truncates text to width, pads it and renders it with base, marking the
 // substrings the active filter terms matched.
 func (m *Model) cell(text string, width int, base lipgloss.Style, field int) string {
+	text = oneLine(text)
 	text = ansi.Truncate(text, width, "…")
 	gap := strings.Repeat(" ", max(0, width-lipgloss.Width(text)))
 	hl := base.Underline(true).Bold(true).Foreground(accentColor)

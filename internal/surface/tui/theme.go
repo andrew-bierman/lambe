@@ -62,6 +62,7 @@ var (
 // phaseLabel renders a phase with an icon and color.
 func phaseLabel(phase string) string {
 	icon, style := phasePresentation(phase)
+	phase = oneLine(phase)
 	if phase == "" {
 		phase = "unknown"
 	}

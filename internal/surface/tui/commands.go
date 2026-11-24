@@ -252,7 +252,7 @@ func (m *Model) submitTask(title string, queue func(string) (string, error)) tea
 		id := m.nextDemoID()
 		m.snapshot.Runs = append(m.snapshot.Runs, daemon.LiveRun{
 			Progress:  symphony.Progress{IssueID: id, Title: title, Phase: "queued"},
-			UpdatedAt: clock(),
+			UpdatedAt: m.clock(),
 		})
 		m.setHistory(false)
 		m.setRuns(m.snapshot.Runs)

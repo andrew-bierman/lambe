@@ -32,7 +32,7 @@ func run(ctx context.Context, model *Model) error {
 		dark, ok := detectBackground(os.Stdin, os.Stdout, os.Getenv("TERM"), oscBudget)
 		lipgloss.SetHasDarkBackground(dark || !ok) // silent terminal: dark default
 	}
-	p := tea.NewProgram(model, tea.WithContext(ctx), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(model, programOptions(ctx)...)
 	if _, err := p.Run(); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil
@@ -40,4 +40,10 @@ func run(ctx context.Context, model *Model) error {
 		return err
 	}
 	return nil
+}
+
+// programOptions are the options the dashboard's program always runs with;
+// tests append their own input and output.
+func programOptions(ctx context.Context) []tea.ProgramOption {
+	return []tea.ProgramOption{tea.WithContext(ctx), tea.WithAltScreen(), tea.WithMouseCellMotion()}
 }
