@@ -164,7 +164,7 @@ func TestControlAdapterListAndTail(t *testing.T) {
 	}
 }
 
-// fakeRexClient records session creations and captures nothing.
+// fakeRexClient records session creations and lists none.
 type fakeRexClient struct {
 	mu       sync.Mutex
 	created  []string
@@ -183,7 +183,6 @@ func (f *fakeRexClient) CreateSession(_ context.Context, req rex.SessionRequest)
 }
 
 func (f *fakeRexClient) ListSessions(context.Context) ([]rex.Session, error) { return nil, nil }
-func (f *fakeRexClient) Capture(_ context.Context, _ string) (string, error) { return "", nil }
 
 // createdNames returns a copy of the created session names.
 func (f *fakeRexClient) createdNames() []string {
@@ -206,8 +205,8 @@ func TestRunRegistryFeedsRexSurface(t *testing.T) {
 	for len(client.createdNames()) == 0 && time.Now().Before(deadline) {
 		time.Sleep(2 * time.Millisecond)
 	}
-	if got := client.createdNames(); len(got) != 1 || got[0] != "issues" {
-		t.Errorf("rex sessions = %v, want one for agent issues", got)
+	if got := client.createdNames(); len(got) != 1 || got[0] != "lambe-issues" {
+		t.Errorf("rex sessions = %v, want one, lambe-issues", got)
 	}
 	deadline = time.Now().Add(2 * time.Second)
 	for !strings.Contains(out.String(), "\x1b]7501;") && time.Now().Before(deadline) {
