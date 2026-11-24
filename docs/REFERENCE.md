@@ -129,6 +129,22 @@ lambe logs -json                # shared read-only snapshot for scripts and othe
 
 Pass the same `-config FILE` to these commands when using a custom configuration.
 
+### Shell completions
+
+`lambe completion bash|zsh|fish` prints a completion script for commands,
+subcommands and flags, generated from the same help text as `lambe help`.
+Homebrew and the deb/rpm/apk packages install it for you; the release archives
+carry the scripts under `completions/`. To install by hand:
+
+```sh
+# bash (add to ~/.bashrc)
+source <(lambe completion bash)
+# zsh (any directory on your $fpath, then restart the shell)
+lambe completion zsh > "${fpath[1]}/_lambe"
+# fish
+lambe completion fish > ~/.config/fish/completions/lambe.fish
+```
+
 ### Help and exit codes
 
 `lambe help`, `lambe help COMMAND [SUBCOMMAND]`, `lambe COMMAND -h` and

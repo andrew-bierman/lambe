@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `lambe completion bash|zsh|fish` prints shell completions generated from the help text. The Homebrew formula installs them, the deb/rpm/apk packages ship them under the standard vendor completion directories, and the release archives include a `completions/` directory.
+
 ### Changed
 
 - Rex palette actions now raise failures with the reason (lambe not found, no runs yet, a picker that could not show) instead of only logging them, and say once that the pickers need Rex preview.21 (API revision 17) instead of silently opening the dashboard on older servers. `lambe setup rex` now installs a small managed `lambe.lua` shim plus a `lambe/` module directory, and creates `lambe.config.lua` (with the absolute `lambe` path) for your settings so editing them no longer makes updates refuse. Re-run `lambe setup rex --apply` to migrate an older single-file install (an unedited one updates cleanly; if you edited its `override` variables, move them into `lambe.config.lua` and pass `--force`).

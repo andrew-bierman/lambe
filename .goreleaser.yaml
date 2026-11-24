@@ -2,6 +2,12 @@ version: 2
 
 project_name: lambe
 
+# Shell completions are generated from the freshly built source so they
+# always match the binary being released.
+before:
+  hooks:
+    - sh -c 'rm -rf completions && mkdir completions && for s in bash zsh fish; do go run ./cmd/lambe completion $s > completions/lambe.$s; done'
+
 builds:
   - id: lambe
     main: ./cmd/lambe
@@ -24,6 +30,11 @@ archives:
   - id: lambe
     ids: [lambe]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE*
+      - README*
+      - CHANGELOG*
+      - completions/*
 
 checksum:
   name_template: checksums.txt
@@ -64,6 +75,18 @@ nfpms:
         dst: /usr/share/doc/lambe/examples/lambe.service
       - src: LICENSE
         dst: /usr/share/doc/lambe/LICENSE
+      - src: completions/lambe.bash
+        dst: /usr/share/bash-completion/completions/lambe
+        file_info:
+          mode: 0644
+      - src: completions/lambe.zsh
+        dst: /usr/share/zsh/vendor-completions/_lambe
+        file_info:
+          mode: 0644
+      - src: completions/lambe.fish
+        dst: /usr/share/fish/vendor_completions.d/lambe.fish
+        file_info:
+          mode: 0644
 
 # Needs the HOMEBREW_TAP_DEPLOY_KEY secret (write deploy key on the tap).
 brews:
@@ -86,6 +109,10 @@ brews:
     commit_msg_template: "🔖 lambe {{ .Tag }}"
     dependencies:
       - beads
+    extra_install: |
+      bash_completion.install "completions/lambe.bash" => "lambe"
+      zsh_completion.install "completions/lambe.zsh" => "_lambe"
+      fish_completion.install "completions/lambe.fish"
     test: |
       assert_match version.to_s, shell_output("#{bin}/lambe version")
     caveats: |

@@ -15,3 +15,4 @@ apps/dashboard/*.xcodeproj/xcuserdata/
 .DS_Store
 .worktrees/
 coverage.out
+completions/
