@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.uber.org/goleak"
 )
 
 // Fake-agent re-exec plumbing: the test binary re-execs as a scripted Pi
@@ -62,7 +64,10 @@ func TestMain(m *testing.M) {
 		runFake(script)
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	// Driver.kill is fire-and-forget: it runs the group kill ladder on its own
+	// goroutine, bounded by TerminateGrace and DefaultCallTimeout, so a test
+	// that ends right after a watchdog kill can still see it winding down.
+	goleak.VerifyTestMain(m, goleak.IgnoreAnyFunction("github.com/andrew-bierman/lambe/internal/harness/pi.(*Driver).kill"))
 }
 
 // blockForever sleeps forever; a plain select{} would trip the runtime

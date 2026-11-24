@@ -3,6 +3,7 @@ package acp_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,11 +15,22 @@ import (
 
 	"github.com/andrew-bierman/lambe/internal/harness"
 	"github.com/andrew-bierman/lambe/internal/harness/acp"
+	"go.uber.org/goleak"
 )
 
 // fakeagentBin is built once per test run by TestMain; every test drives the
 // real protocol through it.
 var fakeagentBin string
+
+// leakIgnores lists goroutines that are bounded timers, not leaks:
+//   - agentProc.waitOwner sleeps one proc.DefaultWaitDelay after the reap before
+//     closing the stdout read end (it never blocks in Cmd.Wait here; that frame
+//     would not match this top function);
+//   - proc.TerminateGroup waits out TerminateGrace on a fire-and-forget kill.
+var leakIgnores = []goleak.Option{
+	goleak.IgnoreTopFunction("github.com/andrew-bierman/lambe/internal/harness/acp.(*agentProc).waitOwner"),
+	goleak.IgnoreTopFunction("github.com/andrew-bierman/lambe/internal/proc.TerminateGroup"),
+}
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "lambe-acp-fakeagent")
@@ -33,6 +45,14 @@ func TestMain(m *testing.M) {
 	fakeagentBin = bin
 	code := m.Run()
 	_ = os.RemoveAll(dir)
+	// Not goleak.VerifyTestMain: it exits the process, which would skip the
+	// temp-dir cleanup above.
+	if code == 0 {
+		if err := goleak.Find(leakIgnores...); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			code = 1
+		}
+	}
 	os.Exit(code)
 }
 
