@@ -125,6 +125,7 @@ lambe tui                       # supervisor phase, attempts, tools, assistant o
 lambe logs -follow              # follow recent agent output
 lambe logs -issue ISSUE_ID      # inspect one issue
 lambe logs -json                # shared read-only snapshot for scripts and other clients
+lambe logs -json -brief         # the same without agent output, plus per-run AgeSec, Attention {Reason, AgeSec} and LambeVersion
 ```
 
 Pass the same `-config FILE` to these commands when using a custom configuration.

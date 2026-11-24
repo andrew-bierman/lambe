@@ -144,3 +144,16 @@ func TestLiveSnapshotExposesLoopTickAndAgentActivity(t *testing.T) {
 		t.Errorf("run has no LastActivityAt after a non-text event: %+v", snap.Runs)
 	}
 }
+
+func TestNeedsAttention(t *testing.T) {
+	for phase, want := range map[string]string{
+		"retry": "retrying", "deferred": "waiting to retry", "interrupted": "interrupted",
+		"stopped: gate escalation": "gate escalation", "stopped: gate red": "gate failed",
+		"running": "", "gating": "", "queued": "", "stopped: gate green": "", "": "",
+	} {
+		reason, ok := NeedsAttention(LiveRun{Progress: symphony.Progress{Phase: phase}})
+		if reason != want || ok != (want != "") {
+			t.Errorf("%q: got %q, %v want %q", phase, reason, ok, want)
+		}
+	}
+}

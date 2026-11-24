@@ -17,6 +17,7 @@ import (
 	"github.com/andrew-bierman/lambe/internal/config"
 	"github.com/andrew-bierman/lambe/internal/daemon"
 	"github.com/andrew-bierman/lambe/internal/surface/tui"
+	"github.com/andrew-bierman/lambe/internal/symphony"
 	"github.com/andrew-bierman/lambe/internal/tracker"
 )
 
@@ -37,26 +38,30 @@ func runLive(args []string, useTUI bool, _ io.Reader, out io.Writer) error {
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	configFile := fs.String("config", "", "config file")
 	var issue string
-	var demo, follow, asJSON bool
+	var demo, follow, asJSON, brief bool
 	if useTUI {
 		fs.BoolVar(&demo, "demo", false, "open the dashboard with sample runs")
 	} else {
 		fs.StringVar(&issue, "issue", "", "show one issue")
 		fs.BoolVar(&follow, "follow", false, "follow live output")
 		fs.BoolVar(&asJSON, "json", false, "print the shared live snapshot as JSON")
+		fs.BoolVar(&brief, "brief", false, "with --json: drop agent output, add attention reasons and ages")
 	}
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("unexpected arguments: %v", fs.Args())
+	if err := noArgs(fs); err != nil {
+		return err
+	}
+	if brief && !asJSON {
+		return usageError{errors.New("--brief needs --json")}
 	}
 	if demo {
 		if *configFile != "" {
-			return errors.New("-demo requires lambe tui without -config")
+			return usageError{errors.New("-demo requires lambe tui without -config")}
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
@@ -130,7 +135,7 @@ func runLive(args []string, useTUI bool, _ io.Reader, out io.Writer) error {
 		return tui.Run(ctx, path, trackerPath, queue, readiness, workflows...)
 	}
 
-	return runLogsFollow(path, issue, follow, asJSON, out)
+	return runLogsFollow(path, issue, follow, asJSON, brief, out)
 }
 
 // liveJSON is the `lambe logs -json` document: the shared snapshot plus the
@@ -145,7 +150,69 @@ type liveJSON struct {
 	Machine string
 }
 
-func runLogsFollow(path, issue string, follow, asJSON bool, out io.Writer) error {
+// briefRun is one run of `lambe logs --json --brief`: the fields of the full
+// snapshot's run without the heavy agent output (Tail, up to 4 KiB each), plus
+// the ages and attention reason a picker would otherwise have to derive.
+// Field names match the full output, so a reader of one reads the other.
+type briefRun struct {
+	symphony.Progress
+	UpdatedAt      time.Time
+	TailBytes      int64
+	LastOutputAt   time.Time
+	LastActivityAt time.Time `json:",omitempty"`
+	// AgeSec is seconds since the run last changed or produced anything.
+	AgeSec int64
+	// Attention is set when daemon.NeedsAttention flags the run.
+	Attention *daemon.Attention `json:",omitempty"`
+}
+
+// liveBrief is the `lambe logs --json --brief` document. Additive over
+// liveJSON: LambeVersion names the binary that wrote it.
+type liveBrief struct {
+	PID          int
+	Identity     string
+	UpdatedAt    time.Time
+	TickAt       time.Time `json:",omitempty"`
+	Runs         []briefRun
+	History      []briefRun `json:",omitempty"`
+	Alive        bool
+	Machine      string
+	LambeVersion string
+}
+
+func newLiveBrief(s daemon.LiveSnapshot, alive bool, machine, version string, now time.Time) liveBrief {
+	sec := func(t time.Time) int64 {
+		if t.IsZero() {
+			return 0
+		}
+		return max(0, int64(now.Sub(t)/time.Second))
+	}
+	convert := func(runs []daemon.LiveRun) []briefRun {
+		var out []briefRun
+		for _, run := range runs {
+			b := briefRun{
+				Progress: run.Progress, UpdatedAt: run.UpdatedAt, TailBytes: run.TailBytes,
+				LastOutputAt: run.LastOutputAt, LastActivityAt: run.LastActivityAt,
+			}
+			freshest := max(run.UpdatedAt.UnixNano(), run.LastOutputAt.UnixNano(), run.LastActivityAt.UnixNano())
+			if freshest > 0 {
+				b.AgeSec = sec(time.Unix(0, freshest))
+			}
+			if reason, ok := daemon.NeedsAttention(run); ok {
+				b.Attention = &daemon.Attention{Reason: reason, AgeSec: sec(run.UpdatedAt)}
+			}
+			out = append(out, b)
+		}
+		return out
+	}
+	return liveBrief{
+		PID: s.PID, Identity: s.Identity, UpdatedAt: s.UpdatedAt, TickAt: s.TickAt,
+		Runs: convert(s.Runs), History: convert(s.History),
+		Alive: alive, Machine: machine, LambeVersion: version,
+	}
+}
+
+func runLogsFollow(path, issue string, follow, asJSON, brief bool, out io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -155,6 +222,9 @@ func runLogsFollow(path, issue string, follow, asJSON bool, out io.Writer) error
 		snapshot, alive, err := daemon.ReadLive(path)
 		if err != nil {
 			return fmt.Errorf("read live output: %w; start `lambe run` with the same configuration first", err)
+		}
+		if brief {
+			return json.NewEncoder(out).Encode(newLiveBrief(snapshot, alive, daemon.DefaultMachine(), buildVersion().Version, time.Now()))
 		}
 		if asJSON {
 			return json.NewEncoder(out).Encode(liveJSON{LiveSnapshot: snapshot, Alive: alive, Machine: daemon.DefaultMachine()})

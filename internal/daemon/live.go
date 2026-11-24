@@ -44,6 +44,33 @@ type LiveSnapshot struct {
 	History []LiveRun `json:",omitempty"`
 }
 
+// Attention says why a run needs a human, for viewers that cannot apply
+// NeedsAttention themselves (`lambe logs --json --brief`).
+type Attention struct {
+	Reason string
+	// AgeSec is how long ago the run last changed (UpdatedAt).
+	AgeSec int64
+}
+
+// NeedsAttention is the one rule for "a human has to act on this run": it
+// backs the dashboard's Attention view and the Attention field of the brief
+// JSON, so the two cannot disagree. The reason is plain language.
+func NeedsAttention(run LiveRun) (reason string, ok bool) {
+	switch run.Phase {
+	case "retry":
+		return "retrying", true
+	case "deferred":
+		return "waiting to retry", true
+	case "interrupted":
+		return "interrupted", true
+	case "stopped: gate escalation":
+		return "gate escalation", true
+	case "stopped: gate red":
+		return "gate failed", true
+	}
+	return "", false
+}
+
 // LivePath returns the private projection path for one configured daemon.
 func LivePath(stateDir string, cfg *config.Config) string {
 	return filepath.Join(stateDir, "live", strings.TrimSuffix(InstanceLockName(cfg), ".lock")+".json")

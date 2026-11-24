@@ -1,0 +1,110 @@
+{
+  "PID": 4242,
+  "Identity": "test:id",
+  "UpdatedAt": "2026-11-24T11:59:59Z",
+  "TickAt": "2026-11-24T11:59:57Z",
+  "Runs": [
+    {
+      "IssueID": "w-1",
+      "Title": "Title of w-1",
+      "Phase": "running",
+      "Attempt": 2,
+      "Turn": 3,
+      "Thread": "",
+      "Workspace": "",
+      "WakeAt": "0001-01-01T00:00:00Z",
+      "LastGate": "",
+      "Workflow": "build",
+      "UpdatedAt": "2026-11-24T11:59:40Z",
+      "TailBytes": 4096,
+      "LastOutputAt": "2026-11-24T11:59:52Z",
+      "LastActivityAt": "2026-11-24T11:59:58Z",
+      "AgeSec": 2
+    },
+    {
+      "IssueID": "w-2",
+      "Title": "Title of w-2",
+      "Phase": "retry",
+      "Attempt": 2,
+      "Turn": 3,
+      "Thread": "",
+      "Workspace": "",
+      "WakeAt": "0001-01-01T00:00:00Z",
+      "LastGate": "",
+      "Workflow": "build",
+      "UpdatedAt": "2026-11-24T11:46:00Z",
+      "TailBytes": 4096,
+      "LastOutputAt": "0001-01-01T00:00:00Z",
+      "LastActivityAt": "0001-01-01T00:00:00Z",
+      "AgeSec": 840,
+      "Attention": {
+        "Reason": "retrying",
+        "AgeSec": 840
+      }
+    },
+    {
+      "IssueID": "w-3",
+      "Title": "Title of w-3",
+      "Phase": "stopped: gate escalation",
+      "Attempt": 2,
+      "Turn": 3,
+      "Thread": "",
+      "Workspace": "",
+      "WakeAt": "0001-01-01T00:00:00Z",
+      "LastGate": "",
+      "Workflow": "build",
+      "UpdatedAt": "2026-11-24T10:00:00Z",
+      "TailBytes": 4096,
+      "LastOutputAt": "0001-01-01T00:00:00Z",
+      "LastActivityAt": "0001-01-01T00:00:00Z",
+      "AgeSec": 7200,
+      "Attention": {
+        "Reason": "gate escalation",
+        "AgeSec": 7200
+      }
+    },
+    {
+      "IssueID": "w-4",
+      "Title": "Title of w-4",
+      "Phase": "stopped: gate green",
+      "Attempt": 2,
+      "Turn": 3,
+      "Thread": "",
+      "Workspace": "",
+      "WakeAt": "0001-01-01T00:00:00Z",
+      "LastGate": "",
+      "Workflow": "build",
+      "UpdatedAt": "2026-11-24T11:00:00Z",
+      "TailBytes": 4096,
+      "LastOutputAt": "0001-01-01T00:00:00Z",
+      "LastActivityAt": "0001-01-01T00:00:00Z",
+      "AgeSec": 3600
+    }
+  ],
+  "History": [
+    {
+      "IssueID": "w-5",
+      "Title": "Title of w-5",
+      "Phase": "stopped: gate red",
+      "Attempt": 2,
+      "Turn": 3,
+      "Thread": "",
+      "Workspace": "",
+      "WakeAt": "0001-01-01T00:00:00Z",
+      "LastGate": "",
+      "Workflow": "build",
+      "UpdatedAt": "2026-11-24T09:00:00Z",
+      "TailBytes": 4096,
+      "LastOutputAt": "0001-01-01T00:00:00Z",
+      "LastActivityAt": "0001-01-01T00:00:00Z",
+      "AgeSec": 10800,
+      "Attention": {
+        "Reason": "gate failed",
+        "AgeSec": 10800
+      }
+    }
+  ],
+  "Alive": true,
+  "Machine": "mini",
+  "LambeVersion": "v9.9.9"
+}
