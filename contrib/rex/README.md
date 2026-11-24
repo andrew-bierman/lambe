@@ -34,9 +34,10 @@ lambe setup rex            # dry run: prints exactly what it would do
 lambe setup rex --apply    # writes the files
 ```
 
-Then add the printed `dofile(...)` line to Rex's `init.lua`, and run
-`rex config check && rex config reload` on that machine (a remote reload is
-refused). Verify with `rex do lambe_check`; for another host use
+Setup also adds a small marked block to Rex's `init.lua` that loads Lambe, and
+checks the result with `rex config check` before replacing the file (see
+below). Then run `rex config reload` on that machine (a remote reload is
+refused) and verify with `rex do lambe_check`; for another host use
 `rex -S HOST do lambe_check`.
 
 The actions run on the Rex **server**, so install on every host whose server
@@ -78,20 +79,36 @@ Rex's config directory (the directory of `$REX_CONFIG`, else
 | `lambe.config.lua` | Your settings. Created once, never overwritten, never removed. |
 
 - **Dry run by default.** It prints each file it would create, update, or
-  remove, the `dofile` line to add to `init.lua`, and the `rex config check &&
-  rex config reload` command.
+  remove, whether `init.lua` gets its block, and the follow-up commands.
+  `--json` prints the same plan as a machine-readable report (also with
+  `--apply`, including the check result and any error).
 - **`--apply`** writes atomically, modules first and the shim last. Each
   managed file starts with `-- lambe-managed: v1 plugin=N sha256=...`: the
   plugin version and a hash of the body. Re-running updates managed files and
   removes managed modules a newer version no longer ships.
-- **It never edits `init.lua`.**
+- **`init.lua` gets one managed block**, between `-- lambe-rex: begin` and
+  `-- lambe-rex: end` markers, holding the `dofile` line for `lambe.lua` (and any
+  keys, below). Nothing outside the markers is touched, and the block is
+  appended only if `init.lua` does not already load `lambe.lua` itself. The new
+  file is written beside `init.lua` and validated with `rex config check --json`
+  first; if Rex rejects it, `init.lua` stays exactly as it was and the
+  complaint is shown. Without the `rex` CLI on `PATH` the block is written
+  unverified and setup says so. `--no-init` skips this and prints the `dofile`
+  line instead.
+- **`--keys`** also binds a small key set under the prefix `cmd+shift+l`
+  (`>o` open run, `>n` needs you, `>d` dashboard, `>w` by workflow), inside the
+  managed block. Keys already bound in your Rex config (per `rex keymap
+  --json`) are skipped and reported; a bound `cmd+shift+l` skips all of them.
+  Rex's built-in client shortcuts are not in that list, so a clash with one is
+  not detected. Re-running without `--keys` keeps the keys already in the
+  block, and no keys are ever bound by default.
 - **It refuses to overwrite** a managed file you edited (the hash no longer
   matches) or a foreign `lambe.lua`, and writes nothing at all in that case,
   unless you pass `--force`. Put settings in `lambe.config.lua` instead; if
   you edited the `override` variables of an older single-file `lambe.lua`,
   move them there before using `--force`.
-- **`--uninstall [--apply]`** removes the managed files under the same rules,
-  keeps `lambe.config.lua`, and reminds you to delete the `dofile` line.
+- **`--uninstall [--apply]`** removes the managed files under the same rules
+  and the managed block from `init.lua`, and keeps `lambe.config.lua`.
 
 ## Where output opens
 
