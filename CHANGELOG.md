@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Docs: a generated configuration reference (`docs/reference/config.md`, checked by a Go test so it cannot drift from the code), a real contributor `docs/ARCHITECTURE.md` (the planning-era document moved to `docs/research/`), `docs/TROUBLESHOOTING.md`, `docs/GLOSSARY.md`, `docs/UPGRADING.md`, and a documentation index in the README.
 - `lambe completion bash|zsh|fish` prints shell completions generated from the help text. The Homebrew formula installs them, the deb/rpm/apk packages ship them under the standard vendor completion directories, and the release archives include a `completions/` directory.
 
 ### Changed
@@ -18,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lambe doctor --label NAME` replaces `-service-label` (still accepted, prints a deprecation note). `LAMBE_CONFIG` sets the default `--config`.
 
 ### Fixed
+
+- Docs: removed the stale duplicated "Reference" half of `docs/OPERATIONS.md`, the configuration tables that named keys that do not exist (`tick`, `sync_interval` / `LAMBE_SYNC_INTERVAL`), and the broken `#os-level-restart-production` anchor. The README mascot image is 124 KB instead of 795 KB.
 
 - **`lambe init` no longer writes outside the directory you ran it in.** It used to adopt any `.beads` found in a parent directory, including a global `~/.beads`, and write `WORKFLOW.md` and a starter formula there. It now ignores stub `.beads` directories, uses a real ancestor tracker only with `--tracker PATH` (or an interactive confirmation that names the path; never for `$HOME`), and `--non-interactive` refuses with a clear message.
 - Unknown keys in the config file are now an error with a "did you mean" suggestion, and a value of the wrong type names the bad input (`supervisor.attempt_cap: expected an integer, got "banana"`) instead of silently reading 0.

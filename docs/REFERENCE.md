@@ -275,21 +275,11 @@ one, and only on explicit operator action. Exit codes match `lambe status`.
 
 ## Configuration
 
-Precedence: defaults < config file < environment < flags. Environment variables
-flatten config paths with underscores (`sync_interval` → `LAMBE_SYNC_INTERVAL`).
-Config files inherit the local tracker default unless they set `trackers`.
-
-Key knobs and defaults:
-
-| Setting | Default | Meaning |
-| --- | --- | --- |
-| `tick` | 10s | Supervisor loop interval |
-| Attempt cap | 8 | Max attempts per work item before needs-human |
-| Silence timeout | 10m | Agent produces no output for this long → reclaim |
-| Turn timeout | 1h | Hard cap on a single agent turn |
-| Heartbeat | 150s | Liveness interval written to the tracker |
-| `supervisor.orphan_claim_ttl` | 1h | Stop heartbeating a recovered claim with no continuation state after this long (0 = never); never releases it |
-| `labels` | (none) | Opt-in work lane: claim only issues with every listed label |
+The full key list (type, default, environment variable, meaning) is the
+generated [configuration reference](reference/config.md). Precedence is
+defaults, then the config file, then environment variables; there are no
+per-key command-line flags. Config files inherit the local tracker default
+unless they set `trackers`.
 
 On a shared tracker, set `labels` so lambe claims only issues explicitly
 marked for its workflow (for example `lambe:babysit`). Other hub tasks stay
@@ -377,3 +367,38 @@ LAMBE_STATE_DIR="$PWD/.dev/state" LAMBE_WORKSPACE_ROOT="$PWD/.dev/workspaces" \
 Use a disposable Beads tracker and an explicit development configuration. A
 separate state directory still allows mutations to the configured tracker.
 
+
+## Roadmap
+
+Done:
+
+- [x] Go module scaffold, config, logging, toolchain pins, GoReleaser
+- [x] Beads tracker adapter (hub, repo, in-repo `.beads`, embedded local store)
+- [x] Process-supervision primitives (spawn ownership, kill ladder, watchdog)
+- [x] Symphony core loop (WORKFLOW.md render, workspaces, retry/reconcile)
+- [x] Pi harness driver (RPC client, settle-only completion, limit classifier)
+- [x] Docs and CI
+
+In flight:
+
+- [x] Additional harness driver (Pi)
+- [x] Verified-completion gates (`shell`, `gh:run`, `gh:pr`)
+- [x] Daemon assembly (`lambe run`, `lambe status`, single-instance lock)
+- [x] Fault-injection suite as the definition of done
+- [x] MCP server surface
+- [x] ACP harness driver
+- [x] Rex surface
+- [x] HTTP state API — opt-in, bearer-guarded, contract documented and pinned with fixtures (`docs/api/state-api.md`)
+
+Next:
+
+- [ ] Multi-machine affinity and failover
+- [ ] Shared Dolt-server mode
+- [ ] More harness drivers (Codex, Claude Code, OpenCode)
+- [ ] `bd`-as-library embedding
+- [ ] Limit-classifier tuning on real traffic
+
+Later / exploring:
+
+- [ ] Gas-City interop
+- [ ] `ghx` caching proxy at multi-agent scale

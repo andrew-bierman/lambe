@@ -2,12 +2,16 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/knadh/koanf/v2"
 )
 
 func writeTemp(t *testing.T, content string) string {
@@ -709,5 +713,53 @@ func TestLoadAcceptsEveryKnownKey(t *testing.T) {
 		"supervisor:\n  tick_seconds: 5\n  attempt_cap: 3\n  silence_timeout: 5m\n  stall_after: 4m\n  auto_reclaim: true\n  bd_max_concurrency: 2\n"
 	if _, err := Load(Options{File: writeConfig(t, body), Env: []string{}}); err != nil {
 		t.Fatalf("known keys rejected: %v", err)
+	}
+}
+
+// docs/reference/config.md is generated from keyTable; this fails when it is
+// stale. Refresh with: go run ./internal/config/gen docs/reference/config.md
+func TestConfigReferenceIsUpToDate(t *testing.T) {
+	got, err := os.ReadFile(filepath.Join("..", "..", "docs", "reference", "config.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != ReferenceMarkdown() {
+		t.Fatal("docs/reference/config.md is stale; run: go run ./internal/config/gen docs/reference/config.md")
+	}
+}
+
+// Every key the loader reads must be documented, and every documented default
+// must match the real one, so the table cannot drift from the code.
+func TestKeyTableMatchesLoader(t *testing.T) {
+	src, err := os.ReadFile("config.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range regexp.MustCompile(`k\.(?:String|Int|Bool|Duration|Get|Slices)\("([a-z_.]+)"`).FindAllStringSubmatch(string(src), -1) {
+		if _, ok := knownKeys[m[1]]; !ok {
+			t.Errorf("config.go reads %q but keyTable does not document it", m[1])
+		}
+	}
+	k := koanf.New(".")
+	if err := k.Load(defaultsProvider(), nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, info := range keyTable {
+		if k.Get(info.Path) == nil || info.Default == "" || strings.ContainsAny(info.Default, " `(") {
+			continue
+		}
+		want := fmt.Sprint(k.Get(info.Path))
+		switch info.kind {
+		case kindDuration:
+			a, errA := time.ParseDuration(info.Default)
+			b, errB := time.ParseDuration(want)
+			if errA != nil || errB != nil || a != b {
+				t.Errorf("%s: documented default %q != real %q", info.Path, info.Default, want)
+			}
+		default:
+			if info.Default != want {
+				t.Errorf("%s: documented default %q != real %q", info.Path, info.Default, want)
+			}
+		}
 	}
 }
