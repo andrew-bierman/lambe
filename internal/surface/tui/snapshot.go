@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -18,6 +19,9 @@ type snapshotMsg struct {
 	snapshot daemon.LiveSnapshot
 	alive    bool
 	err      error
+	// unchanged marks a poll that found the file untouched: snapshot is the
+	// previous read and only alive was re-checked.
+	unchanged bool
 }
 
 // tickMsg triggers the next snapshot read.
@@ -146,12 +150,52 @@ func (m *Model) selectedRun() (daemon.LiveRun, bool) {
 	return item.run, true
 }
 
-// readSnapshot returns a command that reads the live snapshot once.
-func readSnapshot(path string) tea.Cmd {
-	return func() tea.Msg {
-		snapshot, alive, err := daemon.ReadLive(path)
-		return snapshotMsg{snapshot: snapshot, alive: alive, err: err}
+// snapshotReader polls one live file. It stats the file first and skips the
+// read, the JSON decode and the model's deep compare when the file is the same
+// inode with the same mtime and size: the daemon replaces the file by rename,
+// so any write is a new inode. One reader serves one in-flight read at a time
+// (see Model.readNow); it is not safe for concurrent use.
+type snapshotReader struct {
+	path string
+	info os.FileInfo
+	snap daemon.LiveSnapshot
+	have bool
+}
+
+// read polls the file; force bypasses the unchanged short-circuit.
+func (r *snapshotReader) read(force bool) snapshotMsg {
+	info, err := os.Stat(r.path)
+	if err != nil {
+		r.have = false
+		return snapshotMsg{err: err}
 	}
+	if r.have && !force && os.SameFile(r.info, info) && r.info.ModTime().Equal(info.ModTime()) && r.info.Size() == info.Size() {
+		return snapshotMsg{snapshot: r.snap, alive: daemon.LiveAlive(r.snap), unchanged: true}
+	}
+	// The stat above predates the read, so a write in between is re-read next poll.
+	snap, alive, err := daemon.ReadLive(r.path)
+	if err != nil {
+		r.have = false
+		return snapshotMsg{err: err}
+	}
+	r.info, r.snap, r.have = info, snap, true
+	return snapshotMsg{snapshot: snap, alive: alive}
+}
+
+// readNow returns a command that polls the snapshot, or nil when a read is
+// already in flight: polls never overlap, however slow the disk. A forced read
+// requested meanwhile runs as soon as the in-flight one lands.
+func (m *Model) readNow(force bool) tea.Cmd {
+	if m.reader == nil {
+		return nil
+	}
+	if m.reading {
+		m.forceNext = m.forceNext || force
+		return nil
+	}
+	m.reading = true
+	reader := m.reader
+	return func() tea.Msg { return reader.read(force) }
 }
 
 // tick returns a command that fires after tickInterval.
