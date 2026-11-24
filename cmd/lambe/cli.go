@@ -369,10 +369,10 @@ func execute(args []string, in io.Reader, stdout, stderr io.Writer) int {
 	}
 	switch args[0] {
 	case "-h", "--help", "-help":
-		fmt.Fprint(stdout, usageText())
+		say(stdout, "%s", usageText())
 		return exitOK
 	case "--version", "-version":
-		fmt.Fprintln(stdout, buildVersion())
+		say(stdout, "%s\n", buildVersion())
 		return exitOK
 	case "help":
 		return runHelp(args[1:], stdout, stderr)
@@ -384,7 +384,7 @@ func execute(args []string, in io.Reader, stdout, stderr io.Writer) int {
 	if helpRequested(args[1:]) {
 		words := append([]string{name}, nonFlagPrefix(args[1:])...)
 		if t, ok := findTopic(words); ok {
-			fmt.Fprint(stdout, topicText(t))
+			say(stdout, "%s", topicText(t))
 			return exitOK
 		}
 	}
@@ -406,11 +406,11 @@ func nonFlagPrefix(args []string) []string {
 
 func runHelp(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprint(stdout, usageText())
+		say(stdout, "%s", usageText())
 		return exitOK
 	}
 	if t, ok := findTopic(args); ok {
-		fmt.Fprint(stdout, topicText(t))
+		say(stdout, "%s", topicText(t))
 		return exitOK
 	}
 	return reportUsage(stderr, fmt.Errorf("no help for %q", strings.Join(args, " ")), "")
@@ -480,7 +480,7 @@ func report(name string, args []string, err error, stderr io.Writer) int {
 	if name == "run" || name == "mcp" {
 		logging.Default().Error("lambe "+name+" failed", "error", err.Error())
 	} else {
-		fmt.Fprintf(stderr, "lambe: %s\n", err)
+		say(stderr, "lambe: %s\n", err)
 	}
 	return exitCodeFor(err)
 }
@@ -496,11 +496,11 @@ func usageTopic(name string, args []string) string {
 
 func reportUsage(stderr io.Writer, err error, topic string) int {
 	msg := strings.TrimPrefix(err.Error(), "usage: ")
-	fmt.Fprintf(stderr, "lambe: %s\n", firstLine(msg))
+	say(stderr, "lambe: %s\n", firstLine(msg))
 	if topic == "" {
-		fmt.Fprintln(stderr, "run 'lambe help' for usage")
+		say(stderr, "run 'lambe help' for usage\n")
 	} else {
-		fmt.Fprintf(stderr, "run 'lambe help %s' for usage\n", topic)
+		say(stderr, "run 'lambe help %s' for usage\n", topic)
 	}
 	return exitUsage
 }
