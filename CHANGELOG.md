@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A config file or `WORKFLOW.md` larger than 1 MiB is now rejected up front instead of being handed to the YAML parser, whose duplicate-key handling is quadratic on hostile input.
+
 ## [0.12.0] - 2026-11-24
 
 ### Added
