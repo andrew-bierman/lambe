@@ -2,25 +2,71 @@ name: ci
 
 on:
   push:
+    branches: [master]
+    tags: ["v*"]
   pull_request:
+
+# One run per PR; a new push cancels the stale run. Branch and tag runs are never cancelled.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  check:
+  # Docs-only PRs skip the Go work. The jobs below still run (and report success)
+  # so the required status names `check` and `test` stay stable.
+  changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      go: ${{ steps.filter.outputs.go }}
     steps:
-      - uses: actions/checkout@v4
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          go=true
+          if [ "$EVENT" = pull_request ]; then
+            files=$(gh api "repos/${REPO}/pulls/${PR}/files" --paginate --jq '.[].filename')
+            if [ -z "$(printf '%s\n' "$files" | grep -Ev '^(docs/|[^/]+\.md$|LICENSE$|NOTICE$|\.github/(ISSUE_TEMPLATE/|PULL_REQUEST_TEMPLATE\.md$|CODEOWNERS$|dependabot\.yml$|[^/]+\.md$))' || true)" ]; then
+              go=false
+            fi
+          fi
+          echo "go=${go}" >> "$GITHUB_OUTPUT"
+          echo "run go jobs: ${go}"
+
+  check:
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RUN_GO: ${{ needs.changes.outputs.go }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN_GO == 'true'
+        with:
+          persist-credentials: false
       - name: CHANGELOG section for release tag
         if: startsWith(github.ref, 'refs/tags/v')
         run: scripts/changelog-section.sh "${GITHUB_REF_NAME}" > /dev/null
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        if: env.RUN_GO == 'true'
         with:
           go-version: "1.27.x"
       - name: go vet
+        if: env.RUN_GO == 'true'
         run: go vet ./...
       - name: gofumpt
+        if: env.RUN_GO == 'true'
         run: |
           out=$(go run mvdan.cc/gofumpt -l .)
           if [ -n "$out" ]; then
@@ -29,20 +75,32 @@ jobs:
             exit 1
           fi
       - name: golangci-lint
+        if: env.RUN_GO == 'true'
         run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint run ./...
       - name: staticcheck
+        if: env.RUN_GO == 'true'
         run: go run honnef.co/go/tools/cmd/staticcheck ./...
       - name: govulncheck
+        if: env.RUN_GO == 'true'
         run: go run golang.org/x/vuln/cmd/govulncheck ./...
 
   test:
+    needs: changes
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RUN_GO: ${{ needs.changes.outputs.go }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN_GO == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        if: env.RUN_GO == 'true'
         with:
           go-version: "1.27.x"
       - name: Install bd
+        if: env.RUN_GO == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -68,12 +126,17 @@ jobs:
           "$HOME/.local/bin/bd" --version
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Test (with bd integration)
+        if: env.RUN_GO == 'true'
         env:
           LAMBE_TEST_BD: "1"
         run: go test -race ./...
 
   build:
+    needs: changes
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RUN_GO: ${{ needs.changes.outputs.go }}
     strategy:
       matrix:
         include:
@@ -86,11 +149,16 @@ jobs:
           - goos: linux
             goarch: arm64
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN_GO == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        if: env.RUN_GO == 'true'
         with:
           go-version: "1.27.x"
       - name: Build
+        if: env.RUN_GO == 'true'
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
