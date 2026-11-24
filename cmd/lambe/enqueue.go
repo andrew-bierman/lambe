@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/andrew-bierman/lambe/internal/config"
@@ -85,7 +86,7 @@ func runEnqueue(args []string, out io.Writer) error {
 			Issue:         id,
 			Workflow:      chosen.Name,
 			Applied:       false,
-			WouldAddLabel: !hasLabel(issues[0].Labels, chosen.Label),
+			WouldAddLabel: !slices.Contains(issues[0].Labels, chosen.Label),
 		}
 		if *apply {
 			if err := local.AddWorkflowLabel(ctx, id, chosen.Label); err != nil {
@@ -115,13 +116,4 @@ type enqueueResult struct {
 	Workflow      string `json:"workflow"`
 	Applied       bool   `json:"applied"`
 	WouldAddLabel bool   `json:"would_add_label"`
-}
-
-func hasLabel(labels []string, want string) bool {
-	for _, label := range labels {
-		if label == want {
-			return true
-		}
-	}
-	return false
 }
