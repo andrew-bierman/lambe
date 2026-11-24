@@ -119,21 +119,14 @@ func (m *Model) renderHeader() string {
 		}
 	}
 	segs := []fitSegment{{badge, 0}, {health, 0}}
-	switch {
-	case m.commandErr != nil:
-		segs = append(segs, fitSegment{on(errorStyle).Render(strings.Join(strings.Fields(ansi.Strip(m.commandErr.Error())), " ")), 0})
-	case m.commandStatus != "":
-		segs = append(segs, fitSegment{on(valueStyle).Render(m.commandStatus), 0})
-	default:
-		if m.width >= 70 {
-			segs = append(segs, fitSegment{on(dimStyle).Render(context), 5})
-		} else if m.path == "" {
-			segs = append(segs, fitSegment{on(dimStyle).Render("demo"), 4})
-		}
-		segs = append(segs, counts...)
-		if m.readinessErr != nil && !m.showHistory {
-			segs = append(segs, fitSegment{on(retryStyle).Render("Beads unavailable"), 6})
-		}
+	if m.width >= 70 {
+		segs = append(segs, fitSegment{on(dimStyle).Render(context), 5})
+	} else if m.path == "" {
+		segs = append(segs, fitSegment{on(dimStyle).Render("demo"), 4})
+	}
+	segs = append(segs, counts...)
+	if m.readinessErr != nil && !m.showHistory {
+		segs = append(segs, fitSegment{on(retryStyle).Render("Beads unavailable"), 6})
 	}
 	left := fitSegments(segs, bar.Render("  "), m.width)
 	if m.width >= 100 && !m.snapshot.UpdatedAt.IsZero() {
@@ -302,6 +295,9 @@ func (m *Model) renderFooter() string {
 	}
 	right := valueStyle.Render(status)
 	left := m.renderHints(max(1, inner-lipgloss.Width(right)-2))
+	if _, ok := m.activeToast(); ok {
+		left = m.renderToast(max(1, inner-lipgloss.Width(right)-2))
+	}
 	gap := max(1, inner-lipgloss.Width(left)-lipgloss.Width(right))
 	lines = append(lines, left+strings.Repeat(" ", gap)+right)
 	return style.Render(strings.Join(lines, "\n"))

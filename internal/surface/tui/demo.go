@@ -9,11 +9,60 @@ import (
 	"github.com/andrew-bierman/lambe/internal/daemon"
 	"github.com/andrew-bierman/lambe/internal/symphony"
 	"github.com/andrew-bierman/lambe/internal/tracker"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // RunDemo opens the dashboard with sample runs held entirely in memory.
 func RunDemo(ctx context.Context) error {
-	return run(ctx, demoRichModel(time.Now()))
+	model := demoRichModel(time.Now())
+	model.demo = true
+	return run(ctx, model)
+}
+
+// demoTickMsg advances the sample data's clock.
+type demoTickMsg time.Time
+
+func demoTick() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return demoTickMsg(t) })
+}
+
+// advanceDemo shifts every timestamp forward by the time elapsed since the
+// last tick, so relative ages stay put: running rows stay fresh, the rows
+// meant to look stalled stay stalled, and the header clock keeps moving.
+func (m *Model) advanceDemo(now time.Time) {
+	delta := now.Sub(m.demoAt)
+	m.demoAt = now
+	shift := func(runs []daemon.LiveRun) {
+		for i := range runs {
+			for _, t := range []*time.Time{&runs[i].UpdatedAt, &runs[i].LastOutputAt, &runs[i].LastActivityAt, &runs[i].WakeAt} {
+				if !t.IsZero() {
+					*t = t.Add(delta)
+				}
+			}
+		}
+	}
+	shift(m.snapshot.Runs)
+	shift(m.snapshot.History)
+	m.snapshot.UpdatedAt = now
+	m.setRuns(m.visibleRuns())
+}
+
+// nextDemoID returns the first demo-N above every id the demo already shows,
+// so a queued task never collides with a sample run.
+func (m *Model) nextDemoID() string {
+	next := 1
+	seen := func(runs []daemon.LiveRun) {
+		for _, r := range runs {
+			var n int
+			if _, err := fmt.Sscanf(r.IssueID, "demo-%d", &n); err == nil {
+				next = max(next, n+1)
+			}
+		}
+	}
+	seen(m.snapshot.Runs)
+	seen(m.snapshot.History)
+	seen(m.upcoming)
+	return fmt.Sprintf("demo-%d", next)
 }
 
 func demoModel(now time.Time) *Model {
