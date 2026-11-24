@@ -644,6 +644,7 @@ func TestDaemonShutdownLadderAndLockRelease(t *testing.T) {
 	tr := newFakeTracker()
 	tr.issues["issue-1"] = tracker.Issue{ID: "issue-1", Status: "in_progress", Assignee: "lambe@test"}
 
+	logs := &syncBuffer{}
 	d, err := New(Options{
 		Config: &config.Config{Supervisor: config.Supervisor{
 			TickSeconds:       10,
@@ -655,6 +656,7 @@ func TestDaemonShutdownLadderAndLockRelease(t *testing.T) {
 		StateDir: stateDir,
 		Machine:  "testbox",
 		Actor:    "lambe@test",
+		Log:      slogJSON(logs),
 		Wire: func(a *Assembly) error {
 			a.Trackers = []tracker.Tracker{tr}
 			return nil
@@ -698,7 +700,7 @@ func TestDaemonShutdownLadderAndLockRelease(t *testing.T) {
 
 	child := spawnTestChild(t, "issue-1")
 	d.asm.Children.Add(child)
-	time.Sleep(200 * time.Millisecond) // let Run settle into its select loop
+	waitForLog(t, logs, daemonRunningMsg) // Run has finished startup and entered its select loop
 
 	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
 		t.Fatalf("send SIGTERM: %v", err)

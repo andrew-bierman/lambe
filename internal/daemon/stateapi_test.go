@@ -109,6 +109,28 @@ func waitForLock(t *testing.T, stateDir string, cfg *config.Config) {
 	}
 }
 
+// daemonRunningMsg is the startup record the daemon logs once its lock,
+// recovery, wiring and state surface are all settled; it is the readiness
+// signal for asserting that something did NOT happen during startup.
+const daemonRunningMsg = "lambe daemon running"
+
+// waitForLog polls until a captured JSON log record carries msg, proving the
+// daemon reached that point, so an absence check afterwards is not vacuous.
+func waitForLog(t *testing.T, logs *syncBuffer, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, line := range strings.Split(logs.String(), "\n") {
+			var rec map[string]any
+			if json.Unmarshal([]byte(line), &rec) == nil && rec["msg"] == msg {
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("daemon never logged %q; logs:\n%s", msg, logs.String())
+}
+
 // waitForDescriptor polls until the per-instance descriptor is published
 // and returns it, decoded.
 func waitForDescriptor(t *testing.T, path string, deadline time.Duration) StateAPIDescriptor {
@@ -157,9 +179,13 @@ func TestStateAPIDisabledByDefaultStartsNoListener(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()
 	cfg := stateAPIConfig(t.TempDir(), false)
-	cancel, runDone := startTestDaemon(t, testDaemonOptions(stateDir, cfg, nil))
+	logs := &syncBuffer{}
+	cancel, runDone := startTestDaemon(t, testDaemonOptions(stateDir, cfg, logs))
 	waitForLock(t, stateDir, cfg)
-	time.Sleep(300 * time.Millisecond)
+	waitForLog(t, logs, daemonRunningMsg) // startup finished: the surface decision is final
+	if strings.Contains(logs.String(), "stateapi listening") {
+		t.Error("disabled surface logged a listener")
+	}
 
 	glob, err := filepath.Glob(filepath.Join(stateDir, "live", "stateapi-*.json"))
 	if err != nil {
@@ -394,7 +420,7 @@ func TestStateAPIBindFailureLogsAndContinues(t *testing.T) {
 	logs := &syncBuffer{}
 	cancel, runDone := startTestDaemon(t, testDaemonOptions(stateDir, cfg, logs))
 	waitForLock(t, stateDir, cfg)
-	time.Sleep(300 * time.Millisecond)
+	waitForLog(t, logs, daemonRunningMsg) // startup finished despite the bind failure
 
 	glob, _ := filepath.Glob(filepath.Join(stateDir, "live", "stateapi-*.json"))
 	if len(glob) != 0 {

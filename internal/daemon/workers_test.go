@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -95,10 +96,23 @@ func TestDaemonRefreshesWhileWorkersRunAndJoinsThemAtShutdown(t *testing.T) {
 	}
 }
 
-type closingTicker struct{ closed chan struct{} }
+// closingTicker records whether Close ran before the test released the
+// in-flight cycle, so ordering is asserted directly instead of inferred from a
+// quiet period.
+type closingTicker struct {
+	closed   chan struct{}
+	released *atomic.Bool // set by the test just before it releases cycleMu
+	early    *atomic.Bool // set when Close ran while the cycle was still in flight
+}
 
-func (t closingTicker) Tick(context.Context) error  { return nil }
-func (t closingTicker) Close(context.Context) error { close(t.closed); return nil }
+func (t closingTicker) Tick(context.Context) error { return nil }
+func (t closingTicker) Close(context.Context) error {
+	if !t.released.Load() {
+		t.early.Store(true)
+	}
+	close(t.closed)
+	return nil
+}
 
 func TestShutdownJoinsWorkerCoordinatorAfterInFlightCycle(t *testing.T) {
 	d, err := New(Options{Config: &config.Config{}, StateDir: t.TempDir(), Machine: "test"})
@@ -106,7 +120,8 @@ func TestShutdownJoinsWorkerCoordinatorAfterInFlightCycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	closed := make(chan struct{})
-	d.loop = closingTicker{closed: closed}
+	released, early := &atomic.Bool{}, &atomic.Bool{}
+	d.loop = closingTicker{closed: closed, released: released, early: early}
 	d.cycleMu.Lock()
 	locked := true
 	defer func() {
@@ -121,21 +136,27 @@ func TestShutdownJoinsWorkerCoordinatorAfterInFlightCycle(t *testing.T) {
 	select {
 	case err := <-shutdownDone:
 		t.Fatalf("shutdown skipped the in-flight coordinator: %v", err)
-	case <-time.After(20 * time.Millisecond):
+	case <-closed:
+		t.Fatal("shutdown closed the worker coordinator while a cycle was in flight")
+	case <-time.After(100 * time.Millisecond): // a regression fires in microseconds; this only bounds the wait
 	}
+	released.Store(true)
 	d.cycleMu.Unlock()
 	locked = false
 	select {
 	case <-closed:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("shutdown did not join workers after cycle exited")
+	}
+	if early.Load() {
+		t.Fatal("coordinator Close ran before the in-flight cycle was released")
 	}
 	select {
 	case err := <-shutdownDone:
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("shutdown did not return")
 	}
 }
