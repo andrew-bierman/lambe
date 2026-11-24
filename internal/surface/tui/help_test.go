@@ -210,3 +210,35 @@ func TestHelpGoldens(t *testing.T) {
 		})
 	}
 }
+
+// TestRefreshKeyIsDiscoverable: r is documented in every help view and the
+// footer offers it on a window wide enough for the hints.
+func TestRefreshKeyIsDiscoverable(t *testing.T) {
+	m := withSnapshot(t, newSized(t))
+	for _, v := range []helpView{helpQueue, helpAttention, helpHistory, helpDetail} {
+		found := false
+		for _, g := range m.keys.helpGroups(v) {
+			for _, r := range g.rows {
+				found = found || r.keys == "r"
+			}
+		}
+		if !found {
+			t.Errorf("help view %v does not document r", v)
+		}
+	}
+	offered := func() bool {
+		for _, h := range m.hints() {
+			if slices.Contains(h.b.Keys(), "r") {
+				return true
+			}
+		}
+		return false
+	}
+	if !offered() {
+		t.Error("list hints do not offer r")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if !offered() {
+		t.Error("detail hints do not offer r")
+	}
+}

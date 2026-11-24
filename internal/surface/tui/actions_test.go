@@ -186,7 +186,7 @@ func TestPaletteOffersCopyAndOpen(t *testing.T) {
 
 func TestSystemCopyWritesOSC52AndCapsPayload(t *testing.T) {
 	var out bytes.Buffer
-	a := systemActions{out: &out}
+	a := systemActions{out: &out, getenv: noEnv}
 	if err := a.Copy("hello"); err != nil {
 		t.Fatal(err)
 	}
@@ -203,5 +203,73 @@ func TestSystemCopyWritesOSC52AndCapsPayload(t *testing.T) {
 	raw, err := base64.StdEncoding.DecodeString(payload)
 	if err != nil || len(raw) != maxCopyBytes || !strings.HasSuffix(string(raw), "TAIL") {
 		t.Fatalf("payload not capped to the tail: len=%d err=%v", len(raw), err)
+	}
+}
+
+func noEnv(string) string { return "" }
+
+// TestOSC52InsideTmuxUsesDCSPassthrough checks the wrapper tmux needs: the
+// sequence inside ESC P tmux ; ... ESC \ with every ESC doubled.
+func TestOSC52InsideTmuxUsesDCSPassthrough(t *testing.T) {
+	payload := base64.StdEncoding.EncodeToString([]byte("ac-1"))
+	plainSeq := "\x1b]52;c;" + payload + "\a"
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"no multiplexer", nil, plainSeq},
+		{"tmux", map[string]string{"TMUX": "/tmp/tmux-501/default,123,0"}, "\x1bPtmux;\x1b\x1b]52;c;" + payload + "\a\x1b\\"},
+		{"empty TMUX is not tmux", map[string]string{"TMUX": ""}, plainSeq},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			a := systemActions{out: &out, getenv: func(k string) string { return tc.env[k] }}
+			if err := a.Copy("ac-1"); err != nil {
+				t.Fatal(err)
+			}
+			if out.String() != tc.want {
+				t.Fatalf("got %q, want %q", out.String(), tc.want)
+			}
+		})
+	}
+}
+
+// TestYankPrefixTimesOut: y then silence cancels the copy prefix after
+// yankTimeout and says so; a later key must not copy, and a stale timeout
+// from an earlier y must not cancel a newer one.
+func TestYankPrefixTimesOut(t *testing.T) {
+	m, fake := actionModel(t, "")
+	now, advance := fakeClock(t)
+	m.now = now
+	_, cmd := m.Update(runes("y"))
+	if !m.yank || cmd == nil {
+		t.Fatalf("y must arm the prefix and a timeout: yank=%v cmd=%v", m.yank, cmd != nil)
+	}
+	first := m.yankSeq
+	m.Update(yankExpiredMsg{first})
+	if m.yank {
+		t.Fatal("the prefix survived its timeout")
+	}
+	if toast, ok := m.activeToast(); !ok || toast.until.IsZero() {
+		t.Fatalf("timeout must replace the pending toast with a notice: %+v ok=%v", toast, ok)
+	}
+	advance(time.Second)
+	m.Update(runes("y")) // a key after the timeout is a fresh y, not a copy choice
+	if len(fake.copied) != 0 || !m.yank {
+		t.Fatalf("copied %q, yank=%v", fake.copied, m.yank)
+	}
+	m.Update(yankExpiredMsg{first}) // the first press's timer fires late
+	if !m.yank {
+		t.Fatal("a stale timeout cancelled a newer prefix")
+	}
+	press(m, "y")
+	if m.yank || len(fake.copied) != 1 {
+		t.Fatalf("second key must complete the copy: yank=%v copied=%q", m.yank, fake.copied)
+	}
+	m.Update(yankExpiredMsg{m.yankSeq}) // after completion a timeout is ignored
+	if _, ok := m.activeToast(); ok && strings.Contains(m.toast.text, "cancelled") {
+		t.Fatal("a completed copy was reported as cancelled")
 	}
 }

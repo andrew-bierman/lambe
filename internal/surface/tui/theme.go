@@ -60,6 +60,16 @@ var (
 )
 
 // phaseLabel renders a phase with an icon and color.
+// phaseLabelFor is phaseLabel for a run of a daemon that may be stopped: an
+// active phase then reads "(running)" in the dim style the list rows use.
+func phaseLabelFor(phase string, live bool) string {
+	if !live && isActivePhase(phase) {
+		icon, style, word := presentPhase(phase, false, false)
+		return style.Render(icon + " " + word)
+	}
+	return phaseLabel(phase)
+}
+
 func phaseLabel(phase string) string {
 	icon, style := phasePresentation(phase)
 	phase = oneLine(phase)

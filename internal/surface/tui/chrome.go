@@ -239,6 +239,7 @@ func (m *Model) hints() []hint {
 			{pair(k.ScrollDn, k.ScrollUp, "j/k", "scroll"), 5},
 			{short(k.GoTop, "g", "top"), 6},
 			{short(k.Focus, "tab", "list"), 7},
+			{short(k.Refresh, "r", "refresh"), 8},
 		}
 	}
 	return []hint{
@@ -249,6 +250,7 @@ func (m *Model) hints() []hint {
 		{short(k.Views, "1-3", "views"), 4},
 		{short(k.Filter, "/", "filter"), 5},
 		{pair(k.ListDown, k.ListUp, "j/k", "move"), 6},
+		{short(k.Refresh, "r", "refresh"), 7},
 	}
 }
 
