@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Daemon: a SIGHUP config reload no longer races the heartbeat, tick, and state-surface goroutines; the running config is now published as an atomic snapshot that every reader loads.
 - A config file or `WORKFLOW.md` larger than 1 MiB is now rejected up front instead of being handed to the YAML parser, whose duplicate-key handling is quadratic on hostile input.
 
 ## [0.12.0] - 2026-11-24

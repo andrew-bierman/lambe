@@ -118,7 +118,11 @@ func (placeholderGates) Evaluate(_ context.Context, _ symphony.GateRequest) (sym
 // Daemon is the assembled supervisor: lock, trackers, recovery, heartbeat,
 // tick loop, and signal handling for one daemon life.
 type Daemon struct {
-	opts    Options
+	opts Options
+	// cfg is the running configuration. SIGHUP reload swaps it while the
+	// heartbeat, tick, and state-surface goroutines read it, so every reader
+	// goes through config() and opts.Config is only the initial value.
+	cfg     atomic.Pointer[config.Config]
 	asm     Assembly
 	log     *slog.Logger
 	lock    *StateLock
@@ -142,6 +146,10 @@ type Daemon struct {
 	// Run starts it.
 	live *liveView
 }
+
+// config returns the running configuration snapshot; it never changes in
+// place, a reload publishes a fresh one.
+func (d *Daemon) config() *config.Config { return d.cfg.Load() }
 
 // Registry returns the daemon's live run registry. Wired runners record
 // their runs' lifecycle transitions here; the Control and StateSource
@@ -184,8 +192,8 @@ func (d *Daemon) StateSource() httpstate.StateSource {
 	src := NewStateSource(d.asm.Registry, d.asm.Reports, d.poke)
 	src.Identify(d.opts.Machine, d.opts.Version, d.opts.ConfigPath)
 	src.SetActor(d.opts.Actor)
-	src.SetStallAfter(func() time.Duration { return d.opts.Config.Supervisor.StallAfter })
-	src.WatchLive(LivePath(d.opts.StateDir, d.opts.Config))
+	src.SetStallAfter(func() time.Duration { return d.config().Supervisor.StallAfter })
+	src.WatchLive(LivePath(d.opts.StateDir, d.config()))
 	return src
 }
 
@@ -219,7 +227,9 @@ func New(opts Options) (*Daemon, error) {
 	}
 
 	runCtx, cancel := context.WithCancel(context.Background())
-	return &Daemon{opts: opts, asm: asm, log: log, runCtx: runCtx, cancel: cancel}, nil
+	d := &Daemon{opts: opts, asm: asm, log: log, runCtx: runCtx, cancel: cancel}
+	d.cfg.Store(opts.Config)
+	return d, nil
 }
 
 // assemble runs the Wire hook and fills every seam it left unset.
@@ -270,7 +280,7 @@ func (d *Daemon) trackers(ctx context.Context) ([]tracker.Tracker, error) {
 	if len(d.asm.Trackers) > 0 {
 		return d.asm.Trackers, nil
 	}
-	sup := d.opts.Config.Supervisor
+	sup := d.config().Supervisor
 	tracker.SetLimits(tracker.Limits{
 		MaxConcurrent: sup.BdMaxConcurrency,
 		Timeout:       sup.BdTimeout,
@@ -278,7 +288,7 @@ func (d *Daemon) trackers(ctx context.Context) ([]tracker.Tracker, error) {
 		QueueWait:     sup.BdQueueWait,
 	})
 	var trackers []tracker.Tracker
-	for _, t := range d.opts.Config.Trackers {
+	for _, t := range d.config().Trackers {
 		local, err := tracker.NewLocal(d.opts.BdBin, t.Path, d.opts.Actor)
 		if err != nil {
 			return nil, fmt.Errorf("open tracker %s: %w", t.Name, err)
@@ -334,7 +344,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	// Start the live projection before recovery so viewers see the new
 	// daemon as running while startup reconciliation is still in flight.
-	view := newLiveView(LivePath(d.opts.StateDir, d.opts.Config), func(err error) { d.log.Warn("live view update failed", "error", err) })
+	view := newLiveView(LivePath(d.opts.StateDir, d.config()), func(err error) { d.log.Warn("live view update failed", "error", err) })
 	view.registry = d.asm.Registry
 	d.live = view
 	view.start()
@@ -404,12 +414,12 @@ func (d *Daemon) startBackground(runCtx context.Context, primary tracker.Tracker
 	go RunHeartbeats(runCtx, HeartbeatConfig{
 		Tracker:  primary,
 		Actor:    d.opts.Actor,
-		Interval: func() time.Duration { return d.opts.Config.Supervisor.HeartbeatInterval },
+		Interval: func() time.Duration { return d.config().Supervisor.HeartbeatInterval },
 		Log:      d.log,
 		Orphans:  orphans,
 	})
 
-	if sup := d.opts.Config.Supervisor; sup.AutoReclaim {
+	if sup := d.config().Supervisor; sup.AutoReclaim {
 		d.log.Info("auto reclaim enabled", "grace", sup.ReclaimGrace.String())
 		go ReclaimLoop(runCtx, primary, time.Duration(sup.TickSeconds)*time.Second, sup.ReclaimGrace, d.log)
 	}
@@ -419,7 +429,7 @@ func (d *Daemon) startBackground(runCtx context.Context, primary tracker.Tracker
 func (d *Daemon) logRunning(trackerCount int) {
 	runningAttrs := []any{
 		"machine", d.opts.Machine, "actor", d.opts.Actor,
-		"tick_seconds", d.opts.Config.Supervisor.TickSeconds,
+		"tick_seconds", d.config().Supervisor.TickSeconds,
 		"trackers", trackerCount,
 	}
 	if d.stateapi != nil && d.stateapi.server != nil {
@@ -436,7 +446,7 @@ func (d *Daemon) startTicks(runCtx context.Context) <-chan struct{} {
 	ticksDone := make(chan struct{})
 	go func() {
 		defer close(ticksDone)
-		RunTicks(runCtx, time.Duration(d.opts.Config.Supervisor.TickSeconds)*time.Second,
+		RunTicks(runCtx, time.Duration(d.config().Supervisor.TickSeconds)*time.Second,
 			d.tickCycle)
 	}()
 	return ticksDone
@@ -473,7 +483,7 @@ func (d *Daemon) serve(ctx context.Context, sig <-chan os.Signal, ticksDone <-ch
 // daemon life; a SIGHUP that changes stateapi settings takes effect on the
 // next daemon start.
 func (d *Daemon) startStateAPI() *stateAPISurface {
-	cfg := d.opts.Config
+	cfg := d.config()
 	if !cfg.StateAPI.Enable {
 		return nil
 	}
@@ -554,7 +564,7 @@ func (d *Daemon) reload() {
 			"category", CategoryUnknown, "error", err)
 		return
 	}
-	d.opts.Config = cfg
+	d.cfg.Store(cfg)
 	d.log.Info("config reloaded", "config", cfg.Summary())
 }
 
@@ -698,7 +708,7 @@ func (d *Daemon) cycle(ctx context.Context, prefix string, immediate bool) {
 // cycleBound bounds control operations, not agent execution: half the
 // silence timeout, never below a minute. A daemon without resolved config
 // uses the minute floor.
-func (d *Daemon) cycleBound() time.Duration { return controlTimeout(d.opts.Config) }
+func (d *Daemon) cycleBound() time.Duration { return controlTimeout(d.config()) }
 
 // ControlTimeout is the bound on control operations (hub pull, write flush):
 // half the silence timeout, never below a minute.
@@ -723,7 +733,7 @@ func (d *Daemon) refreshReport(ctx context.Context) {
 	if d.primary == nil {
 		return
 	}
-	labels, routeLabels := queueLanes(d.opts.Config)
+	labels, routeLabels := queueLanes(d.config())
 	rep, err := BuildReport(ctx, d.primary, labels, routeLabels)
 	if err != nil {
 		d.log.Warn("report refresh failed", "category", ErrorCategory(err), "error", err)

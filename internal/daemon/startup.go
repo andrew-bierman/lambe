@@ -34,15 +34,15 @@ type loopBuilder struct {
 // heartbeat goroutine.
 func (d *Daemon) startLoop(runCtx context.Context, primary tracker.Tracker, view *liveView, lockName string) (*symphony.OrphanRegistry, error) {
 	b := &loopBuilder{d: d, runCtx: runCtx, primary: primary, view: view, lockName: lockName}
-	if len(d.opts.Config.Trackers) > 0 {
-		b.primaryDir = d.opts.Config.Trackers[0].Path
+	if len(d.config().Trackers) > 0 {
+		b.primaryDir = d.config().Trackers[0].Path
 	}
 	var err error
 	if b.loader, err = symphony.NewLoader(d.opts.WorkflowPath, symphony.OSEnv, d.log); err != nil {
 		return nil, fmt.Errorf("load workflow: %w", err)
 	}
 	b.newLoop()
-	if cfg := d.opts.Config; cfg != nil {
+	if cfg := d.config(); cfg != nil {
 		b.loop.DispatchLabels = cfg.Labels
 		if err := b.wireRoutes(cfg.Workflows); err != nil {
 			return nil, err
@@ -78,8 +78,8 @@ func (b *loopBuilder) newLoop() {
 		filtered.Labels = MetadataLabelSource{Tracker: b.primary}
 	}
 	workspaceRoot := filepath.Join(d.opts.StateDir, "workspaces")
-	if d.opts.Config != nil && d.opts.Config.WorkspaceRoot != "" {
-		workspaceRoot = d.opts.Config.WorkspaceRoot
+	if d.config() != nil && d.config().WorkspaceRoot != "" {
+		workspaceRoot = d.config().WorkspaceRoot
 	}
 	spaces := symphony.NewWorkspaceManager(workspaceRoot, d.log)
 	b.loop = symphony.NewLoop(filtered, b.loader, d.asm.Runner, d.asm.Gates, spaces, d.log)
@@ -153,7 +153,7 @@ func (b *loopBuilder) wireObservers() {
 		b.view.progress(p)
 		d.asm.Registry.ObservePhase(p.IssueID, p.Phase)
 	}
-	rejections := NewGateRejectionLog(GateRejectionLogPath(d.opts.StateDir, d.opts.Config))
+	rejections := NewGateRejectionLog(GateRejectionLogPath(d.opts.StateDir, d.config()))
 	l.OnGateRed = func(issue string, attempt int, output string) {
 		if err := rejections.Record(issue, attempt, output, time.Now()); err != nil {
 			d.log.Warn("gate rejection record failed", "issue", issue, "error", err)
@@ -169,9 +169,9 @@ func (b *loopBuilder) wireObservers() {
 func (b *loopBuilder) applyTimeouts() {
 	d, l := b.d, b.loop
 	l.ControlTimeout = d.cycleBound()
-	l.OrphanTTL = d.opts.Config.Supervisor.OrphanClaimTTL
+	l.OrphanTTL = d.config().Supervisor.OrphanClaimTTL
 	// A raised bd timeout must not be cut short by the recovery time-box.
-	if bd := d.opts.Config.Supervisor.BdTimeout; bd > 10*time.Second {
+	if bd := d.config().Supervisor.BdTimeout; bd > 10*time.Second {
 		l.RecoveryInspect = bd
 		l.RecoveryBudget = 2 * bd
 	}
