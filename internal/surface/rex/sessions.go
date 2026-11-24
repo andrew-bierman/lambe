@@ -28,11 +28,9 @@ type SessionRequest struct {
 type Client interface {
 	// CreateSession creates a labeled session for a supervised agent.
 	CreateSession(ctx context.Context, req SessionRequest) (Session, error)
-	// ListSessions returns the sessions visible to lambe.
+	// ListSessions returns the sessions visible to lambe, so a session made
+	// by an earlier daemon is found instead of created again.
 	ListSessions(ctx context.Context) ([]Session, error)
-	// Capture returns the captured output of one session. Output is
-	// returned whole; callers must not grep it for state.
-	Capture(ctx context.Context, sessionID string) (string, error)
 }
 
 // ShellClient implements Client by shelling the rex CLI with --json.
@@ -47,7 +45,7 @@ func NewShellClient(run CommandRunner) *ShellClient {
 	return &ShellClient{run: run}
 }
 
-// call invokes one `rex api call` method and decodes its JSON response.
+// call runs `rex ARGS... --json` and decodes its JSON response.
 func (c *ShellClient) call(ctx context.Context, result any, args ...string) error {
 	if c.run == nil {
 		return fmt.Errorf("rex: shell client has no runner")
@@ -56,18 +54,19 @@ func (c *ShellClient) call(ctx context.Context, result any, args ...string) erro
 	full = append(full, "--json")
 	stdout, code, err := c.run(ctx, "rex", full...)
 	if err != nil {
-		return fmt.Errorf("rex api call %s: %w", args[0], err)
+		return fmt.Errorf("rex %s: %w", args[0], err)
 	}
 	if code != 0 {
-		return fmt.Errorf("rex api call %s: exit %d: %s", args[0], code, truncate(stdout))
+		return fmt.Errorf("rex %s: exit %d: %s", args[0], code, truncate(stdout))
 	}
 	if err := json.Unmarshal([]byte(stdout), result); err != nil {
-		return fmt.Errorf("rex api call %s: decode response: %w", args[0], err)
+		return fmt.Errorf("rex %s: decode response: %w", args[0], err)
 	}
 	return nil
 }
 
-// CreateSession creates a named session. Rex CLI has no arbitrary metadata labels.
+// CreateSession creates a session named req.Name. `rex new` takes a label
+// only, so req.Labels is not sent.
 func (c *ShellClient) CreateSession(ctx context.Context, req SessionRequest) (Session, error) {
 	var created struct {
 		ID string `json:"session_id"`
@@ -98,21 +97,6 @@ func (c *ShellClient) ListSessions(ctx context.Context) ([]Session, error) {
 		sessions = append(sessions, Session{ID: s.ID, Name: s.Name})
 	}
 	return sessions, nil
-}
-
-// Capture returns the captured output of one session, uninterpreted.
-func (c *ShellClient) Capture(ctx context.Context, sessionID string) (string, error) {
-	if c.run == nil {
-		return "", fmt.Errorf("rex: shell client has no runner")
-	}
-	stdout, code, err := c.run(ctx, "rex", "capture", "-s", sessionID, "--trim", "--unwrap")
-	if err != nil {
-		return "", fmt.Errorf("rex capture %s: %w", sessionID, err)
-	}
-	if code != 0 {
-		return "", fmt.Errorf("rex capture %s: exit %d: %s", sessionID, code, truncate(stdout))
-	}
-	return stdout, nil
 }
 
 // truncate shortens command output embedded in error messages.

@@ -23,10 +23,10 @@ func TestDetect(t *testing.T) {
 			wantWhy:   ReasonEnv,
 		},
 		{
-			name:      "rex server env present",
+			name:      "REX_SERVER is not Rex evidence, the probe decides",
 			env:       map[string]string{"REX_SERVER": "sock"},
 			wantAvail: true,
-			wantWhy:   ReasonEnv,
+			wantWhy:   ReasonProbe,
 		},
 		{
 			name:      "probe exit 0",
@@ -86,7 +86,7 @@ func TestDetect(t *testing.T) {
 			if got.Reason != tt.wantWhy {
 				t.Errorf("Reason = %q, want %q", got.Reason, tt.wantWhy)
 			}
-			if probed && len(tt.env) > 0 {
+			if probed && tt.wantWhy == ReasonEnv {
 				t.Error("probe ran despite env indicating Rex")
 			}
 		})

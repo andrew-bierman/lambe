@@ -12,7 +12,8 @@ import (
 type RunEvent interface{ runEvent() }
 
 // RunStartedEvent reports that a supervised agent run started. The adapter
-// creates a labeled Rex session for it.
+// makes sure the agent has a Rex session named "lambe-<agent>", reusing an
+// existing one.
 type RunStartedEvent struct {
 	// Agent names the supervised agent, e.g. "issues".
 	Agent string
@@ -31,8 +32,9 @@ func (RunStartedEvent) runEvent() {}
 func (RunStateEvent) runEvent()   {}
 
 // Adapter wires run lifecycle events to the two Rex surfaces: OSC 7501
-// status badges on the writer (lambe's terminal) and labeled sessions for
-// supervised agents. When Rex is unavailable it degrades to a no-op.
+// status badges on the writer (lambe's terminal) and one reused Rex session
+// per supervised agent. Sessions are never closed: they are cheap, named by
+// agent, and found again by name after a daemon restart. When Rex is unavailable it degrades to a no-op.
 type Adapter struct {
 	mu sync.Mutex
 
@@ -42,7 +44,7 @@ type Adapter struct {
 	client Client
 	// out receives OSC 7501 escape sequences.
 	out io.Writer
-	// sessions records created sessions keyed by agent name.
+	// sessions records the session in use for each agent name.
 	sessions map[string]Session
 }
 
@@ -75,14 +77,30 @@ func (a *Adapter) Handle(ctx context.Context, ev RunEvent) error {
 	}
 }
 
-// startRun creates a labeled Rex session for the agent run.
+// sessionPrefix namespaces lambe's sessions so a user's own session that
+// shares an agent's name is never adopted.
+const sessionPrefix = "lambe-"
+
+// startRun makes sure the agent has a Rex session: the one already in use,
+// else one found by name (made by an earlier daemon), else a new one.
 func (a *Adapter) startRun(ctx context.Context, ev RunStartedEvent) error {
+	if _, ok := a.sessions[ev.Agent]; ok {
+		return nil
+	}
+	name := sessionPrefix + ev.Agent
+	existing, err := a.client.ListSessions(ctx)
+	if err != nil {
+		return fmt.Errorf("rex sessions for agent %s: %w", ev.Agent, err)
+	}
+	for _, s := range existing {
+		if s.Name == name {
+			a.sessions[ev.Agent] = s
+			return nil
+		}
+	}
 	s, err := a.client.CreateSession(ctx, SessionRequest{
-		Name: ev.Agent,
-		Labels: map[string]string{
-			"surface": "lambe",
-			"agent":   ev.Agent,
-		},
+		Name:   name,
+		Labels: map[string]string{"surface": "lambe", "agent": ev.Agent},
 	})
 	if err != nil {
 		return fmt.Errorf("rex session for agent %s: %w", ev.Agent, err)
