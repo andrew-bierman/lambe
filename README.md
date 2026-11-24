@@ -190,9 +190,14 @@ the state directory and descriptors are).
 | | |
 | --- | --- |
 | [Operations guide](docs/OPERATIONS.md) | Run a disposable task, day-to-day operation |
-| [Reference](docs/REFERENCE.md) | Configuration, harnesses, workflows, restart behavior |
-| [Architecture](docs/ARCHITECTURE.md) | How the supervisor loop is built |
+| [Reference](docs/REFERENCE.md) | CLI exit codes and completions, harnesses, workflows, restart behavior |
+| [Configuration reference](docs/reference/config.md) | Every config key, default and environment variable (generated) |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Symptoms, causes and fixes; start with `lambe doctor` |
+| [Glossary](docs/GLOSSARY.md) | Symphony, Beads, gates, attempts, claims, leases, workflows |
+| [Upgrading](docs/UPGRADING.md) | What to do on each upgrade and what changed |
+| [Architecture](docs/ARCHITECTURE.md) | Contributor overview: package map and design decisions |
 | [State API](docs/api/state-api.md) | The versioned local JSON contract |
+| [Multiple machines](docs/MULTI-MACHINE.md) | Sharing one tracker across hosts |
 | [Releasing](docs/RELEASING.md) | How releases are cut and versioned |
 | [Changelog](CHANGELOG.md) | Release notes |
 
