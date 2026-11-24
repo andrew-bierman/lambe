@@ -10,8 +10,14 @@ updates:
       prefix: "⬆️ deps"
     labels: [dependencies]
     groups:
+      # The ACP SDK is its own group: it is pre-1.0 and jumps break the build
+      # (0.13 -> 0.20 changed its API), so it is upgraded deliberately and must
+      # not hold back the routine bumps below.
+      acp-sdk:
+        patterns: ["github.com/coder/acp-go-sdk"]
       go-dependencies:
         patterns: ["*"]
+        exclude-patterns: ["github.com/coder/acp-go-sdk"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
