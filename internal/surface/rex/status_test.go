@@ -119,3 +119,70 @@ func TestStatusMessageLimitsAndControls(t *testing.T) {
 		t.Fatalf("invalid status payload: size=%d err=%v", len(text), err)
 	}
 }
+
+func TestEmitPerRunRecordAndKind(t *testing.T) {
+	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+	tests := []struct {
+		name string
+		r    Report
+		want string
+	}{
+		{
+			name: "blocked gate escalation has permission kind and a run id",
+			r:    Report{Status: StatusWaitingOnUser, Block: BlockGateEscalated, ID: "lambe-ac1", Title: "lambe-ac1", Msg: "gate escalation"},
+			want: "\x1b]7501;state=blocked:kind=permission:id=lambe/lambe-ac1:app=lambe:msg=" + b64("gate escalation") + ":title=" + b64("lambe-ac1") + "\x1b\\",
+		},
+		{
+			name: "needs-human and stalled both ask a question",
+			r:    Report{Status: StatusWaitingOnUser, Block: BlockStalled, ID: "x", Msg: "m"},
+			want: "\x1b]7501;state=blocked:kind=question:id=lambe/x:app=lambe:msg=" + b64("m") + "\x1b\\",
+		},
+		{
+			name: "kind is only for blocked",
+			r:    Report{Status: StatusWorking, Block: BlockNeedsHuman, ID: "x", Msg: "m"},
+			want: "\x1b]7501;state=working:id=lambe/x:app=lambe:msg=" + b64("m") + "\x1b\\",
+		},
+		{
+			name: "illegal id bytes are replaced and the segment is capped at 32",
+			r:    Report{Status: StatusIdle, ID: "a b/c:d;" + strings.Repeat("z", 40), Msg: ""},
+			want: "\x1b]7501;state=idle:id=lambe/a-b-c-d-" + strings.Repeat("z", 24) + ":app=lambe:msg=\x1b\\",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := Emit(&buf, tt.r); err != nil {
+				t.Fatal(err)
+			}
+			if buf.String() != tt.want {
+				t.Errorf("emitted %q\nwant    %q", buf.String(), tt.want)
+			}
+		})
+	}
+}
+
+func TestClear(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Clear(&buf, "ac-1"); err != nil {
+		t.Fatal(err)
+	}
+	if want := "\x1b]7501;state=clear:id=lambe/ac-1\x1b\\"; buf.String() != want {
+		t.Errorf("run clear = %q, want %q", buf.String(), want)
+	}
+	buf.Reset()
+	if err := Clear(&buf, ""); err != nil {
+		t.Fatal(err)
+	}
+	if want := "\x1b]7501;state=clear:id=lambe\x1b\\"; buf.String() != want {
+		t.Errorf("clear all = %q, want %q", buf.String(), want)
+	}
+}
+
+func TestMapRunStateBlockedAndFailed(t *testing.T) {
+	if got := MapRunState(RunStateBlocked); got != StatusWaitingOnUser {
+		t.Errorf("blocked = %v", got)
+	}
+	if got := MapRunState(RunStateFailed); got != StatusFailed {
+		t.Errorf("failed = %v", got)
+	}
+}

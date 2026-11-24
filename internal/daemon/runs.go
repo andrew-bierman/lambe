@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -63,7 +64,17 @@ type RunRegistry struct {
 	order   []string
 	surface *rex.Adapter
 	log     *slog.Logger
+	// phases is the last loop phase seen per issue, so a repeated phase
+	// does not repeat its badge.
+	phases map[string]string
+	// effects queues Rex effects so badges apply in transition order; one
+	// drain goroutine runs while the queue is not empty.
+	effects  []func()
+	draining bool
 }
+
+// maxEffects bounds the queued Rex effects.
+const maxEffects = 256
 
 // NewRunRegistry returns an empty registry. surface, when non-nil, receives
 // run lifecycle events; log receives surface errors.
@@ -71,7 +82,7 @@ func NewRunRegistry(surface *rex.Adapter, log *slog.Logger) *RunRegistry {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &RunRegistry{runs: map[string]*Run{}, surface: surface, log: log}
+	return &RunRegistry{runs: map[string]*Run{}, surface: surface, log: log, phases: map[string]string{}}
 }
 
 // SetSurface attaches (or replaces) the Rex surface after assembly; events
@@ -264,34 +275,132 @@ func (r *RunRegistry) TerminateGroup(handle string, grace time.Duration) error {
 	return proc.TerminateGroup(ctx, run.PGID, grace)
 }
 
-// emit feeds one state transition to the Rex surface. Rex effects are
-// cosmetic: they run on a background goroutine with their own timeout and
-// their failures are logged, never propagated.
+// emit feeds one state transition to the Rex surface.
 func (r *RunRegistry) emit(handle, agent string, state mcp.RunState) {
 	r.mu.RLock()
-	adapter, log := r.surface, r.log
+	adapter := r.surface
 	r.mu.RUnlock()
 	if adapter == nil {
 		return
 	}
-	ev := rex.RunStateEvent{State: rexRunState(state)}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+	ev := rex.RunStateEvent{State: rexRunState(state), RunID: handle, Msg: handle + ": " + state.String()}
+	r.effect("state badge", handle, func(ctx context.Context) error {
 		if agent != "" && state == mcp.StateRunning {
 			if err := adapter.Handle(ctx, rex.RunStartedEvent{Agent: agent}); err != nil {
-				log.Warn("rex surface: run started", "run", handle, "error", err)
+				return err
 			}
 		}
-		if err := adapter.Handle(ctx, ev); err != nil {
-			log.Warn("rex surface: state badge", "run", handle, "error", err)
+		return adapter.Handle(ctx, ev)
+	})
+}
+
+// effect queues one Rex effect. Rex effects are cosmetic: one worker runs
+// them in order, each with its own timeout, and failures are logged, never
+// propagated. A full queue drops the effect rather than slowing the loop.
+func (r *RunRegistry) effect(what, handle string, do func(context.Context) error) {
+	r.mu.Lock()
+	log := r.log
+	if len(r.effects) >= maxEffects {
+		r.mu.Unlock()
+		log.Warn("rex surface: queue full, dropped "+what, "run", handle)
+		return
+	}
+	r.effects = append(r.effects, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := do(ctx); err != nil {
+			log.Warn("rex surface: "+what, "run", handle, "error", err)
+		}
+	})
+	start := !r.draining
+	r.draining = true
+	r.mu.Unlock()
+	if !start {
+		return
+	}
+	go func() {
+		for {
+			r.mu.Lock()
+			if len(r.effects) == 0 {
+				r.draining = false
+				r.mu.Unlock()
+				return
+			}
+			f := r.effects[0]
+			r.effects = r.effects[1:]
+			r.mu.Unlock()
+			f()
 		}
 	}()
 }
 
+// ObservePhase maps the supervisor loop's phase for an issue to its Rex
+// badge. Repeated phases are ignored.
+func (r *RunRegistry) ObservePhase(issueID, phase string) {
+	r.mu.Lock()
+	adapter := r.surface
+	same := r.phases[issueID] == phase
+	r.phases[issueID] = phase
+	r.mu.Unlock()
+	if adapter == nil || same {
+		return
+	}
+	ev, ok := rexEventForPhase(issueID, phase)
+	if !ok {
+		return
+	}
+	r.effect("phase badge", issueID, func(ctx context.Context) error { return adapter.Handle(ctx, ev) })
+}
+
+// ClearSurface removes every lambe badge record, for daemon shutdown. It
+// waits for queued badges first so the clear is the last word.
+func (r *RunRegistry) ClearSurface() {
+	r.mu.RLock()
+	adapter := r.surface
+	r.mu.RUnlock()
+	if adapter == nil {
+		return
+	}
+	done := make(chan struct{})
+	r.effect("clear", "", func(ctx context.Context) error {
+		defer close(done)
+		return adapter.Handle(ctx, rex.RunClearedEvent{})
+	})
+	select {
+	case <-done:
+	case <-time.After(6 * time.Second):
+	}
+}
+
+// rexEventForPhase maps a loop phase to a badge. Phases that need a human
+// become blocked (escalated gate, interrupted attempt) or error (red gate);
+// stopped phases otherwise read as done. The stalled reason (rex.BlockStalled)
+// has no phase of its own and needs a stall signal this registry lacks.
+func rexEventForPhase(issue, phase string) (rex.RunStateEvent, bool) {
+	ev := rex.RunStateEvent{RunID: issue}
+	switch phase {
+	case "":
+		return ev, false
+	case "stopped: gate escalation":
+		ev.State, ev.Block, ev.Msg = rex.RunStateBlocked, rex.BlockGateEscalated, issue+": gate escalation, needs a human"
+	case "interrupted":
+		ev.State, ev.Block, ev.Msg = rex.RunStateBlocked, rex.BlockNeedsHuman, issue+": interrupted, needs a human"
+	case "stopped: gate red":
+		ev.State, ev.Msg = rex.RunStateFailed, issue+": gate failed"
+	case "retry", "deferred":
+		ev.State, ev.Msg = rex.RunStateDeferred, issue+": waiting to retry"
+	default:
+		if strings.HasPrefix(phase, "stopped:") {
+			ev.State, ev.Msg = rex.RunStateSettled, issue+": "+strings.TrimPrefix(phase, "stopped: ")
+		} else {
+			ev.State, ev.Msg = rex.RunStateRunning, issue+": "+phase
+		}
+	}
+	return ev, true
+}
+
 // rexRunState maps a daemon run state to the badge-facing Rex run state.
-// The mapping is lossy: Rex has no pending, failed, or canceled badge, and
-// those states show as idle.
+// Pending and canceled show as idle; Rex has no badge for them.
 func rexRunState(s mcp.RunState) rex.RunState {
 	switch s {
 	case mcp.StateRunning:
@@ -300,6 +409,8 @@ func rexRunState(s mcp.RunState) rex.RunState {
 		return rex.RunStateDeferred
 	case mcp.StateSettled:
 		return rex.RunStateSettled
+	case mcp.StateFailed:
+		return rex.RunStateFailed
 	default:
 		return rex.RunStateIdle
 	}
