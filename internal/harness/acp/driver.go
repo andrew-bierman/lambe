@@ -32,6 +32,7 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -466,13 +467,10 @@ func (d *Driver) handleUpdate(n acpsdk.SessionNotification) {
 		d.observeToolCall(u.ToolCall.ToolCallId, u.ToolCall.Title, u.ToolCall.Status)
 	case u.ToolCallUpdate != nil:
 		d.flushMessage()
-		title := ""
-		if u.ToolCallUpdate.Title != nil {
-			title = *u.ToolCallUpdate.Title
-		}
-		status := acpsdk.ToolCallStatusPending
-		if u.ToolCallUpdate.Status != nil {
-			status = *u.ToolCallUpdate.Status
+		title, _ := u.ToolCallUpdate.Title.Value()
+		status, ok := u.ToolCallUpdate.Status.Value()
+		if !ok {
+			status = acpsdk.ToolCallStatusPending
 		}
 		d.observeToolCall(u.ToolCallUpdate.ToolCallId, title, status)
 	case u.UsageUpdate != nil:
@@ -626,9 +624,13 @@ func isPromptCancellation(err error) bool {
 	if rpc.Code == -32800 { // Request cancelled.
 		return true
 	}
-	data, _ := rpc.Data.(map[string]any)
-	reason, _ := data["error"].(string)
-	return rpc.Code == -32603 && reason == context.Canceled.Error()
+	var data struct {
+		Error string `json:"error"`
+	}
+	if len(rpc.Data) > 0 {
+		_ = json.Unmarshal(rpc.Data, &data) // non-object data: no reason, same as before
+	}
+	return rpc.Code == -32603 && data.Error == context.Canceled.Error()
 }
 
 // observeUsage folds an optional per-turn usage report into the cumulative
