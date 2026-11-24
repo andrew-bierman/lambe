@@ -87,6 +87,8 @@ func TestRequestPermissionAlwaysDenies(t *testing.T) {
 		{"only allow options", []acpsdk.PermissionOption{opt("a1", acpsdk.PermissionOptionKindAllowOnce), opt("a2", acpsdk.PermissionOptionKindAllowAlways)}, ""},
 		{"reject once", []acpsdk.PermissionOption{opt("a1", acpsdk.PermissionOptionKindAllowOnce), opt("r1", acpsdk.PermissionOptionKindRejectOnce)}, "r1"},
 		{"reject always", []acpsdk.PermissionOption{opt("r2", acpsdk.PermissionOptionKindRejectAlways), opt("a1", acpsdk.PermissionOptionKindAllowOnce)}, "r2"},
+		{"reject once listed before reject always", []acpsdk.PermissionOption{opt("r1", acpsdk.PermissionOptionKindRejectOnce), opt("r2", acpsdk.PermissionOptionKindRejectAlways)}, "r2"},
+		{"reject always listed before reject once", []acpsdk.PermissionOption{opt("r2", acpsdk.PermissionOptionKindRejectAlways), opt("r1", acpsdk.PermissionOptionKindRejectOnce)}, "r2"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
