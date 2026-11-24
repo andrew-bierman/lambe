@@ -4,6 +4,7 @@ package logging
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"strings"
@@ -59,10 +60,10 @@ func TestDefaultLoggerLevels(t *testing.T) {
 	if log == nil {
 		t.Fatal("Default() returned nil")
 	}
-	if !log.Enabled(nil, slog.LevelInfo) {
+	if !log.Enabled(context.Background(), slog.LevelInfo) {
 		t.Error("Default() should enable info")
 	}
-	if log.Enabled(nil, slog.LevelDebug) {
+	if log.Enabled(context.Background(), slog.LevelDebug) {
 		t.Error("Default() should disable debug")
 	}
 }
