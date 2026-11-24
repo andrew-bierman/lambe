@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("\xef\xbb\xbf[gate]\x0d\x0atype = \"shell\"\x0d\x0acommand = \"x\"\x0d\x0a")

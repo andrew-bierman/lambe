@@ -1,0 +1,5 @@
+go test fuzz v1
+[]byte("harness: pi\x0a")
+string("LAMBE_A_B_C=1\x0aLAMBE_=2\x0aLAMBE_HARNESS=acp\x0anoequals\x0a=x")
+string("supervisor.tick_seconds")
+string("-1")

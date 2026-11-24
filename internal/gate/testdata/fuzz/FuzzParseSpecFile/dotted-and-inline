@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("gate = {type = \"gh:pr\", pr = \"1\"}\x0a")

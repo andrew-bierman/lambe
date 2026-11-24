@@ -1,0 +1,5 @@
+go test fuzz v1
+[]byte("supervisor:\x0a  tick_seconds: 3\x0a")
+string("")
+string("..a...")
+string("v")

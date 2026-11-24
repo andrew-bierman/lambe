@@ -1,0 +1,4 @@
+go test fuzz v1
+int(-32603)
+[]byte("{\"details\":\"\x00\xff\"}")
+string("\xff")

@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("---\x0amax_turns: 1\x0amax_turns: 2\x0a...\x0abody")

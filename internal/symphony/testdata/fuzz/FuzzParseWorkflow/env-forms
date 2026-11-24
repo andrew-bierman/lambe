@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("---\x0ahooks:\x0a  after_run: \"${FUZZ_SET:-x} $FUZZ_SET ${} $ ${A B} ${UNSET}\"\x0a---\x0a")

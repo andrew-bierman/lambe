@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"schema_version\":1,\"instance\":\"\x00\xff\",\"bearer_token\":\"t\",\"addr\":\"127.0.0.1:1\"}")
