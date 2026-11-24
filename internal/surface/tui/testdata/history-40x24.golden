@@ -4,8 +4,8 @@
    ID      TITLE                     AGE
 ▌✘ demo-45 Validate the migration     2m
  ✔ demo-46 Check upgrade instruc…     5m
- ↻ demo-44 Retry the install smo…
- ✔ demo-41 Publish the chang… ×3    20m
+ ↻ demo-44 Retry the install smo…    15m
+ ✔ demo-41 Publish the change… ×3    20m
  ◌ demo-39 Close the stale branch     3h
 
 

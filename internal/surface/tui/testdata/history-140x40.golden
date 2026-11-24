@@ -1,12 +1,12 @@
  lambe   ● running  demo  ⚠ 1 stalled  2 active · 1 waiting                                                                updated 12:00:00
  1 Queue 7 │ 2 Attention 3 │ 3 History 5
 ────────────────────────────━━━━━━━━━━━━━───────────────────────────────────────────────────────────────────────────────────────────────────
-   ID      TITLE                                                   PHASE        AGE│ demo-45  ✘ escalated
-▌✘ demo-45 Validate the migration                                  escalated     2m│ Validate the migration
- ✔ demo-46 Check upgrade instructions                              passed        5m│ attempt 3 · turn 0
- ↻ demo-44 Retry the install smoke test                            retry           │ ── Agent output ──────────────────────────────────────
- ✔ demo-41 Publish the changelog                               ×3 passed       20m │ Gate failed: migration snapshot differs from expected
- ◌ demo-39 Close the stale branch                                  closed        3h│ output.
+   ID      TITLE                                                 PHASE          AGE│ demo-45  ✘ escalated
+▌✘ demo-45 Validate the migration                                escalated       2m│ Validate the migration
+ ✔ demo-46 Check upgrade instructions                            passed          5m│ attempt 3 · turn 0
+ ↻ demo-44 Retry the install smoke test                          retry          15m│ ── Agent output ──────────────────────────────────────
+ ✔ demo-41 Publish the changelog                              ×3 passed         20m│ Gate failed: migration snapshot differs from expected
+ ◌ demo-39 Close the stale branch                                closed          3h│ output.
                                                                                    │
                                                                                    │
                                                                                    │

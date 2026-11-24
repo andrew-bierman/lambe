@@ -27,7 +27,7 @@ var (
 
 // Table columns. The title column takes whatever the fixed columns leave.
 const (
-	phaseColWidth = 9
+	phaseColWidth = 11 // fits "interrupted"
 	ageColWidth   = 6
 	phaseColMin   = 58 // narrower tables drop the phase column and rely on the glyph
 )
@@ -80,6 +80,10 @@ func ageText(d time.Duration) string {
 func (i runItem) rowAge(now time.Time) string {
 	run := i.run
 	switch {
+	case i.attempts > 0 && !run.UpdatedAt.IsZero():
+		// History rows (only they carry an attempt count) are archived: show
+		// time since the attempt ended, never a retry countdown.
+		return ageText(now.Sub(run.UpdatedAt))
 	case !run.WakeAt.IsZero() && i.live: // a dead daemon will not wake it
 		return "in " + ageText(run.WakeAt.Sub(now))
 	case run.Phase == "ready" || run.Phase == "blocked":
@@ -181,8 +185,8 @@ func (m *Model) renderRow(item runItem, c tableCols, selected bool, now time.Tim
 		age, ageStyle = ageText(stalledFor(item.run, true, now)), redStyle
 	}
 	titleCell := m.cell(title, c.title, false, st(titleStyle), fTitle)
-	if suffix := fmt.Sprintf(" ×%d", item.attempts); item.attempts > 1 && c.title > len(suffix)+8 {
-		titleCell = m.cell(title, c.title-len(suffix), false, st(titleStyle), fTitle) + st(dimStyle).Render(suffix)
+	if suffix := fmt.Sprintf(" ×%d", item.attempts); item.attempts > 1 && c.title > lipgloss.Width(suffix)+8 {
+		titleCell = m.cell(title, c.title-lipgloss.Width(suffix), false, st(titleStyle), fTitle) + st(dimStyle).Render(suffix)
 	}
 	parts := []string{
 		marker + st(phaseStyle).Render(icon) + st(lipgloss.NewStyle()).Render(" "),
