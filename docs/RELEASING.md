@@ -130,8 +130,7 @@ remove in a later minor release and list it under "Removed".
 ## Verifying a release
 
 Every artifact (archives, `.deb`/`.rpm`/`.apk`, SBOMs, `checksums.txt`) has a
-keyless cosign bundle named `<file>.sigstore.json` next to it (signed from
-v0.12.0; v0.10.1 to v0.11.x signed only `checksums.txt`). Verify a single file:
+keyless cosign bundle named `<file>.sigstore.json` next to it (releases after v0.11.1; v0.10.1 to v0.11.1 signed only `checksums.txt`). Verify a single file:
 
 ```sh
 cosign verify-blob lambe_X.Y.Z_linux_amd64.deb \
