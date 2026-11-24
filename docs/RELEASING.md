@@ -71,7 +71,7 @@ remove in a later minor release and list it under "Removed".
 3. **CLI release.** Pushing the tag runs `.github/workflows/release.yml`:
    goreleaser builds linux/darwin x amd64/arm64 archives, `.deb`/`.rpm`/`.apk`
    packages (nfpms), an SBOM per archive (syft), `checksums.txt` with a keyless
-   cosign bundle per artifact (`<file>.sigstore.json`, including `checksums.txt`), pushes the Homebrew formula
+   cosign bundle per artifact (`<file>.sigstore.json`, including `checksums.txt`), pushes the Homebrew cask
    to `andrew-bierman/homebrew-tap`, and publishes the GitHub release using the
    CHANGELOG section as notes. The workflow then attests build provenance for
    everything in `checksums.txt`.
@@ -175,11 +175,25 @@ checked the same way: build the tag's commit and compare against
 
 ## Homebrew
 
-`brew install andrew-bierman/tap/lambe` installs the formula that goreleaser
-pushes to `andrew-bierman/homebrew-tap` on every release (it depends on the
-`beads` formula for `bd`). goreleaser marks `brews` deprecated in favor of
-`homebrew_casks`, but a cask would drop Linux support and, for an unsigned
-binary, need a quarantine-stripping hook; the formula stays until that breaks.
+`brew install andrew-bierman/tap/lambe` installs the cask that goreleaser
+(`homebrew_casks`) pushes to `Casks/lambe.rb` in `andrew-bierman/homebrew-tap`
+on every release; it depends on the `beads` formula for `bd`. goreleaser
+deprecated `brews` (formulas) in v2.10/v2.16; the replacement is a cask, and
+current Homebrew supports casks with `binary` artifacts on Linux as well as
+macOS, so Linuxbrew users keep working. The generated cask has
+`on_macos`/`on_linux` x arm/intel URL blocks, installs the shell completions,
+and on macOS removes the quarantine attribute from the unsigned binary in a
+post-install step. `goreleaser check` passes with no deprecation warnings.
+
+Verified (v0.11.1 checksums in a scratch tap, never the real one):
+`brew audit --cask --strict --online` exits 0. `brew style` reports only
+formatting of goreleaser's generated `depends_on` block.
+
+**One-time migration, before tagging the first cask release.** Delete
+`Formula/lambe.rb` from the tap (`git rm Formula/lambe.rb` in
+`andrew-bierman/homebrew-tap`, push to `main`). Otherwise Homebrew keeps
+resolving `lambe` to the old, stale formula. Users who installed the formula
+run `brew uninstall lambe && brew install --cask andrew-bierman/tap/lambe`.
 
 **No LambeDash cask.** `LambeDash.app` is ad-hoc signed and not notarized.
 Homebrew rejects casks that fail Gatekeeper, so a cask would be broken or need

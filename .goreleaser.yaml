@@ -100,13 +100,17 @@ nfpms:
         file_info:
           mode: 0644
 
-# Needs the HOMEBREW_TAP_DEPLOY_KEY secret (write deploy key on the tap).
-brews:
+# Homebrew cask (goreleaser's non-deprecated replacement for `brews`). Casks
+# support `binary` artifacts on macOS and Linux, and the generated cask has
+# on_macos/on_linux x arm/intel blocks. Needs the HOMEBREW_TAP_DEPLOY_KEY secret
+# (write deploy key on the tap). The old Formula/lambe.rb must be deleted from the
+# tap first; see docs/RELEASING.md "Homebrew".
+homebrew_casks:
   - name: lambe
-    directory: Formula
+    directory: Casks
     ids: [lambe]
     homepage: https://github.com/andrew-bierman/lambe
-    description: Supervisor that runs coding agents against a Beads tracker and verifies completion
+    description: Supervisor that runs coding agents against a Beads tracker
     license: GPL-3.0-or-later
     repository:
       owner: andrew-bierman
@@ -120,13 +124,19 @@ brews:
       email: 94939237+andrew-bierman@users.noreply.github.com
     commit_msg_template: "🔖 lambe {{ .Tag }}"
     dependencies:
-      - beads
-    extra_install: |
-      bash_completion.install "completions/lambe.bash" => "lambe"
-      zsh_completion.install "completions/lambe.zsh" => "_lambe"
-      fish_completion.install "completions/lambe.fish"
-    test: |
-      assert_match version.to_s, shell_output("#{bin}/lambe version")
+      - formula: beads
+    hooks:
+      post:
+        # The binary is unsigned (not notarized): without this Gatekeeper reports
+        # it "damaged" when a quarantined download is first run on macOS.
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/lambe"]
+          end
+    completions:
+      bash: completions/lambe.bash
+      zsh: completions/lambe.zsh
+      fish: completions/lambe.fish
     caveats: |
       lambe drives the Beads tracker through its `bd` binary (formula: beads).
       Next: lambe init && lambe doctor && lambe service install
