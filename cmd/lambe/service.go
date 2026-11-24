@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -307,7 +308,8 @@ func runService(args []string, e sysEnv, out io.Writer) error {
 	// A --root install is a sandbox: touching the real service manager
 	// from there would load a unit that lives elsewhere.
 	live := *root == ""
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 
 	switch args[0] {
 	case "install":

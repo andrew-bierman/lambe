@@ -78,6 +78,9 @@ type Report struct {
 	// Orphaned lists recovered claims with no continuation state that the
 	// daemon keeps (or kept) heartbeating; see `lambe claims`.
 	Orphaned []symphony.OrphanClaim
+	// OrphanedError is why the orphan scan failed; empty when it ran. A
+	// non-empty value means Orphaned is unknown, not empty.
+	OrphanedError string
 	// AttemptsUnreadable is set when the attempt records could not be read, so
 	// attempt numbers and wake timers are unknown rather than zero.
 	AttemptsUnreadable bool
@@ -275,6 +278,11 @@ func RenderReport(w io.Writer, rep Report) error {
 		}
 	}
 
+	if rep.OrphanedError != "" {
+		if err := reportf(w, "orphaned claims: unavailable (%s)", rep.OrphanedError); err != nil {
+			return err
+		}
+	}
 	if err := renderOrphans(w, rep.Orphaned); err != nil {
 		return err
 	}
@@ -325,8 +333,12 @@ func readReport(cfg *config.Config, machine string) (Report, error) {
 	if err != nil {
 		return rep, err
 	}
-	// A failed checkpoint scan only hides the section; the report stands.
-	rep.Orphaned, _ = ListOrphanClaims(context.Background(), local, DefaultStateDir(), cfg)
+	// A failed orphan scan must not pass for "none": record it and let the
+	// report stand.
+	var oerr error
+	if rep.Orphaned, oerr = ListOrphanClaims(context.Background(), local, DefaultStateDir(), cfg); oerr != nil {
+		rep.OrphanedError = oerr.Error()
+	}
 	// A failed read leaves the section "unavailable" rather than "none".
 	if recs, err := ReadGateRejections(GateRejectionLogPath(DefaultStateDir(), cfg), time.Now().Add(-GateRejectionWindow)); err == nil {
 		rep.GateRejectionsKnown = true

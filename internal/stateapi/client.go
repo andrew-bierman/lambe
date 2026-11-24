@@ -157,6 +157,7 @@ type TransportError struct {
 	Err error
 }
 
+// Error describes the failed route and its underlying cause.
 func (e *TransportError) Error() string {
 	return "stateapi: " + e.Route + ": " + e.Err.Error()
 }
@@ -176,6 +177,7 @@ type StatusError struct {
 	Envelope httpstate.ErrorResponse
 }
 
+// Error reports the envelope message and HTTP status code.
 func (e *StatusError) Error() string {
 	return fmt.Sprintf("stateapi: %s: status %d", e.Envelope.Error, e.Code)
 }
@@ -188,6 +190,7 @@ type DecodeError struct {
 	Err error
 }
 
+// Error reports the route whose body failed to decode.
 func (e *DecodeError) Error() string {
 	return "stateapi: " + e.Route + ": decode response: " + e.Err.Error()
 }
@@ -202,6 +205,7 @@ type AmbiguityError struct {
 	Instances []string
 }
 
+// Error lists the ambiguous instance names after ErrAmbiguous.
 func (e *AmbiguityError) Error() string {
 	return ErrAmbiguous.Error() + ": " + fmt.Sprint(e.Instances)
 }

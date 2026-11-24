@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"text/tabwriter"
 	"time"
 
@@ -44,7 +46,8 @@ func runClaims(args []string, out io.Writer) error {
 		return fmt.Errorf("open tracker %s: %w", cfg.Trackers[0].Name, err)
 	}
 	stateDir := daemon.DefaultStateDir()
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 	if sub == "release" {
 		if err := daemon.ReleaseOrphanClaim(ctx, local, stateDir, cfg, fs.Arg(0), *force); err != nil {
 			return err
