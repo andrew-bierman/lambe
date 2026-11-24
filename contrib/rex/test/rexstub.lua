@@ -132,6 +132,10 @@ function M.install(profile_name)
     queued = {},
     faults = {}, -- method name -> error string, makes that call return nil, err
     calls = {}, -- rex.call methods seen
+    other_sessions = {}, -- {session_id, label, windows = view windows} on the same server
+    attached = {}, -- sessions the connection is attached to
+    remote_focused = {}, -- session/window pairs focused through rex.call
+    splits = {}, -- new_split arguments received
   }
   local counter = 0
   local function next_id(prefix) counter = counter + 1 return prefix .. ":" .. counter end
@@ -177,6 +181,27 @@ function M.install(profile_name)
     if err then return nil, err end
     if method == "server.version" then
       return { api_revision = profile.api_revision, api_min_revision = 1 }
+    elseif method == "session.list" then
+      local sessions = { { session_id = "session:1", label = "Current" } }
+      for _, other in ipairs(ctl.other_sessions) do sessions[#sessions + 1] = { session_id = other.session_id, label = other.label } end
+      return { sessions = sessions }
+    elseif method == "session.attach" then
+      for _, other in ipairs(ctl.other_sessions) do
+        if other.session_id == (args or {}).session_id then
+          ctl.attached[other.session_id] = true
+          return { view = { windows = other.windows }, client_id = "client:1" }
+        end
+      end
+      return nil, "no such session"
+    elseif method == "session.detach" then
+      ctl.attached[(args or {}).session_id] = nil
+      return {}
+    elseif method == "session.focus_window" then
+      local id = (args or {}).session_id
+      -- A real server refuses calls into a session the connection is not attached to.
+      if id ~= "session:1" and not ctl.attached[id] then return nil, "stream is not attached to session " .. tostring(id) end
+      ctl.remote_focused[#ctl.remote_focused + 1] = id .. "/" .. (args or {}).window_id
+      return {}
     end
     return nil, "unknown method " .. method
   end
@@ -194,6 +219,9 @@ function M.install(profile_name)
         for _, part in ipairs(opts.command) do
           if type(part) ~= "string" then fail("terminal command parts must be strings") end
         end
+      end
+      if opts.exit ~= nil and (type(opts.exit) ~= "table" or type(opts.exit.on_completion) ~= "boolean") then
+        fail("terminal exit must be { on_completion = boolean }")
       end
       return { flavor = spec.flavor, label = spec.label, options = opts }
     end,
@@ -248,6 +276,48 @@ function M.install(profile_name)
         windows[#windows + 1] = { window_id = w.window_id, label = w.label, layers = { { blocks = blocks } } }
       end
       return { windows = windows }
+    end,
+    new_split = function(args)
+      local nilv, err = faulty("new_split")
+      if err then return nilv, err end
+      check_keys("new_split", args, set({ "anchor_id", "direction", "side", "ratio", "layout", "focus", "window_id" }))
+      if args.direction ~= "horizontal" and args.direction ~= "vertical" then fail("new_split direction must be horizontal or vertical") end
+      if args.side ~= "before" and args.side ~= "after" then fail("new_split side must be before or after") end
+      if args.ratio ~= nil and not (type(args.ratio) == "number" and args.ratio > 0 and args.ratio < 1) then fail("new_split ratio must be between 0 and 1") end
+      if type(args.layout) ~= "table" or type(args.layout.flavor) ~= "string" then fail("new_split layout must come from rex.layout.block") end
+      local target
+      if args.anchor_id ~= nil then
+        for _, w in ipairs(ctl.windows) do
+          for _, b in ipairs(w.blocks) do if b.block_id == args.anchor_id then target = w end end
+        end
+        if not target then return nil, "no such anchor" end
+      else
+        target = ctl.windows[#ctl.windows]
+        if not target then return nil, "no active window" end
+      end
+      local block = { block_id = next_id("block"), label = args.layout.label or "", layout = args.layout }
+      target.blocks[#target.blocks + 1] = block
+      ctl.splits[#ctl.splits + 1] = args
+      return { block_ids = { block.block_id }, split_ids = { next_id("split") }, anchor_id = args.anchor_id }
+    end,
+    list_blocks = function(args)
+      if type(args) ~= "table" then fail("list_blocks takes a table") end
+      local blocks = {}
+      for _, w in ipairs(ctl.windows) do
+        for _, b in ipairs(w.blocks) do
+          blocks[#blocks + 1] = { block_id = b.block_id, label = b.label, flavor = b.layout.flavor, placement = "placed", window_id = w.window_id }
+        end
+      end
+      return { blocks = blocks }
+    end,
+    focus_block = function(args)
+      if type(args) ~= "table" or type(args.block_id) ~= "string" then fail("focus_block needs block_id") end
+      for _, w in ipairs(ctl.windows) do
+        for _, b in ipairs(w.blocks) do
+          if b.block_id == args.block_id then ctl.focused[#ctl.focused + 1] = args.block_id return {} end
+        end
+      end
+      return nil, "no such block"
     end,
     focus_window = function(args)
       if type(args) ~= "table" or type(args.window_id) ~= "string" then fail("focus_window needs window_id") end

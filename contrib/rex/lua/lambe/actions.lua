@@ -18,19 +18,37 @@ local function open_demo()
   windows.new_terminal_window("Lambe demo", exec.terminal_argv(exec.command({ "tui", "-demo" }, nil, false)))
 end
 
+-- Where run output opens: a tab of its own (default) or a split beside the
+-- block the action ran from. Setting `placement` in lambe.config.lua changes
+-- the default; the `placement` argument overrides it per call.
+local function placement_for(arg)
+  local value = (arg ~= nil and arg ~= "") and arg or exec.setting("placement") or "tab"
+  if value ~= "tab" and value ~= "split" then
+    errors.fail("placement must be `tab` or `split`", value)
+  end
+  return value
+end
+
 -- The window label `Lambe · <issue>` is a contract: the LambeDash app
 -- focuses an existing window with this label before opening a new one.
 -- `snapshot` (optional) supplies the workflow and state for the title; with
 -- none, one is read if possible (best effort), else the title is the issue id.
-local function open_run(issue, config, snapshot)
+-- Returns a message when the run was already open in another session.
+local function open_run(issue, config, snapshot, ctx, placement)
   if snapshot == nil then
     local ok, read = pcall(snapshot_mod.read, config)
     if ok then snapshot = read end
   end
   local title = rows.run_title(snapshot, issue)
+  local command = exec.terminal_argv(exec.command({ "logs", "-issue", issue, "-follow" }, config, true))
+  if placement == "split" then
+    if windows.focus_pane(issue, title) then return end
+    return windows.new_split(ctx and ctx.block_id, command, title)
+  end
   local label = "Lambe · " .. issue
-  if windows.focus_existing(label, title) then return end
-  windows.new_terminal_window(label, exec.terminal_argv(exec.command({ "logs", "-issue", issue, "-follow" }, config, true)), title)
+  local existing, message = windows.focus_existing(label, title, ctx and ctx.session_id)
+  if existing then return message end
+  windows.new_terminal_window(label, command, title, true)
 end
 
 -- Without the picker, say so (log once, return the message every time so
@@ -127,8 +145,9 @@ local function register_all()
     category = "Lambe",
     description = "Search current and archived Lambe runs, then follow the chosen one",
     keywords = "lambe run issue logs history archived live output follow",
-    args = { issue = "string?", config = "string?", workflow = "string?" },
-    run = function(_, args)
+    args = { issue = "string?", config = "string?", workflow = "string?", placement = "string?" },
+    run = function(ctx, args)
+      local placement = placement_for(args.placement)
       local issue = args.issue
       if issue == nil or issue == "" then
         local ok, why = host.picker_support()
@@ -136,9 +155,9 @@ local function register_all()
         local snapshot
         issue, snapshot = choose_run(args.config, args.workflow)
         if issue == nil then return end
-        return open_run(issue, args.config, snapshot)
+        return open_run(issue, args.config, snapshot, ctx, placement)
       end
-      open_run(issue, args.config)
+      return open_run(issue, args.config, nil, ctx, placement)
     end,
   }
 
@@ -148,13 +167,14 @@ local function register_all()
     category = "Lambe",
     description = "List only the runs waiting on a human (gate escalation, failed gates, interrupted, retrying), then follow the chosen one",
     keywords = "lambe needs you attention blocked escalation stuck review human",
-    args = { config = "string?" },
-    run = function(_, args)
+    args = { config = "string?", placement = "string?" },
+    run = function(ctx, args)
+      local placement = placement_for(args.placement)
       local ok, why = host.picker_support()
       if not ok then return without_picker(args.config, why) end
       local issue, snapshot, message = choose_run(args.config, nil, true)
       if issue == nil then return message end
-      return open_run(issue, args.config, snapshot)
+      return open_run(issue, args.config, snapshot, ctx, placement)
     end,
   }
 
@@ -164,8 +184,9 @@ local function register_all()
     category = "Lambe",
     description = "Pick a workflow, then one of its current or archived runs",
     keywords = "lambe workflow switch lane route run logs",
-    args = { config = "string?" },
-    run = function(_, args)
+    args = { config = "string?", placement = "string?" },
+    run = function(ctx, args)
+      local placement = placement_for(args.placement)
       local ok, why = host.picker_support()
       if not ok then return without_picker(args.config, why) end
       local snapshot = snapshot_mod.read(args.config)
@@ -177,7 +198,7 @@ local function register_all()
         if workflow == nil then return end
       end
       local issue, picked = choose_run(args.config, workflow)
-      if issue ~= nil then open_run(issue, args.config, picked) end
+      if issue ~= nil then return open_run(issue, args.config, picked, ctx, placement) end
     end,
   }
 

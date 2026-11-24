@@ -11,6 +11,8 @@ local settings = {}
 
 function M.configure(cfg) settings = cfg or {} end
 
+function M.setting(name) return settings[name] end
+
 -- Returns the first non-empty string argument. select("#") counts nil
 -- arguments, which ipairs would stop at.
 local function first_set(...)
