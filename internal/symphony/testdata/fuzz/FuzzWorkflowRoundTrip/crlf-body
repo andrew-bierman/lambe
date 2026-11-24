@@ -1,0 +1,4 @@
+go test fuzz v1
+string("x")
+string("\x0d\x0a\x0d\x0aline1\x0d\x0aline2\x0d")
+byte(9)

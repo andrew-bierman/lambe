@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"tokens\":{\"input\":1e999,\"output\":-1},\"cost\":1e999}")

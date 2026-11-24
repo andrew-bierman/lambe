@@ -1,0 +1,4 @@
+go test fuzz v1
+string("a: b # c\x0a- d")
+string("body\x0a")
+byte(3)

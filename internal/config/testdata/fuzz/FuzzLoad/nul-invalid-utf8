@@ -1,0 +1,5 @@
+go test fuzz v1
+[]byte("actor: \"a\x00b\xff\"\x0aharness: \"\xfe\"\x0a")
+string("LAMBE_ACTOR=\xff")
+string("")
+string("")

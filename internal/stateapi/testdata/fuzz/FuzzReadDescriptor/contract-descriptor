@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\x0a  \"schema_version\": 1,\x0a  \"instance\": \"lambe-1a2b3c4d5e6f\",\x0a  \"addr\": \"127.0.0.1:53412\",\x0a  \"bearer_token\": \"descriptor-fixture-token-not-a-secret\",\x0a  \"pid\": 4242,\x0a  \"identity\": \"darwin:boot:1:2\",\x0a  \"version\": \"v0.9.0\",\x0a  \"config_path\": \"/Users/operator/lambe/lambe.yaml\",\x0a  \"started_at\": \"2026-11-19T11:30:00Z\"\x0a}\x0a")

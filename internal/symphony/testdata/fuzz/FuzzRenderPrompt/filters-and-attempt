@@ -1,0 +1,5 @@
+go test fuzz v1
+string("{{ issue.title | upper | lower }} {{ attempt | trim }}")
+string("id")
+string("T")
+int(-9223372036854775808)
