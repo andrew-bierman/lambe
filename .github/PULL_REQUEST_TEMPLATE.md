@@ -19,5 +19,5 @@ SPEC.md sections and describe the conformance-relevant behavior change.
 **Checklist**
 - [ ] Commit subjects use gitmoji and a conventional prefix (`✨ feat:`, `🐛 fix:`).
 - [ ] Docs updated (or N/A).
-- [ ] `CHANGELOG.md` updated under Unreleased.
+- [ ] `CHANGELOG.md` updated under Unreleased (user-visible changes only, else N/A).
 - [ ] `gofumpt`, `golangci-lint`, and `staticcheck` pass.
