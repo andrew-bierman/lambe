@@ -14,18 +14,18 @@ require (
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/charmbracelet/x/ansi v0.11.8
+	github.com/charmbracelet/x/ansi v0.11.10
 	github.com/charmbracelet/x/term v0.2.2
-	github.com/coder/acp-go-sdk v0.13.5
-	github.com/fsnotify/fsnotify v1.9.0
+	github.com/coder/acp-go-sdk v0.20.0
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/knadh/koanf/parsers/yaml v1.1.1
 	github.com/knadh/koanf/providers/confmap v1.0.1
 	github.com/knadh/koanf/providers/file v1.2.1
 	github.com/knadh/koanf/v2 v2.4.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/muesli/termenv v0.16.0
-	github.com/sahilm/fuzzy v0.1.1
-	golang.org/x/sys v0.49.0
+	github.com/sahilm/fuzzy v0.1.3
+	golang.org/x/sys v0.50.0
 )
 
 require (
@@ -160,7 +160,7 @@ require (
 	github.com/mattn/go-colorable v0.1.16 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
-	github.com/mattn/go-runewidth v0.0.24 // indirect
+	github.com/mattn/go-runewidth v0.0.27 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/mgechev/revive v1.17.1 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
