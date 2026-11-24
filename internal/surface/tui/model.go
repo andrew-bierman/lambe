@@ -447,8 +447,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.focus == focusDetail {
-		if cmd, handled := m.scrollDetail(msg); handled {
-			return m, cmd
+		if m.scrollDetail(msg) {
+			return m, nil
 		}
 		return m, m.updateFocused(msg)
 	}
@@ -478,28 +478,28 @@ func (m *Model) setFocus(focus focusArea) {
 }
 
 // scrollDetail applies viewport scrolling keys when the detail pane has focus.
-func (m *Model) scrollDetail(msg tea.KeyMsg) (tea.Cmd, bool) {
+func (m *Model) scrollDetail(msg tea.KeyMsg) bool {
 	switch {
 	case key.Matches(msg, m.keys.ScrollUp):
 		m.detail.ScrollUp(1)
-		return nil, true
+		return true
 	case key.Matches(msg, m.keys.ScrollDn):
 		m.detail.ScrollDown(1)
-		return nil, true
+		return true
 	case key.Matches(msg, m.keys.PageUp):
 		m.detail.HalfPageUp()
-		return nil, true
+		return true
 	case key.Matches(msg, m.keys.PageDown):
 		m.detail.HalfPageDown()
-		return nil, true
+		return true
 	case key.Matches(msg, m.keys.GoTop):
 		m.detail.GotoTop()
-		return nil, true
+		return true
 	case key.Matches(msg, m.keys.GoBottom):
 		m.detail.GotoBottom()
-		return nil, true
+		return true
 	}
-	return nil, false
+	return false
 }
 
 func (m *Model) updateFocused(msg tea.Msg) tea.Cmd {

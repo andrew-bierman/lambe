@@ -280,7 +280,11 @@ func (r *harnessRunner) RunTurn(ctx context.Context, req symphony.TurnRequest) (
 		stats, statsErr := sd.drv.SessionStats(ctx)
 		if statsErr != nil || stats.SessionID == "" {
 			r.retire(req.SessionID, sd)
-			return symphony.TurnResult{Exit: symphony.TurnFailure}, fmt.Errorf("%w: backend did not supply its session identity: %v", proc.ErrBindingUnavailable, statsErr)
+			unbound := fmt.Errorf("%w: backend did not supply its session identity", proc.ErrBindingUnavailable)
+			if statsErr != nil {
+				unbound = fmt.Errorf("%w: %w", unbound, statsErr)
+			}
+			return symphony.TurnResult{Exit: symphony.TurnFailure}, unbound
 		}
 		thread = stats.SessionID
 	}

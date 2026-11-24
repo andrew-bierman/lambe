@@ -413,8 +413,9 @@ func sessionRestoreError(err error, sessionID string) error {
 				SessionID string `json:"sessionId"`
 				Details   string `json:"details"`
 			}
-			encoded, _ := json.Marshal(rpcErr.Data)
-			_ = json.Unmarshal(encoded, &data)
+			if encoded, merr := json.Marshal(rpcErr.Data); merr == nil {
+				_ = json.Unmarshal(encoded, &data)
+			}
 			// shortcut: codex-acp 2.6 reports empty rollouts as InternalError; remove that case when it uses resource-not-found.
 			if (rpcErr.Code == -32002 && data.SessionID == sessionID) || (rpcErr.Code == -32603 && data.Details == "no rollout found for thread id "+sessionID) {
 				return fmt.Errorf("%w: %w", ErrSessionNotFound, err)

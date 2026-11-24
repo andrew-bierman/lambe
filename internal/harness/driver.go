@@ -271,6 +271,8 @@ func (o Outcome) RunError() error {
 		if !o.ExitClean {
 			return o.Err
 		}
+	case OutcomeSettled, OutcomeHandled, OutcomeLimitSuspected, OutcomeWatchdogKilled:
+		// Supervision outcomes: values, not errors.
 	}
 	return nil
 }

@@ -121,12 +121,9 @@ func filterRuns(query string, targets []string) []list.Rank {
 
 // cell truncates text to width, pads it and renders it with base, marking the
 // substrings the active filter terms matched.
-func (m *Model) cell(text string, width int, right bool, base lipgloss.Style, field int) string {
+func (m *Model) cell(text string, width int, base lipgloss.Style, field int) string {
 	text = ansi.Truncate(text, width, "…")
 	gap := strings.Repeat(" ", max(0, width-lipgloss.Width(text)))
-	if right {
-		text, gap = "", gap+text
-	}
 	hl := base.Underline(true).Bold(true).Foreground(accentColor)
 	lower := strings.ToLower(text)
 	if len(lower) != len(text) { // case folding changed byte lengths: skip marking

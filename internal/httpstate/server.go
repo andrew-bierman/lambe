@@ -515,7 +515,9 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
-	_ = enc.Encode(body)
+	// Headers are already sent, so an encode failure has no response to
+	// change; the only failure for our DTOs is a client that went away.
+	_ = enc.Encode(body) //nolint:errchkjson // see above
 }
 
 func formatTime(t time.Time) string {

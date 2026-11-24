@@ -84,6 +84,8 @@ func (h health) glyph() string {
 		return "■"
 	case healthUnreadable:
 		return "✖"
+	case healthLoading, healthMissing:
+		return "○"
 	}
 	return "○"
 }
@@ -102,6 +104,8 @@ func (h health) word() string {
 		return "no data"
 	case healthUnreadable:
 		return "unreadable"
+	case healthLoading:
+		return "waiting"
 	}
 	return "waiting"
 }
@@ -116,6 +120,8 @@ func (h health) style() lipgloss.Style {
 		return redStyle.Bold(true)
 	case healthUnreadable:
 		return errorStyle
+	case healthLoading, healthMissing:
+		return neutralStyle
 	}
 	return neutralStyle
 }
@@ -194,6 +200,8 @@ func (m *Model) renderBanner() string {
 		add(0, lead, "· "+truncate(strings.Join(strings.Fields(ansi.Strip(m.err.Error())), " "), 48))
 		add(1, ago("showing data from"))
 		add(2, "r retries")
+	case healthLoading, healthRunning:
+		// Nothing to explain: the bar only appears for an unhealthy snapshot.
 	}
 	style := retryStyle
 	if h.kind != healthStale {

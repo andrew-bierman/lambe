@@ -515,7 +515,8 @@ func TestTypedErrorsAreDistinguishable(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
 	})
 	_, qErr := c.Queue(ctx)
-	if _, ok := qErr.(*StatusError); !ok {
+	var statusErr *StatusError
+	if !errors.As(qErr, &statusErr) {
 		t.Errorf("401 error = %T, want *StatusError", qErr)
 	}
 

@@ -87,7 +87,7 @@ func NewBdHub(bin, dir, actor string) (*BdHub, error) {
 }
 
 // run executes one bd invocation outside the typed transport surface.
-func (h *BdHub) run(ctx context.Context, args ...string) (string, error) {
+func (h *BdHub) run(ctx context.Context, args ...string) error {
 	cmd := exec.CommandContext(ctx, h.bin, args...) // #nosec G204 -- fixed argv over the configured bd binary
 	cmd.Dir = h.dir
 	cmd.WaitDelay = time.Second // a descendant holding the pipe must not outlive ctx
@@ -96,26 +96,20 @@ func (h *BdHub) run(ctx context.Context, args ...string) (string, error) {
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return string(out), fmt.Errorf("bd %s: %w: %s", args[0], err, out)
+		return fmt.Errorf("bd %s: %w: %s", args[0], err, out)
 	}
-	return string(out), nil
+	return nil
 }
 
 // EnsureNeedsHumanStatus configures bd's custom statuses to accept the
 // needs-human value. It is idempotent.
 func (h *BdHub) EnsureNeedsHumanStatus(ctx context.Context) error {
-	if _, err := h.run(ctx, "config", "set", "status.custom", StatusNeedsHuman); err != nil {
-		return err
-	}
-	return nil
+	return h.run(ctx, "config", "set", "status.custom", StatusNeedsHuman)
 }
 
 // Comment implements Hub.
 func (h *BdHub) Comment(ctx context.Context, issue, body string) error {
-	if _, err := h.run(ctx, "comment", issue, body); err != nil {
-		return err
-	}
-	return nil
+	return h.run(ctx, "comment", issue, body)
 }
 
 // Close implements Hub: a guarded status move to closed. bd reports a
@@ -173,7 +167,7 @@ func (h *BdHub) NeedsHuman(ctx context.Context, issue, reason, lastGateOutput st
 			Status:   tracker.StatusBlocked,
 			Metadata: meta,
 		}); berr != nil {
-			return fmt.Errorf("needs-human %s: %w (blocked fallback: %v)", issue, err, berr)
+			return fmt.Errorf("needs-human %s: %w (blocked fallback: %w)", issue, err, berr)
 		}
 	}
 	body := "lambe gate escalated this issue to needs-human: " + reason + "."

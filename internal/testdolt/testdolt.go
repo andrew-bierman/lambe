@@ -70,7 +70,11 @@ func Start(t *testing.T) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	port := l.Addr().(*net.TCPAddr).Port
+	addr, ok := l.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("listener address is %T, want *net.TCPAddr", l.Addr())
+	}
+	port := addr.Port
 	_ = l.Close()
 
 	srv := exec.Command(dolt, "sql-server", "-H", "127.0.0.1", "-P", strconv.Itoa(port)) // #nosec G204 -- fixed argv

@@ -381,17 +381,17 @@ func (d *Driver) Run(ctx context.Context, promptText string) (harness.Outcome, e
 		// reproduced through the real protocol; the branch guards the
 		// transport-error path only.)
 		if out, found := d.takeResult(0); found {
-			d.finishRun(false)
+			d.finishRun()
 			return out, out.RunError()
 		}
-		d.finishRun(false)
+		d.finishRun()
 		out := harness.Outcome{Kind: harness.OutcomeFailed, Err: err}
 		return out, err
 	}
 
 	select {
 	case out := <-d.result:
-		d.finishRun(false)
+		d.finishRun()
 		return out, out.RunError()
 	case <-ctx.Done():
 		go d.kill(client, "run context cancelled") //nolint:gosec // G118: deliberate; the kill ladder must outlive the cancelled run context.
@@ -404,7 +404,7 @@ func (d *Driver) Run(ctx context.Context, promptText string) (harness.Outcome, e
 		return out, ctx.Err()
 	case <-client.Done():
 		if out, found := d.takeResult(DefaultStopFlush); found {
-			d.finishRun(false)
+			d.finishRun()
 			return out, out.RunError()
 		}
 		waitErr := client.WaitErr()
@@ -700,8 +700,8 @@ func (d *Driver) setStreaming(v bool) {
 }
 
 // finishRun resets per-turn streaming bookkeeping.
-func (d *Driver) finishRun(streaming bool) {
-	d.setStreaming(streaming)
+func (d *Driver) finishRun() {
+	d.setStreaming(false)
 }
 
 // takeResult waits up to window for the active Run's outcome and reports
