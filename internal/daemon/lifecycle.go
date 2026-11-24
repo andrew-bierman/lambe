@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,7 +17,6 @@ import (
 	"time"
 
 	"github.com/andrew-bierman/lambe/internal/config"
-	"github.com/andrew-bierman/lambe/internal/gate"
 	"github.com/andrew-bierman/lambe/internal/httpstate"
 	"github.com/andrew-bierman/lambe/internal/mcp"
 	"github.com/andrew-bierman/lambe/internal/proc"
@@ -215,13 +213,24 @@ func New(opts Options) (*Daemon, error) {
 		log = slog.Default()
 	}
 
+	asm, err := assemble(opts.Wire, log)
+	if err != nil {
+		return nil, err
+	}
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	return &Daemon{opts: opts, asm: asm, log: log, runCtx: runCtx, cancel: cancel}, nil
+}
+
+// assemble runs the Wire hook and fills every seam it left unset.
+func assemble(wire func(*Assembly) error, log *slog.Logger) (Assembly, error) {
 	asm := Assembly{
 		Runner: placeholderRunner{},
 		Gates:  placeholderGates{},
 	}
-	if opts.Wire != nil {
-		if err := opts.Wire(&asm); err != nil {
-			return nil, fmt.Errorf("wire assembly: %w", err)
+	if wire != nil {
+		if err := wire(&asm); err != nil {
+			return asm, fmt.Errorf("wire assembly: %w", err)
 		}
 	}
 	// The single defaults site: whatever Wire left unset gets the local
@@ -251,9 +260,7 @@ func New(opts Options) (*Daemon, error) {
 	if asm.Surface != nil {
 		asm.Registry.SetSurface(asm.Surface, log)
 	}
-
-	runCtx, cancel := context.WithCancel(context.Background())
-	return &Daemon{opts: opts, asm: asm, log: log, runCtx: runCtx, cancel: cancel}, nil
+	return asm, nil
 }
 
 // Trackers opens the configured trackers as shell-transport locals over bd,
@@ -292,6 +299,10 @@ func (d *Daemon) trackers(ctx context.Context) ([]tracker.Tracker, error) {
 // terminating signal it forwards the bounded kill ladder to every live
 // child, releases the lock, and returns. A held lock returns an error
 // wrapping ErrLockHeld immediately, with the holder unaffected.
+//
+// The deferred teardown order is load-bearing (LIFO): the state surface
+// descriptor is removed, then the live projection closes, and only then does
+// the instance lock return.
 func (d *Daemon) Run(ctx context.Context) error {
 	runCtx := d.runCtx
 	defer d.cancel()
@@ -302,10 +313,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	defer signal.Stop(sig)
 
-	lockName := d.opts.LockName
-	if lockName == "" {
-		lockName = "lambe.lock"
-	}
+	lockName := d.lockName()
 	lock, err := AcquireStateLock(filepath.Join(d.opts.StateDir, lockName))
 	if err != nil {
 		return err
@@ -320,10 +328,6 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	primary := trackers[0]
 	d.primary = primary
-	primaryDir := ""
-	if len(d.opts.Config.Trackers) > 0 {
-		primaryDir = d.opts.Config.Trackers[0].Path
-	}
 	if f, ok := primary.(Flusher); ok {
 		d.flusher = f
 	}
@@ -357,7 +361,33 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}()
 	}
 
-	adopted, err := Recover(runCtx, TrackerOrphans{Tracker: primary}, primary, d.opts.Actor,
+	d.recoverOrphans(runCtx, primary)
+
+	var orphans *symphony.OrphanRegistry
+	if d.opts.WorkflowPath != "" {
+		if orphans, err = d.startLoop(runCtx, primary, view, lockName); err != nil {
+			return err
+		}
+	}
+
+	d.startBackground(runCtx, primary, orphans)
+	d.logRunning(len(trackers))
+	ticksDone := d.startTicks(runCtx)
+	return d.serve(ctx, sig, ticksDone)
+}
+
+// lockName is the single-instance lock file name for this life.
+func (d *Daemon) lockName() string {
+	if d.opts.LockName == "" {
+		return "lambe.lock"
+	}
+	return d.opts.LockName
+}
+
+// recoverOrphans runs startup recovery against the primary tracker. A failure
+// is logged and startup continues without adoption.
+func (d *Daemon) recoverOrphans(ctx context.Context, primary tracker.Tracker) {
+	adopted, err := Recover(ctx, TrackerOrphans{Tracker: primary}, primary, d.opts.Actor,
 		ShutdownBound, d.log)
 	if err != nil {
 		d.log.Error("startup recovery incomplete, continuing without adoption",
@@ -366,137 +396,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	for _, a := range adopted {
 		d.log.Info("session adopted at startup", "issue", a.SessionID, "pgid", a.PGID)
 	}
+}
 
-	var loop Ticker
-	var orphans *symphony.OrphanRegistry
-	if d.opts.WorkflowPath != "" {
-		loader, err := symphony.NewLoader(d.opts.WorkflowPath, symphony.OSEnv, d.log)
-		if err != nil {
-			return fmt.Errorf("load workflow: %w", err)
-		}
-		filtered := &FilteredTracker{
-			Tracker: primary,
-			Machine: d.opts.Machine,
-			Labels:  d.asm.Labels,
-			Log:     d.log,
-		}
-		if filtered.Labels == nil {
-			filtered.Labels = MetadataLabelSource{Tracker: primary}
-		}
-		workspaceRoot := filepath.Join(d.opts.StateDir, "workspaces")
-		if d.opts.Config != nil && d.opts.Config.WorkspaceRoot != "" {
-			workspaceRoot = d.opts.Config.WorkspaceRoot
-		}
-		spaces := symphony.NewWorkspaceManager(workspaceRoot, d.log)
-		l := symphony.NewLoop(filtered, loader, d.asm.Runner, d.asm.Gates, spaces, d.log)
-		if d.opts.Config != nil {
-			l.DispatchLabels = d.opts.Config.Labels
-			if routes := d.opts.Config.Workflows; len(routes) > 0 {
-				l.WorkflowRoutes = make(map[string]*symphony.Loader, len(routes))
-				for _, route := range routes {
-					routeLoader := loader
-					if route.Path != d.opts.WorkflowPath {
-						routeLoader, err = symphony.NewLoader(route.Path, symphony.OSEnv, d.log)
-						if err != nil {
-							return fmt.Errorf("load workflow %s: %w", route.Name, err)
-						}
-					}
-					l.WorkflowRoutes[route.Label] = routeLoader
-				}
-				l.PrepareWorkflow = func(label string, wf symphony.Workflow) (symphony.Workflow, error) {
-					dir := formulaDir(primaryDir)
-					for _, route := range routes {
-						if route.Label == label {
-							wf.Name = route.Name
-							if route.GateDir != "" {
-								dir = route.GateDir
-							}
-							break
-						}
-					}
-					specs, err := gate.LoadDir(dir)
-					if err != nil {
-						return wf, err
-					}
-					if len(specs) == 0 {
-						return wf, fmt.Errorf("no completion gates in %s", dir)
-					}
-					wf.GateSpec, err = json.Marshal(specs)
-					return wf, err
-				}
-				for label, routeLoader := range l.WorkflowRoutes {
-					if routeLoader == loader {
-						continue
-					}
-					go func() {
-						if err := routeLoader.Watch(runCtx); err != nil {
-							d.log.Warn("workflow watcher stopped", "label", label, "error", err)
-						}
-					}()
-				}
-			}
-		}
-		l.Observe = func(p symphony.Progress) {
-			view.progress(p)
-			d.asm.Registry.ObservePhase(p.IssueID, p.Phase)
-		}
-		rejections := NewGateRejectionLog(GateRejectionLogPath(d.opts.StateDir, d.opts.Config))
-		l.OnGateRed = func(issue string, attempt int, output string) {
-			if err := rejections.Record(issue, attempt, output, time.Now()); err != nil {
-				d.log.Warn("gate rejection record failed", "issue", issue, "error", err)
-			}
-		}
-		if runner, ok := d.asm.Runner.(*harnessRunner); ok {
-			runner.live = view
-		}
-		l.ControlTimeout = d.cycleBound()
-		l.OrphanTTL = d.opts.Config.Supervisor.OrphanClaimTTL
-		// A raised bd timeout must not be cut short by the recovery time-box.
-		if bd := d.opts.Config.Supervisor.BdTimeout; bd > 10*time.Second {
-			l.RecoveryInspect = bd
-			l.RecoveryBudget = 2 * bd
-		}
-		orphans = l.Orphans
-		l.CheckpointDir = filepath.Join(d.opts.StateDir, "sessions", strings.TrimSuffix(lockName, ".lock"))
-		if err := l.Restore(runCtx, d.opts.Actor); err != nil {
-			if errors.Is(err, symphony.ErrWorkspaceRootChanged) {
-				return err
-			}
-			d.log.Error("session recovery incomplete; healthy sessions continue", "error", err)
-		}
-		// Load responsibility formulas from the tracker's conventional
-		// .beads/formulas directory and wire the bd materializer so
-		// triggers materialize finite issues into the dispatch front.
-		formulaDir := filepath.Join(primaryDir, ".beads", "formulas")
-		formulas, err := symphony.LoadFormulas(formulaDir)
-		if err != nil {
-			d.log.Warn("formula loading failed; running without responsibilities", "dir", formulaDir, "error", err)
-		} else {
-			l.Formulas = formulas
-			bdBin := d.opts.BdBin
-			if bdBin == "" {
-				if resolved, err := tracker.ResolveBdBin(""); err == nil {
-					bdBin = resolved
-				}
-			}
-			l.Materializer = &symphony.BeadsMaterializer{
-				Bin: bdBin,
-				Dir: primaryDir,
-				Log: d.log,
-			}
-			if n := len(formulas); n > 0 {
-				d.log.Info("responsibilities loaded", "count", n, "dir", formulaDir)
-			}
-		}
-		loop = l
-		d.loop = loop
-		go func() {
-			if err := loader.Watch(runCtx); err != nil {
-				d.log.Warn("workflow watcher stopped", "error", err)
-			}
-		}()
-	}
-
+// startBackground launches the heartbeat loop and, when enabled, the
+// auto-reclaim loop.
+func (d *Daemon) startBackground(runCtx context.Context, primary tracker.Tracker, orphans *symphony.OrphanRegistry) {
 	go RunHeartbeats(runCtx, HeartbeatConfig{
 		Tracker:  primary,
 		Actor:    d.opts.Actor,
@@ -509,11 +413,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.log.Info("auto reclaim enabled", "grace", sup.ReclaimGrace.String())
 		go ReclaimLoop(runCtx, primary, time.Duration(sup.TickSeconds)*time.Second, sup.ReclaimGrace, d.log)
 	}
+}
 
+// logRunning emits the startup summary record.
+func (d *Daemon) logRunning(trackerCount int) {
 	runningAttrs := []any{
 		"machine", d.opts.Machine, "actor", d.opts.Actor,
 		"tick_seconds", d.opts.Config.Supervisor.TickSeconds,
-		"trackers", len(trackers),
+		"trackers", trackerCount,
 	}
 	if d.stateapi != nil && d.stateapi.server != nil {
 		// The bound addr, never the token: the Summary must not leak the
@@ -521,14 +428,23 @@ func (d *Daemon) Run(ctx context.Context) error {
 		runningAttrs = append(runningAttrs, "stateapi_addr", d.stateapi.server.Addr().String())
 	}
 	d.log.Info("lambe daemon running", runningAttrs...)
+}
 
+// startTicks runs the tick loop until runCtx ends; the returned channel closes
+// when it has exited.
+func (d *Daemon) startTicks(runCtx context.Context) <-chan struct{} {
 	ticksDone := make(chan struct{})
 	go func() {
 		defer close(ticksDone)
 		RunTicks(runCtx, time.Duration(d.opts.Config.Supervisor.TickSeconds)*time.Second,
 			d.tickCycle)
 	}()
+	return ticksDone
+}
 
+// serve blocks until ctx ends or a terminating signal arrives, then runs the
+// shutdown ladder. SIGHUP reloads the configuration and keeps serving.
+func (d *Daemon) serve(ctx context.Context, sig <-chan os.Signal, ticksDone <-chan struct{}) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -665,27 +581,8 @@ func (d *Daemon) shutdown(ticksDone <-chan struct{}) error {
 	case <-ctx.Done():
 		d.log.Warn("tick shutdown bound expired")
 	}
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	locked := false
-	for ctx.Err() == nil && !locked {
-		locked = d.cycleMu.TryLock()
-		if !locked {
-			select {
-			case <-ticker.C:
-			case <-ctx.Done():
-			}
-		}
-	}
-	if locked {
-		if closer, ok := d.loop.(interface{ Close(context.Context) error }); ok {
-			if err := closer.Close(ctx); err != nil {
-				d.log.Error("worker shutdown incomplete", "error", err)
-			}
-		}
-		if ctx.Err() == nil {
-			d.refreshReport(ctx)
-		}
+	if d.awaitCycleLock(ctx) {
+		d.closeLoop(ctx)
 		d.cycleMu.Unlock()
 	} else {
 		d.log.Error("cycle shutdown bound expired")
@@ -700,6 +597,37 @@ func (d *Daemon) shutdown(ticksDone <-chan struct{}) error {
 	}
 	d.log.Info("lambe daemon stopped")
 	return nil
+}
+
+// awaitCycleLock polls for the cycle mutex until it is taken or ctx ends,
+// reporting whether it was taken.
+func (d *Daemon) awaitCycleLock(ctx context.Context) bool {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	locked := false
+	for ctx.Err() == nil && !locked {
+		locked = d.cycleMu.TryLock()
+		if !locked {
+			select {
+			case <-ticker.C:
+			case <-ctx.Done():
+			}
+		}
+	}
+	return locked
+}
+
+// closeLoop joins the loop's workers and refreshes the report one last time;
+// the caller holds the cycle mutex.
+func (d *Daemon) closeLoop(ctx context.Context) {
+	if closer, ok := d.loop.(interface{ Close(context.Context) error }); ok {
+		if err := closer.Close(ctx); err != nil {
+			d.log.Error("worker shutdown incomplete", "error", err)
+		}
+	}
+	if ctx.Err() == nil {
+		d.refreshReport(ctx)
+	}
 }
 
 // reportRefreshTicks is the report-cache refresh cadence, in ticks: with
