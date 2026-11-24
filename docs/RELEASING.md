@@ -71,7 +71,7 @@ remove in a later minor release and list it under "Removed".
 3. **CLI release.** Pushing the tag runs `.github/workflows/release.yml`:
    goreleaser builds linux/darwin x amd64/arm64 archives, `.deb`/`.rpm`/`.apk`
    packages (nfpms), an SBOM per archive (syft), `checksums.txt` with a keyless
-   cosign bundle per artifact (`<file>.sigstore.json`, including `checksums.txt`), pushes the Homebrew formula
+   cosign bundle per artifact (`<file>.sigstore.json`, including `checksums.txt`), pushes the Homebrew cask
    to `andrew-bierman/homebrew-tap`, and publishes the GitHub release using the
    CHANGELOG section as notes. The workflow then attests build provenance for
    everything in `checksums.txt`.
