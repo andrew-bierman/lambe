@@ -279,25 +279,25 @@ func queryService(ctx context.Context, e sysEnv, manager, root string, query boo
 
 // runService dispatches `lambe service install|status|uninstall`.
 func runService(args []string, e sysEnv, out io.Writer) error {
-	if len(args) == 0 {
-		return errors.New("usage: lambe service install|status|uninstall [flags]")
+	if len(args) == 0 || (args[0] != "install" && args[0] != "status" && args[0] != "uninstall") {
+		return usageError{errors.New("usage: lambe service install|status|uninstall [flags]")}
 	}
 	fs := flag.NewFlagSet("lambe service "+args[0], flag.ContinueOnError)
-	configFile := fs.String("config", "", "config file the service runs with (install; default: the default config path)")
+	configFile := fs.String("config", "", "config file the service runs with (install; env LAMBE_CONFIG; default: the default config path)")
 	root := fs.String("root", "", "write the unit under this directory instead of $HOME and never call launchctl/systemctl")
 	manager := fs.String("manager", "", "launchd or systemd (default: by OS)")
 	dryRun := fs.Bool("dry-run", false, "print the unit and its destination without writing anything (install)")
 	noStart := fs.Bool("no-start", false, "write the unit but do not load/start it (install)")
 	force := fs.Bool("force", false, "replace a different existing unit (install)")
 	label := fs.String("label", "", "launchd label / systemd unit name instead of "+launchdLabel+" / lambe (isolated installs)")
-	if err := fs.Parse(args[1:]); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
+	if err := parseFlags(fs, args[1:]); err != nil {
+		return err
+	}
+	if err := noArgs(fs); err != nil {
 		return err
 	}
 	if *label != "" && !labelPattern.MatchString(*label) {
-		return fmt.Errorf("invalid -label %q: use letters, digits, '.', '_' and '-'", *label)
+		return usageError{fmt.Errorf("invalid --label %q: use letters, digits, '.', '_' and '-'", *label)}
 	}
 	e.Label = *label
 	mgr, err := e.managerFor(*manager)

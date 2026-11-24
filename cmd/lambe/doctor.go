@@ -98,14 +98,21 @@ func rexExec(ctx context.Context, name string, args ...string) (string, int, err
 // agents silently stop and prints what to do about each problem.
 func runDoctor(args []string, e doctorEnv, out io.Writer) error {
 	fs := flag.NewFlagSet("lambe doctor", flag.ContinueOnError)
-	configFile := fs.String("config", "", "path to a lambe config file")
+	configFile := fs.String("config", "", configFlagHelp)
 	asJSON := fs.Bool("json", false, "print the report as JSON")
-	label := fs.String("service-label", "", "check the service installed with `lambe service install -label NAME`")
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
+	label := fs.String("label", "", "check the service installed with 'lambe service install --label NAME'")
+	oldLabel := fs.String("service-label", "", "deprecated alias of --label")
+	if err := parseFlags(fs, args); err != nil {
 		return err
+	}
+	if err := noArgs(fs); err != nil {
+		return err
+	}
+	if *oldLabel != "" {
+		fmt.Fprintln(os.Stderr, "lambe: note: -service-label is deprecated; use --label")
+		if *label == "" {
+			*label = *oldLabel
+		}
 	}
 	e.sys.Label = *label
 	results := diagnose(context.Background(), e, *configFile)

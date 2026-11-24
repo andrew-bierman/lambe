@@ -129,9 +129,27 @@ lambe logs -json                # shared read-only snapshot for scripts and othe
 
 Pass the same `-config FILE` to these commands when using a custom configuration.
 
+### Help and exit codes
+
+`lambe help`, `lambe help COMMAND [SUBCOMMAND]`, `lambe COMMAND -h` and
+`lambe --version` print to stdout and exit 0. Every command exits with one
+of these codes:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success. |
+| 1 | The command ran and failed (unreadable config or tracker, a failed `doctor` check, a service that is not running). |
+| 2 | Usage error: unknown command or flag, missing argument. Stderr has one `lambe: reason` line and a `run 'lambe help CMD'` hint. |
+| 3 | `lambe run` only: another daemon holds the instance lock. |
+
+One-shot commands print failures as a plain `lambe: message` line on stderr.
+`lambe run` and `lambe mcp` keep structured JSON logs on stderr. Flags accept
+one or two dashes (`-json` and `--json` are the same); the `--long` form is
+canonical. `LAMBE_CONFIG` sets the default for `--config`. lambe prints plain
+text and never emits color escapes, so `NO_COLOR` and pipes need no handling.
+
 For scripts and tools that compose Lambe, two read-only commands print JSON
-and share the exit codes of `lambe doctor` (0 ok, 1 a problem such as an
-unreadable config or tracker, 2 usage):
+and share the exit codes above:
 
 ```sh
 lambe status -json [-config FILE]   # state API snapshot, read from the tracker

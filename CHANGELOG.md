@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- CLI help and errors: `lambe --help`, `-h`, `help [COMMAND]` and `--version` print to stdout and exit 0; every command has `-h` usage with examples; usage errors exit 2 with a one-line reason and a `run 'lambe help CMD'` hint (unknown commands say so); one-shot commands print `lambe: message` instead of JSON log lines (`run` and `mcp` keep structured logs). Exit codes are documented in docs/REFERENCE.md.
+- `lambe doctor --label NAME` replaces `-service-label` (still accepted, prints a deprecation note). `LAMBE_CONFIG` sets the default `--config`.
+
+### Fixed
+
+- `lambe status -json` (and the state API) emit `[]`, never `null`, for empty `runs`, `needs_human` and `gate_rejections`.
+
 ## [0.11.1] - 2026-11-22
 
 ### Fixed

@@ -94,10 +94,12 @@ func (v versionInfo) String() string {
 
 func runVersion(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("version", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
 	asJSON := fs.Bool("json", false, "print JSON")
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("lambe version: %w", err)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if err := noArgs(fs); err != nil {
+		return err
 	}
 	v := buildVersion()
 	if *asJSON {

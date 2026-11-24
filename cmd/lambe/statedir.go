@@ -33,13 +33,12 @@ type stateDirInfo struct {
 // token.
 func runStateDir(args []string, stateDir string, source daemon.StateDirSource, out io.Writer) error {
 	fs := flag.NewFlagSet("lambe state-dir", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
 	asJSON := fs.Bool("json", false, "print JSON")
-	if err := fs.Parse(args); err != nil {
-		return usageError{err}
+	if err := parseFlags(fs, args); err != nil {
+		return err
 	}
-	if fs.NArg() != 0 {
-		return usageError{fmt.Errorf("unexpected arguments: %v", fs.Args())}
+	if err := noArgs(fs); err != nil {
+		return err
 	}
 	entries, err := stateapi.List(stateDir)
 	if err != nil {
