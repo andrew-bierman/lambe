@@ -6,9 +6,11 @@ on:
     tags: ["v*"]
   pull_request:
 
-# One run per PR; a new push cancels the stale run. Branch and tag runs are never cancelled.
+# One run per PR; a new push cancels the stale PR run. Pushes (master, tags) use a
+# per-SHA group and are never cancelled: a shared group would let GitHub drop the
+# older pending run when several PRs land minutes apart.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
