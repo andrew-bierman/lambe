@@ -194,7 +194,7 @@ func demoSnapshot(now time.Time) daemon.LiveSnapshot {
 			},
 			{
 				Progress:     symphony.Progress{IssueID: "demo-43", Title: "Recheck the artifact checksum", Phase: "gating", Attempt: 1},
-				LastOutputAt: now.Add(-4 * time.Minute),
+				LastOutputAt: now.Add(-6 * time.Minute),
 				Tail:         "Build finished. Verifying the release manifest.",
 			},
 			{

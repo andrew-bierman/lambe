@@ -32,6 +32,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/andrew-bierman/lambe/internal/config"
 	"github.com/andrew-bierman/lambe/internal/daemon"
 	"github.com/andrew-bierman/lambe/internal/symphony"
 	"github.com/andrew-bierman/lambe/internal/tracker"
@@ -47,31 +48,23 @@ type runItem struct {
 	now      func() time.Time // time source for FilterValue; nil means time.Now
 }
 
-// stallAfter is how long an active run may stay silent (no output and no agent
-// event of any kind) before it is flagged.
-const stallAfter = 2 * time.Minute
+// stallAfter is the stall threshold (supervisor.stall_after). Run sets it once
+// before the program starts; the default matches the daemon and state API.
+var stallAfter = config.DefaultStallAfter
 
 // shortAge renders a whole-minute duration as "4m" or "1h5m".
 func shortAge(d time.Duration) string {
 	return strings.TrimSuffix(strings.Replace(d.String(), "m0s", "m", 1), "0s")
 }
 
-// stalledFor reports how long an active run has been silent past stallAfter.
+// stalledFor reports how long an active run has been silent past the stall
+// threshold, rounded to a minute. A stopped daemon's rows are never stalled.
 func stalledFor(run daemon.LiveRun, live bool, now time.Time) time.Duration {
-	switch run.Phase {
-	case "running", "gating", "preparing", "claiming":
-	default:
+	if !live {
 		return 0
 	}
-	last := run.LastOutputAt
-	if run.LastActivityAt.After(last) {
-		last = run.LastActivityAt
-	}
-	if !live || last.IsZero() {
-		return 0
-	}
-	if age := now.Sub(last); age >= stallAfter {
-		return age.Round(time.Minute)
+	if silent := daemon.StalledFor(run, now, stallAfter); silent > 0 {
+		return max(silent.Round(time.Minute), time.Minute)
 	}
 	return 0
 }

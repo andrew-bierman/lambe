@@ -118,6 +118,17 @@ Queue includes ready and blocked Beads tasks for the configured labels.
 Attention surfaces blockers alongside failed or retrying runs. Open a
 blocked task to see the reason and dependency IDs.
 
+A run needs you (Attention tab and count, the `Attention` field of
+`lambe logs -json -brief`, and the Rex "Needs You" picker) when its phase is
+`retry`, `deferred`, `interrupted`, `stopped: gate escalation` or
+`stopped: gate red`, or when it is active (`running`, `gating`, `preparing`,
+`claiming`) but silent longer than `supervisor.stall_after`. Silence is the
+age of the freshest agent output or event; the reason reads
+`stalled · silent 4m`, and its `AgeSec` is that silence. The Queue shows the
+same run in red as `stalled`. A stopped daemon's rows are history and are never
+stalled. Snapshots from older daemons carry the same fields, so they need no
+migration; `lambe tui` and `lambe logs` read the threshold from your config.
+
 Keep `lambe run` running, then open another terminal:
 
 ```sh

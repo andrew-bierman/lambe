@@ -1,10 +1,10 @@
  lambe   ✖ unreadable 3m  demo  ⚠ 1 stalled  2 active · 1 waiting                                                          updated 11:57:00
  ✖ unreadable · invalid character '}' looking for beginning of … · showing data from 3m ago · r retries
- 1 Queue 5 │ 2 Attention 2 │ 3 History 5
+ 1 Queue 5 │ 2 Attention 3 │ 3 History 5
 ━━━━━━━━━━━─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
    ID      TITLE                                                 PHASE          AGE│ demo-42  ▶ running  output 8s ago
 ▌▶ demo-42 Verify the release build                              running         8s│ Verify the release build
- ⚠ demo-43 Recheck the artifact checksum                         stalled         4m│ attempt 1 · turn 2
+ ⚠ demo-43 Recheck the artifact checksum                         stalled         6m│ attempt 1 · turn 2
  ↻ demo-44 Retry the install smoke test                          retry        in 1m│ Build event 02: verifying release artifacts
  ✘ demo-45 Validate the migration                                escalated       2m│ Build event 03: verifying release artifacts
  ✔ demo-46 Check upgrade instructions                            passed          5m│ Build event 04: verifying release artifacts

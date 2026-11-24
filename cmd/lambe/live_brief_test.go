@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/andrew-bierman/lambe/internal/config"
 	"github.com/andrew-bierman/lambe/internal/daemon"
 	"github.com/andrew-bierman/lambe/internal/symphony"
 )
@@ -33,11 +34,13 @@ func briefFixture(now time.Time, runs int) daemon.LiveSnapshot {
 			run("w-2", "retry", 14*time.Minute),
 			run("w-3", "stopped: gate escalation", 2*time.Hour),
 			run("w-4", "stopped: gate green", time.Hour),
+			run("w-6", "running", 20*time.Second),
 		},
 		History: []daemon.LiveRun{run("w-5", "stopped: gate red", 3*time.Hour)},
 	}
 	snap.Runs[0].LastOutputAt = now.Add(-8 * time.Second)
 	snap.Runs[0].LastActivityAt = now.Add(-2 * time.Second)
+	snap.Runs[4].LastOutputAt = now.Add(-6*time.Minute - 10*time.Second) // w-6: silent past the 5m threshold
 	for i := range runs {
 		snap.Runs = append(snap.Runs, run(fmt.Sprintf("bulk-%d", i), "running", time.Minute))
 	}
@@ -46,7 +49,7 @@ func briefFixture(now time.Time, runs int) daemon.LiveSnapshot {
 
 func TestLogsBriefGolden(t *testing.T) {
 	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
-	data, err := json.MarshalIndent(newLiveBrief(briefFixture(now, 0), true, "mini", "v9.9.9", now), "", "  ")
+	data, err := json.MarshalIndent(newLiveBrief(briefFixture(now, 0), true, "mini", "v9.9.9", now, config.DefaultStallAfter), "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,12 +77,23 @@ func TestLogsBriefGolden(t *testing.T) {
 func TestLogsBriefAttentionMatchesSharedRule(t *testing.T) {
 	now := time.Now()
 	snap := briefFixture(now, 0)
-	brief := newLiveBrief(snap, true, "m", "v", now)
+	brief := newLiveBrief(snap, true, "m", "v", now, config.DefaultStallAfter)
 	for i, run := range append(snap.Runs, snap.History...) {
-		reason, want := daemon.NeedsAttention(run)
+		reason, want := daemon.NeedsAttention(run, now, config.DefaultStallAfter)
 		got := append(brief.Runs, brief.History...)[i]
 		if (got.Attention != nil) != want || (want && got.Attention.Reason != reason) {
 			t.Errorf("%s (%s): attention %+v, shared rule says %q %v", run.IssueID, run.Phase, got.Attention, reason, want)
+		}
+	}
+}
+
+// A stopped daemon's rows are history: the silent run is not flagged.
+func TestLogsBriefStoppedDaemonHasNoStalls(t *testing.T) {
+	now := time.Now()
+	brief := newLiveBrief(briefFixture(now, 0), false, "m", "v", now, config.DefaultStallAfter)
+	for _, run := range brief.Runs {
+		if run.IssueID == "w-6" && run.Attention != nil {
+			t.Fatalf("stopped daemon flagged a stall: %+v", run.Attention)
 		}
 	}
 }
@@ -91,7 +105,7 @@ func TestLogsBriefIsFarSmallerOnLargeSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	brief, err := json.Marshal(newLiveBrief(snap, true, "m", "v", now))
+	brief, err := json.Marshal(newLiveBrief(snap, true, "m", "v", now, config.DefaultStallAfter))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +146,7 @@ func TestLogsBriefFlag(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v\n%s", err, out.String())
 	}
-	if got.LambeVersion == "" || len(got.Runs) != 4 {
+	if got.LambeVersion == "" || len(got.Runs) != 5 {
 		t.Fatalf("version %q, %d runs", got.LambeVersion, len(got.Runs))
 	}
 	for _, run := range got.Runs {

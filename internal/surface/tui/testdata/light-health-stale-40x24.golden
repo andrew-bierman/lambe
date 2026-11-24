@@ -1,10 +1,10 @@
 {default on #6136a1} {#ffffff on #6136a1 bold}lambe{default on #6136a1} {default on #ebe1ff}  {#805000 on #ebe1ff bold}▲ stale 2m{default on #ebe1ff}  {#645b73 on #ebe1ff}demo{default on #ebe1ff}  {#b6242b on #ebe1ff bold}⚠1{default on #ebe1ff}  {#126447 on #ebe1ff bold}2▶{default on #ebe1ff} {#805000 on #ebe1ff}1↻{default on #ebe1ff}    
 {default on #ebe1ff} {#805000 on #ebe1ff bold}▲ stale · loop quiet for 2m{default on #ebe1ff}            
- {#6941a5 on default bold}1 Queue{default on default} {#6941a5 on default bold}5{default on default} {#645b73 on default}│{default on default} {#645b73 on default}2 Attn{default on default} {#805000 on default bold}2{default on default} {#645b73 on default}│{default on default} {#645b73 on default}3 Hist{default on default} {#645b73 on default}5
+ {#6941a5 on default bold}1 Queue{default on default} {#6941a5 on default bold}5{default on default} {#645b73 on default}│{default on default} {#645b73 on default}2 Attn{default on default} {#805000 on default bold}3{default on default} {#645b73 on default}│{default on default} {#645b73 on default}3 Hist{default on default} {#645b73 on default}5
 {#6941a5 on default bold}━━━━━━━━━━━{#b9afc9 on default}─────────────────────────────
 {#645b73 on #ebe1ff bold}   ID      TITLE                     AGE
 {#6941a5 on #e3d8fb}▌{#126447 on #e3d8fb bold}▶{default on #e3d8fb} {#20182b on #e3d8fb bold}demo-42{default on #e3d8fb} {#20182b on #e3d8fb bold}Verify the release bu…{default on #e3d8fb} {#645b73 on #e3d8fb}    8s
- {#b6242b on default bold}⚠{default on default} {#20182b on default}demo-43{default on default} {#20182b on default}Recheck the artifact …{default on default} {#b6242b on default}    4m
+ {#b6242b on default bold}⚠{default on default} {#20182b on default}demo-43{default on default} {#20182b on default}Recheck the artifact …{default on default} {#b6242b on default}    6m
  {#805000 on default}↻{default on default} {#20182b on default}demo-44{default on default} {#20182b on default}Retry the install smo…{default on default} {#645b73 on default} in 1m
  {#b6242b on default}✘{default on default} {#20182b on default}demo-45{default on default} {#20182b on default}Validate the migration{default on default} {#645b73 on default}    2m
  {#1b7f3b on default}✔{default on default} {#20182b on default}demo-46{default on default} {#20182b on default}Check upgrade instruc…{default on default} {#645b73 on default}    5m

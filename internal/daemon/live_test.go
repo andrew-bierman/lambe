@@ -6,7 +6,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/andrew-bierman/lambe/internal/config"
 	"github.com/andrew-bierman/lambe/internal/harness"
 	"github.com/andrew-bierman/lambe/internal/mcp"
 	"github.com/andrew-bierman/lambe/internal/symphony"
@@ -146,14 +148,51 @@ func TestLiveSnapshotExposesLoopTickAndAgentActivity(t *testing.T) {
 }
 
 func TestNeedsAttention(t *testing.T) {
-	for phase, want := range map[string]string{
-		"retry": "retrying", "deferred": "waiting to retry", "interrupted": "interrupted",
-		"stopped: gate escalation": "gate escalation", "stopped: gate red": "gate failed",
-		"running": "", "gating": "", "queued": "", "stopped: gate green": "", "": "",
-	} {
-		reason, ok := NeedsAttention(LiveRun{Progress: symphony.Progress{Phase: phase}})
-		if reason != want || ok != (want != "") {
-			t.Errorf("%q: got %q, %v want %q", phase, reason, ok, want)
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	const after = 5 * time.Minute
+	run := func(phase string, out, activity time.Duration) LiveRun {
+		r := LiveRun{Progress: symphony.Progress{Phase: phase}}
+		if out > 0 {
+			r.LastOutputAt = now.Add(-out)
 		}
+		if activity > 0 {
+			r.LastActivityAt = now.Add(-activity)
+		}
+		return r
+	}
+	for _, tc := range []struct {
+		name  string
+		run   LiveRun
+		after time.Duration
+		want  string
+	}{
+		{"retry", run("retry", 0, 0), after, "retrying"},
+		{"deferred", run("deferred", 0, 0), after, "waiting to retry"},
+		{"interrupted", run("interrupted", 0, 0), after, "interrupted"},
+		{"gate escalation", run("stopped: gate escalation", 0, 0), after, "gate escalation"},
+		{"gate red", run("stopped: gate red", 0, 0), after, "gate failed"},
+		{"healthy running", run("running", 8*time.Second, 2*time.Second), after, ""},
+		{"queued", run("queued", 0, 0), after, ""},
+		{"gate green", run("stopped: gate green", 0, 0), after, ""},
+		{"empty phase", run("", 0, 0), after, ""},
+		{"stalled running", run("running", 6*time.Minute+10*time.Second, 0), after, "stalled · silent 6m"},
+		{"stalled gating", run("gating", 9*time.Minute, 0), after, "stalled · silent 9m"},
+		{"tool activity keeps it alive", run("running", 30*time.Minute, 10*time.Second), after, ""},
+		{"retry silent is not double counted", run("retry", time.Hour, time.Hour), after, "retrying"},
+		{"deferred silent keeps its own reason", run("deferred", time.Hour, 0), after, "waiting to retry"},
+		{"stopped daemon (threshold 0)", run("running", time.Hour, 0), 0, ""},
+		{"old snapshot without activity field", run("running", 7*time.Minute, 0), config.DefaultStallAfter, "stalled · silent 7m"},
+		{"exactly at the threshold", run("running", after, 0), after, ""},
+		{"just past the threshold", run("running", after+time.Second, 0), after, "stalled · silent 5m"},
+		{"never produced output", run("running", 0, 0), after, ""},
+		{"custom threshold", run("running", 90*time.Second, 0), time.Minute, "stalled · silent 2m"},
+		{"sub-minute silence reads 1m", run("running", 31*time.Second, 0), 30 * time.Second, "stalled · silent 1m"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reason, ok := NeedsAttention(tc.run, now, tc.after)
+			if reason != tc.want || ok != (tc.want != "") {
+				t.Fatalf("got %q, %v want %q", reason, ok, tc.want)
+			}
+		})
 	}
 }

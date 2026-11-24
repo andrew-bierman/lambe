@@ -1,8 +1,9 @@
 {default on #6136a1} {#ffffff on #6136a1 bold}lambe{default on #6136a1} {default on #ebe1ff}  {#126447 on #ebe1ff bold}● running{default on #ebe1ff}  {#645b73 on #ebe1ff}demo{default on #ebe1ff}  {#b6242b on #ebe1ff bold}⚠1{default on #ebe1ff}  {#126447 on #ebe1ff bold}2▶{default on #ebe1ff} {#805000 on #ebe1ff}1↻{default on #ebe1ff}     
- {#645b73 on default}1 Queue{default on default} {#645b73 on default}7{default on default} {#645b73 on default}│{default on default} {#6941a5 on default bold}2 Attn{default on default} {#6941a5 on default bold}3{default on default} {#645b73 on default}│{default on default} {#645b73 on default}3 Hist{default on default} {#645b73 on default}5
+ {#645b73 on default}1 Queue{default on default} {#645b73 on default}7{default on default} {#645b73 on default}│{default on default} {#6941a5 on default bold}2 Attn{default on default} {#6941a5 on default bold}4{default on default} {#645b73 on default}│{default on default} {#645b73 on default}3 Hist{default on default} {#645b73 on default}5
 {#b9afc9 on default}────────────{#6941a5 on default bold}━━━━━━━━━━{#b9afc9 on default}──────────────────
 {#645b73 on #ebe1ff bold}   ID      TITLE                     AGE
-{#6941a5 on #e3d8fb}▌{#805000 on #e3d8fb}↻{default on #e3d8fb} {#20182b on #e3d8fb bold}demo-44{default on #e3d8fb} {#20182b on #e3d8fb bold}Retry the install smo…{default on #e3d8fb} {#645b73 on #e3d8fb} in 1m
+{#6941a5 on #e3d8fb}▌{#b6242b on #e3d8fb bold}⚠{default on #e3d8fb} {#20182b on #e3d8fb bold}demo-43{default on #e3d8fb} {#20182b on #e3d8fb bold}Recheck the artifact …{default on #e3d8fb} {#b6242b on #e3d8fb}    6m
+ {#805000 on default}↻{default on default} {#20182b on default}demo-44{default on default} {#20182b on default}Retry the install smo…{default on default} {#645b73 on default} in 1m
  {#b6242b on default}✘{default on default} {#20182b on default}demo-45{default on default} {#20182b on default}Validate the migration{default on default} {#645b73 on default}    2m
  {#805000 on default}!{default on default} {#20182b on default}demo-48{default on default} {#20182b on default}Publish migration not…
 
@@ -12,13 +13,12 @@
 
 
 
+{default on #ebe1ff} {#241447 on #ebe1ff bold}demo-43{default on #ebe1ff}  {#b6242b on #ebe1ff bold}⚠ stalled{default on #ebe1ff}  {#645b73 on #ebe1ff}silent 6m{default on #ebe1ff}          
+ {#20182b on default bold}Recheck the artifact checksum
 
-{default on #ebe1ff} {#241447 on #ebe1ff bold}demo-44{default on #ebe1ff}  {#805000 on #ebe1ff}↻ retry{default on #ebe1ff}  {#645b73 on #ebe1ff}retry in 1m{default on #ebe1ff}          
- {#20182b on default bold}Retry the install smoke test
+ {#645b73 on default}Issue:{default on default}      {#20182b on default}demo-43
+ {#645b73 on default}Phase:{default on default}      {#245c82 on default bold}◉ gating
+ {#645b73 on default}Attempt:{default on default}    {#20182b on default}1
+ {#645b73 on default}Turn:{default on default}       {#20182b on default}0
 
- {#805000 on default bold}Last gate rejection
- The registry timed out during the
- install smoke test.
-
- {#645b73 on default}Issue:{default on default}      {#20182b on default}demo-44
-{default on #f3eff7} {#382453 on #f3eff7 bold}enter{default on default} {#51485e on default}open{default on default}  {#382453 on default bold}:{default on default} {#51485e on default}cmd{default on default}  {#382453 on default bold}?{default on default}  {#382453 on default bold}q{default on default} {#51485e on default}quit{default on default}       {#20182b on default}1/3{default on #f3eff7} 
+{default on #f3eff7} {#382453 on #f3eff7 bold}enter{default on default} {#51485e on default}open{default on default}  {#382453 on default bold}:{default on default} {#51485e on default}cmd{default on default}  {#382453 on default bold}?{default on default}  {#382453 on default bold}q{default on default} {#51485e on default}quit{default on default}       {#20182b on default}1/4{default on #f3eff7} 

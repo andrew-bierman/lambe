@@ -213,9 +213,10 @@ func TestStallUsesLastActivity(t *testing.T) {
 		out, activity time.Duration
 		stalled       bool
 	}{
-		{"silent output only", 5 * time.Minute, 0, true},
-		{"recent tool activity keeps it alive", 5 * time.Minute, 10 * time.Second, false},
-		{"both old", 5 * time.Minute, 4 * time.Minute, true},
+		{"silent output only", 6 * time.Minute, 0, true},
+		{"recent tool activity keeps it alive", 6 * time.Minute, 10 * time.Second, false},
+		{"both old", 7 * time.Minute, 6 * time.Minute, true},
+		{"activity under the threshold keeps it alive", 7 * time.Minute, 4 * time.Minute, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := stalledFor(run(tc.out, tc.activity), true, now) > 0; got != tc.stalled {
@@ -223,7 +224,7 @@ func TestStallUsesLastActivity(t *testing.T) {
 			}
 		})
 	}
-	if stalledFor(run(5*time.Minute, 0), false, now) != 0 {
+	if stalledFor(run(6*time.Minute, 0), false, now) != 0 {
 		t.Fatal("a stopped daemon's rows are never stalled")
 	}
 }

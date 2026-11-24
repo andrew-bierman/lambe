@@ -132,10 +132,10 @@ func runLive(args []string, useTUI bool, _ io.Reader, out io.Writer) error {
 				})
 			}
 		}
-		return tui.Run(ctx, path, trackerPath, queue, readiness, workflows...)
+		return tui.Run(ctx, path, cfg.Supervisor.StallAfter, trackerPath, queue, readiness, workflows...)
 	}
 
-	return runLogsFollow(path, issue, follow, asJSON, brief, out)
+	return runLogsFollow(path, cfg.Supervisor.StallAfter, issue, follow, asJSON, brief, out)
 }
 
 // liveJSON is the `lambe logs -json` document: the shared snapshot plus the
@@ -180,7 +180,10 @@ type liveBrief struct {
 	LambeVersion string
 }
 
-func newLiveBrief(s daemon.LiveSnapshot, alive bool, machine, version string, now time.Time) liveBrief {
+func newLiveBrief(s daemon.LiveSnapshot, alive bool, machine, version string, now time.Time, stallAfter time.Duration) liveBrief {
+	if !alive {
+		stallAfter = 0 // a stopped daemon's rows are history, never stalled
+	}
 	sec := func(t time.Time) int64 {
 		if t.IsZero() {
 			return 0
@@ -198,8 +201,12 @@ func newLiveBrief(s daemon.LiveSnapshot, alive bool, machine, version string, no
 			if freshest > 0 {
 				b.AgeSec = sec(time.Unix(0, freshest))
 			}
-			if reason, ok := daemon.NeedsAttention(run); ok {
-				b.Attention = &daemon.Attention{Reason: reason, AgeSec: sec(run.UpdatedAt)}
+			if reason, ok := daemon.NeedsAttention(run, now, stallAfter); ok {
+				age := sec(run.UpdatedAt)
+				if daemon.StalledFor(run, now, stallAfter) > 0 {
+					age = b.AgeSec // silence, not the last supervisor update
+				}
+				b.Attention = &daemon.Attention{Reason: reason, AgeSec: age}
 			}
 			out = append(out, b)
 		}
@@ -212,7 +219,7 @@ func newLiveBrief(s daemon.LiveSnapshot, alive bool, machine, version string, no
 	}
 }
 
-func runLogsFollow(path, issue string, follow, asJSON, brief bool, out io.Writer) error {
+func runLogsFollow(path string, stallAfter time.Duration, issue string, follow, asJSON, brief bool, out io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -224,7 +231,7 @@ func runLogsFollow(path, issue string, follow, asJSON, brief bool, out io.Writer
 			return fmt.Errorf("read live output: %w; start `lambe run` with the same configuration first", err)
 		}
 		if brief {
-			return json.NewEncoder(out).Encode(newLiveBrief(snapshot, alive, daemon.DefaultMachine(), buildVersion().Version, time.Now()))
+			return json.NewEncoder(out).Encode(newLiveBrief(snapshot, alive, daemon.DefaultMachine(), buildVersion().Version, time.Now(), stallAfter))
 		}
 		if asJSON {
 			return json.NewEncoder(out).Encode(liveJSON{LiveSnapshot: snapshot, Alive: alive, Machine: daemon.DefaultMachine()})

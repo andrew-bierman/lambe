@@ -630,9 +630,13 @@ func TestAttentionFiltersAndReturnsToQueue(t *testing.T) {
 	m := newSized(t)
 	m.Update(snapshotMsg{snapshot: demoSnapshot(time.Now()), alive: true})
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	if len(m.list.Items()) != 2 || !strings.Contains(m.View(), "Attention") {
-		t.Fatalf("expected retry and failed gate:\n%s", m.View())
+	if len(m.list.Items()) != 3 || !strings.Contains(m.View(), "Attention") {
+		t.Fatalf("expected the stalled run, retry and failed gate:\n%s", m.View())
 	}
+	if run, ok := m.selectedRun(); !ok || run.IssueID != "demo-43" || !strings.Contains(m.View(), "silent 6m") {
+		t.Fatalf("expected the stalled run first, got %+v:\n%s", run, m.View())
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	if run, ok := m.selectedRun(); !ok || run.Phase != "retry" {
 		t.Fatalf("expected retry selected, got %+v", run)
 	}
